@@ -33,7 +33,6 @@ namespace NoLazyWorkers
         Supply.onObjectChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
-          //ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, pot);
         });
         Supply.onObjectChanged.AddListener(new UnityAction<BuildableItem>(item => __instance.SourceChanged(item)));
 
@@ -79,7 +78,7 @@ namespace NoLazyWorkers
       try
       {
         ObjectField supply = ConfigurationExtensions.PotSupply[__instance];
-        __result |= supply?.SelectedObject != null;
+        __result |= supply.SelectedObject != null;
       }
       catch (Exception e)
       {
@@ -107,14 +106,14 @@ namespace NoLazyWorkers
     {
       try
       {
-        MelonLogger.Msg($"PotConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}");
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}"); }
         ObjectFieldUI destinationUI = __instance.DestinationUI;
 
         // Instantiate DestinationUI's GameObject to copy hierarchy
         GameObject supplyUIObj = UnityEngine.Object.Instantiate(destinationUI.gameObject, __instance.transform, false);
         supplyUIObj.name = "SupplyUI";
         ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
-        MelonLogger.Msg("PotConfigPanelBindPatch: Instantiated SupplyUI successfully");
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("PotConfigPanelBindPatch: Instantiated SupplyUI successfully"); }
 
         // Ensure CanvasRenderer and other components
         supplyUIObj.AddComponent<CanvasRenderer>();
@@ -147,7 +146,7 @@ namespace NoLazyWorkers
             if (ConfigurationExtensions.PotSupply.TryGetValue(potConfig, out ObjectField supply))
             {
               supplyList.Add(supply);
-              MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply for PotConfiguration, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.ToString() : "null")}");
+              if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply for PotConfiguration, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.name : "null")}"); }
             }
             else
             {

@@ -14,6 +14,7 @@ using UnityEngine;
 using UnityEngine.Events;
 using TMPro;
 using ScheduleOne.EntityFramework;
+using UnityEngine.UI;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -34,6 +35,7 @@ namespace NoLazyWorkers
           TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
           DrawTransitLine = true
         };
+        Supply.onObjectChanged.RemoveAllListeners();
         Supply.onObjectChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
@@ -91,11 +93,161 @@ namespace NoLazyWorkers
       {
         ObjectField supply = ConfigurationExtensions.MixerSupply[__instance];
         ItemField mixerItem = ConfigurationExtensions.MixerItem[__instance];
-        __result |= supply?.SelectedObject != null || mixerItem?.SelectedItem != null;
+        __result |= supply.SelectedObject != null || mixerItem?.SelectedItem != null;
       }
       catch (Exception e)
       {
         MelonLogger.Error($"MixingStationConfigurationShouldSavePatch failed: {e}");
+      }
+    }
+  }
+
+
+  [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
+  public class MixingStationConfigPanelBindPatch
+  {
+    static void Postfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
+    {
+      try
+      {
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Binding configs, count: {configs?.Count ?? 0}"); }
+        if (__instance == null)
+        {
+          MelonLogger.Error("MixingStationConfigPanelBindPatch: __instance is null");
+          return;
+        }
+
+        ObjectFieldUI destinationUI = __instance.DestinationUI;
+        if (destinationUI == null)
+        {
+          MelonLogger.Error("MixingStationConfigPanelBindPatch: DestinationUI is null");
+          return;
+        }
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: DestinationUI found"); }
+
+        ItemFieldUI mixerItemUI = null;
+        GameObject mixerItemUIObj = null;
+
+        // Try to get ItemFieldUI template from PotConfigPanel prefab
+        GameObject template = NoLazyUtilities.GetItemFieldUITemplateFromPotConfigPanel();
+        mixerItemUIObj = UnityEngine.Object.Instantiate(template, __instance.transform, false);
+        mixerItemUIObj.name = "MixerItemUI";
+        mixerItemUI = mixerItemUIObj.GetComponent<ItemFieldUI>();
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated MixerItemUI from PotConfigPanel prefab template"); }
+
+        // Configure MixerItemUI
+        mixerItemUIObj.AddComponent<CanvasRenderer>();
+        TextMeshProUGUI titleTextComponent = mixerItemUIObj.GetComponentsInChildren<TextMeshProUGUI>().FirstOrDefault(t => t.gameObject.name == "Title");
+        titleTextComponent.text = "Mixer";
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set MixerItemUI Title to 'Mixer'"); }
+
+        RectTransform mixerRect = mixerItemUIObj.GetComponent<RectTransform>();
+        mixerRect.anchoredPosition = new Vector2(mixerRect.anchoredPosition.x, -135.76f);
+        // Find Selection Button
+        Button mixerButton = mixerItemUIObj.GetComponentsInChildren<Button>()
+            .FirstOrDefault(b => b.name == "Selection");
+        if (mixerButton == null)
+        {
+          MelonLogger.Error("MixingStationConfigPanelBindPatch: Selection Button not found in MixerItemUI");
+          return;
+        }
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Found Selection Button"); }
+
+        // Clear existing clicked listeners and set new one
+        mixerButton.onClick.RemoveAllListeners();
+        mixerButton.onClick.AddListener(() =>
+        {
+          try
+          {
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixerItemUI Selection Button clicked"); }
+            foreach (EntityConfiguration config in configs)
+            {
+              if (config is MixingStationConfiguration mixConfig &&
+                      ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out var mixerItem))
+              {
+                Singleton<ItemSetterScreen>.Instance.Open(new ItemList("Mixer", NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(), true, true));
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Opened ItemSetterScreen for MixerItem"); }
+                return;
+              }
+            }
+            MelonLogger.Warning("MixingStationConfigPanelBindPatch: No MixerItem found for click");
+          }
+          catch (Exception e)
+          {
+            MelonLogger.Error($"MixingStationConfigPanelBindPatch: Button click failed, error: {e}");
+          }
+        });
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set Selection Button onClick listener"); }
+
+        // Clone SupplyUI from DestinationUI
+        GameObject supplyUIObj = UnityEngine.Object.Instantiate(destinationUI.gameObject, __instance.transform, false);
+        supplyUIObj.name = "SupplyUI";
+        ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated SupplyUI successfully"); }
+
+        supplyUIObj.AddComponent<CanvasRenderer>();
+        foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
+        {
+          if (child.gameObject.name == "Title")
+            child.text = "Supplies";
+          else if (child.gameObject.name == "Description")
+            child.gameObject.SetActive(false);
+        }
+
+        // Position UI elements
+        RectTransform destRect = destinationUI.GetComponent<RectTransform>();
+        destRect.anchoredPosition = new Vector2(destRect.anchoredPosition.x, -245.76f);
+
+        RectTransform supplyRect = supplyUIObj.GetComponent<RectTransform>();
+        supplyRect.anchoredPosition = new Vector2(supplyRect.anchoredPosition.x, -185.76f);
+
+        // Bind data
+        List<ObjectField> supplyList = new();
+        List<ItemField> mixerItemList = new();
+        foreach (EntityConfiguration config in configs)
+        {
+          if (config is MixingStationConfiguration mixConfig)
+          {
+            if (ConfigurationExtensions.MixerSupply.TryGetValue(mixConfig, out ObjectField supply))
+            {
+              supplyList.Add(supply);
+              supplyUI.Bind(supplyList);
+              if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.name : "null")}"); }
+            }
+            else
+            {
+              MelonLogger.Warning("MixingStationConfigPanelBindPatch: MixerSupply not found");
+            }
+
+            if (ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out ItemField mixerItem))
+            {
+              mixerItemList.Add(mixerItem);
+              mixerItemUI.Bind(mixerItemList);
+              if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Bound MixerItemUI, SelectedItem: {mixerItem.SelectedItem?.Name ?? "null"}"); }
+
+              // Update ValueLabel
+              var valueLabel = mixerItemUI.GetComponentsInChildren<TextMeshProUGUI>()
+                  .FirstOrDefault(t => t.gameObject.name.Contains("Value"));
+              if (valueLabel != null)
+              {
+                valueLabel.text = mixerItem.SelectedItem.Name ?? "None";
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Set ValueLabel to: {valueLabel.text}"); }
+              }
+              else
+              {
+                MelonLogger.Warning("MixingStationConfigPanelBindPatch: ValueLabel not found");
+              }
+            }
+            else
+            {
+              MelonLogger.Warning("MixingStationConfigPanelBindPatch: MixerItem not found");
+            }
+          }
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"MixingStationConfigPanelBindPatch: Postfix failed, error: {e}");
       }
     }
   }
@@ -194,10 +346,7 @@ namespace NoLazyWorkers
 
     private void UpdateUI()
     {
-      if (MixerItemUI?.ValueLabel != null && castedPreset?.MixerItems != null)
-      {
-        MixerItemUI.ValueLabel.text = castedPreset.MixerItems.GetDisplayString();
-      }
+      MixerItemUI.ValueLabel.text = castedPreset.MixerItems.GetDisplayString();
     }
 
     private void MixerItemUIClicked()
@@ -217,105 +366,6 @@ namespace NoLazyWorkers
         return false;
       }
       return true;
-    }
-  }
-
-
-  [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
-  public class MixingStationConfigPanelBindPatch
-  {
-    static void Postfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
-    {
-      try
-      {
-        MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}");
-        if (__instance == null)
-        {
-          MelonLogger.Error("MixingStationConfigPanelBindPatch: __instance is null");
-          return;
-        }
-
-        ObjectFieldUI destinationUI = __instance.DestinationUI;
-        if (destinationUI == null)
-        {
-          MelonLogger.Error("MixingStationConfigPanelBindPatch: DestinationUI is null");
-          return;
-        }
-        MelonLogger.Msg("MixingStationConfigPanelBindPatch: DestinationUI found");
-
-        ItemFieldUI mixerItemUI = null;
-        GameObject mixerItemUIObj = null;
-
-        // Try to get ItemFieldUI template from PotConfigPanel prefab
-        GameObject template = NoLazyUtilities.GetItemFieldUITemplateFromPotConfigPanel();
-        if (template != null)
-        {
-          mixerItemUIObj = UnityEngine.Object.Instantiate(template, __instance.transform, false);
-          mixerItemUIObj.name = "MixerItemUI";
-          mixerItemUI = mixerItemUIObj.GetComponent<ItemFieldUI>();
-          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated MixerItemUI from PotConfigPanel prefab template");
-        }
-        // Configure MixerItemUI
-        mixerItemUIObj.AddComponent<CanvasRenderer>();
-        foreach (TextMeshProUGUI child in mixerItemUIObj.GetComponentsInChildren<TextMeshProUGUI>())
-        {
-          if (child.gameObject.name == "Title")
-          {
-            child.text = "Mixer";
-            MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set MixerItemUI Title to 'Mixer'");
-            break;
-          }
-        }
-        RectTransform mixerRect = mixerItemUIObj.GetComponent<RectTransform>();
-        mixerRect.anchoredPosition = new Vector2(mixerRect.anchoredPosition.x, -135.76f);
-
-        // Clone SupplyUI from DestinationUI
-        GameObject supplyUIObj = UnityEngine.Object.Instantiate(destinationUI.gameObject, __instance.transform, false);
-        supplyUIObj.name = "SupplyUI";
-        ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
-        MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated SupplyUI successfully");
-
-        supplyUIObj.AddComponent<CanvasRenderer>();
-        foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
-        {
-          if (child.gameObject.name == "Title")
-            child.text = "Supplies";
-          else if (child.gameObject.name == "Description")
-            child.gameObject.SetActive(false);
-        }
-
-        // Position UI elements
-        RectTransform destRect = destinationUI.GetComponent<RectTransform>();
-        destRect.anchoredPosition = new Vector2(destRect.anchoredPosition.x, -245.76f);
-
-        RectTransform supplyRect = supplyUIObj.GetComponent<RectTransform>();
-        supplyRect.anchoredPosition = new Vector2(supplyRect.anchoredPosition.x, -185.76f);
-
-        // Bind data
-        List<ObjectField> supplyList = new();
-        List<ItemField> mixerItemList = new();
-        foreach (EntityConfiguration config in configs)
-        {
-          if (config is MixingStationConfiguration mixConfig)
-          {
-            if (ConfigurationExtensions.MixerSupply.TryGetValue(mixConfig, out ObjectField supply))
-            {
-              supplyList.Add(supply);
-              supplyUI.Bind(supplyList);
-            }
-            if (ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out ItemField mixerItem))
-              if (mixerItem?.SelectedItem != null)
-              {
-                mixerItemList.Add(mixerItem);
-                mixerItemUI.Bind(mixerItemList);
-              }
-          }
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"MixingStationConfigPanelBindPatch: Postfix failed, error: {e}");
-      }
     }
   }
 }

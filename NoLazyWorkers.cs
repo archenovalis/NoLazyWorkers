@@ -1,24 +1,17 @@
 ﻿using HarmonyLib;
 using MelonLoader;
-using ScheduleOne;
-using ScheduleOne.DevUtilities;
 using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Growing;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using ScheduleOne.Management.Presets;
-using ScheduleOne.Management.Presets.Options;
 using ScheduleOne.Management.SetterScreens;
-using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
 using UnityEngine;
-using UnityEngine.Events;
 using UnityEngine.UI;
 using System.Reflection;
 using System.Collections;
@@ -30,6 +23,12 @@ using ScheduleOne.Management.UI;
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
 {
+    public static class DebugConfig
+    {
+        public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
+        public static bool EnableDebugBehaviorLogs = true; // true enables Behavior-only Msg and Warning Logs
+    }
+
     public static class BuildInfo
     {
         public const string Name = "NoLazyWorkers";
@@ -47,7 +46,7 @@ namespace NoLazyWorkers
             try
             {
                 HarmonyInstance.PatchAll();
-                MelonLogger.Msg("NoLazyWorkers loaded!");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("NoLazyWorkers loaded!"); }
             }
             catch (Exception e)
             {
@@ -67,7 +66,7 @@ namespace NoLazyWorkers
             ConfigurationExtensions.PotSupplyData.Clear();
             ConfigurationExtensions.MixerSupplyData.Clear();
             ConfigurationExtensions.MixerItemData.Clear();
-            MelonLogger.Msg("Cleared ConfigurationExtensions dictionaries on scene unload.");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("Cleared ConfigurationExtensions dictionaries on scene unload."); }
         }
     }
 
@@ -81,12 +80,11 @@ namespace NoLazyWorkers
         public static Dictionary<MixingStation, MixingStationConfiguration> MixerConfig = new();
         public static Dictionary<MixingStationConfiguration, ItemField> MixerItem = new();
         public static Dictionary<MixingStationConfiguration, TransitRoute> MixerSourceRoute = new();
-
-        // Temporary storage for deserialized data
         public static Dictionary<Pot, ObjectFieldData> PotSupplyData = new();
         public static Dictionary<MixingStation, ObjectFieldData> MixerSupplyData = new();
         public static Dictionary<MixingStation, ItemFieldData> MixerItemData = new();
-
+        public static Dictionary<ChemistConfiguration, ObjectField> ChemistSupply = new();
+        public static Dictionary<Chemist, ChemistConfiguration> ChemistConfig = new();
         public static void InvokeChanged(EntityConfiguration config)
         {
             try
@@ -106,7 +104,7 @@ namespace NoLazyWorkers
                 }
 
                 method.Invoke(config, null);
-                MelonLogger.Msg($"InvokeChanged called for config: {config}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"InvokeChanged called for config: {config}"); }
             }
             catch (Exception e)
             {
@@ -126,9 +124,9 @@ namespace NoLazyWorkers
             if (Supply.SelectedObject != null)
             {
                 SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, potConfig.Pot);
+                PotSourceRoute[potConfig] = SourceRoute;
                 if (potConfig.Pot.Configuration.IsSelected)
                 {
-                    PotSourceRoute[potConfig] = SourceRoute;
                     SourceRoute.SetVisualsActive(true);
                     return;
                 }
@@ -151,9 +149,9 @@ namespace NoLazyWorkers
             if (Supply.SelectedObject != null)
             {
                 SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, mixerConfig.station);
+                MixerSourceRoute[mixerConfig] = SourceRoute;
                 if (mixerConfig.station.Configuration.IsSelected)
                 {
-                    MixerSourceRoute[mixerConfig] = SourceRoute;
                     SourceRoute.SetVisualsActive(true);
                     return;
                 }
@@ -167,28 +165,28 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"SourceChanged(Pot): Called for PotConfig: {potConfig}, Pot: {pot}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"SourceChanged(Pot): Called for PotConfig: {potConfig}, Pot: {pot}, Supply: {Supply?.SelectedObject?.name ?? "null"}"); }
                 if (SourceRoute != null)
                 {
-                    MelonLogger.Msg("SourceChanged(Pot): Destroying existing SourceRoute");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(Pot): Destroying existing SourceRoute"); }
                     SourceRoute.Destroy();
                     PotSourceRoute[potConfig] = null;
                 }
 
                 if (Supply.SelectedObject != null)
                 {
-                    MelonLogger.Msg($"SourceChanged(Pot): Creating new TransitRoute from {Supply.SelectedObject.name} to Pot");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"SourceChanged(Pot): Creating new TransitRoute from {Supply.SelectedObject.name} to Pot"); }
                     SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, pot);
                     PotSourceRoute[potConfig] = SourceRoute;
                     if (pot.Configuration.IsSelected)
                     {
-                        MelonLogger.Msg("SourceChanged(Pot): Pot is selected, enabling TransitRoute visuals");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(Pot): Pot is selected, enabling TransitRoute visuals"); }
                         SourceRoute.SetVisualsActive(active: true);
                     }
                 }
                 else
                 {
-                    MelonLogger.Msg("SourceChanged(Pot): Supply.SelectedObject is null, setting SourceRoute to null");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(Pot): Supply.SelectedObject is null, setting SourceRoute to null"); }
                     PotSourceRoute[potConfig] = null;
                 }
             }
@@ -202,28 +200,28 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"SourceChanged(MixingStation): Called for MixerConfig: {mixerConfig}, Station: {station}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"SourceChanged(MixingStation): Called for MixerConfig: {mixerConfig}, Station: {station}, Supply: {Supply?.SelectedObject?.name ?? "null"}"); }
                 if (SourceRoute != null)
                 {
-                    MelonLogger.Msg("SourceChanged(MixingStation): Destroying existing SourceRoute");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(MixingStation): Destroying existing SourceRoute"); }
                     SourceRoute.Destroy();
                     MixerSourceRoute[mixerConfig] = null;
                 }
 
                 if (Supply.SelectedObject != null)
                 {
-                    MelonLogger.Msg($"SourceChanged(MixingStation): Creating new TransitRoute from {Supply.SelectedObject.name} to MixingStation");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"SourceChanged(MixingStation): Creating new TransitRoute from {Supply.SelectedObject.name} to MixingStation"); }
                     SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, station);
                     MixerSourceRoute[mixerConfig] = SourceRoute;
                     if (station.Configuration.IsSelected)
                     {
-                        MelonLogger.Msg("SourceChanged(MixingStation): Station is selected, enabling TransitRoute visuals");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(MixingStation): Station is selected, enabling TransitRoute visuals"); }
                         SourceRoute.SetVisualsActive(active: true);
                     }
                 }
                 else
                 {
-                    MelonLogger.Msg("SourceChanged(MixingStation): Supply.SelectedObject is null, setting SourceRoute to null");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("SourceChanged(MixingStation): Supply.SelectedObject is null, setting SourceRoute to null"); }
                     MixerSourceRoute[mixerConfig] = null;
                 }
             }
@@ -235,19 +233,18 @@ namespace NoLazyWorkers
         public static void RestoreConfigurations()
         {
             // Restore Pot configurations
-            var pots = UnityEngine.Object.FindObjectsOfType<Pot>();
-            foreach (var pot in pots)
+            Pot[] pots = UnityEngine.Object.FindObjectsOfType<Pot>();
+            foreach (Pot pot in pots)
             {
                 try
                 {
-                    var configProp = typeof(Pot).GetProperty("Configuration", BindingFlags.Public | BindingFlags.Instance);
+                    PropertyInfo configProp = typeof(Pot).GetProperty("Configuration", BindingFlags.Public | BindingFlags.Instance);
                     if (configProp == null)
                     {
                         MelonLogger.Error("Pot.Configuration property not found");
                         continue;
                     }
-                    var potConfig = configProp.GetValue(pot) as PotConfiguration;
-                    if (potConfig != null && PotSupplyData.TryGetValue(pot, out ObjectFieldData supplyData))
+                    if (configProp.GetValue(pot) is PotConfiguration potConfig && PotSupplyData.TryGetValue(pot, out ObjectFieldData supplyData))
                     {
                         ObjectField supply = PotSupply[potConfig];
                         supply.Load(supplyData);
@@ -262,19 +259,18 @@ namespace NoLazyWorkers
             }
 
             // Restore MixingStation configurations
-            var mixingStations = UnityEngine.Object.FindObjectsOfType<MixingStation>();
-            foreach (var station in mixingStations)
+            MixingStation[] mixingStations = UnityEngine.Object.FindObjectsOfType<MixingStation>();
+            foreach (MixingStation station in mixingStations)
             {
                 try
                 {
-                    var configProp = typeof(MixingStation).GetProperty("Configuration", BindingFlags.Public | BindingFlags.Instance);
+                    PropertyInfo configProp = typeof(MixingStation).GetProperty("Configuration", BindingFlags.Public | BindingFlags.Instance);
                     if (configProp == null)
                     {
                         MelonLogger.Error("MixingStation.Configuration property not found");
                         continue;
                     }
-                    var mixerConfig = configProp.GetValue(station) as MixingStationConfiguration;
-                    if (mixerConfig != null)
+                    if (configProp.GetValue(station) is MixingStationConfiguration mixerConfig)
                     {
                         if (MixerSupplyData.TryGetValue(station, out ObjectFieldData supplyData))
                         {
@@ -299,6 +295,37 @@ namespace NoLazyWorkers
         }
     }
 
+    [HarmonyPatch(typeof(ItemSetterScreen), "Open")]
+    public class ItemSetterScreenOpenPatch
+    {
+        static void Prefix(ItemSetterScreen __instance, object option)
+        {
+            try
+            {
+                if (option is ItemField itemField)
+                {
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
+                    if (itemField.Options != null)
+                    {
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
+                    }
+                    else
+                    {
+                        MelonLogger.Warning("ItemSetterScreenOpenPatch: ItemField Options is null");
+                    }
+                }
+                else
+                {
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
+                }
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Error($"ItemSetterScreenOpenPatch: Prefix failed, error: {e}");
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(EntityConfiguration), "Selected")]
     public class EntityConfigurationSelectedPatch
     {
@@ -306,12 +333,12 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
                 if (__instance is PotConfiguration potConfig && ConfigurationExtensions.PotSourceRoute.TryGetValue(potConfig, out var potRoute))
                 {
                     if (potRoute != null)
                     {
-                        MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
                         potRoute.SetVisualsActive(active: true);
                     }
                     else
@@ -323,7 +350,7 @@ namespace NoLazyWorkers
                 {
                     if (mixerRoute != null)
                     {
-                        MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
                         mixerRoute.SetVisualsActive(active: true);
                     }
                     else
@@ -346,12 +373,12 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
                 if (__instance is PotConfiguration potConfig && ConfigurationExtensions.PotSourceRoute.TryGetValue(potConfig, out TransitRoute potRoute))
                 {
                     if (potRoute != null)
                     {
-                        MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
                         potRoute.SetVisualsActive(active: false);
                     }
                     else
@@ -363,7 +390,7 @@ namespace NoLazyWorkers
                 {
                     if (mixerRoute != null)
                     {
-                        MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
                         mixerRoute.SetVisualsActive(active: false);
                     }
                     else
@@ -510,7 +537,7 @@ namespace NoLazyWorkers
             {
                 __instance.onLoadComplete.AddListener(delegate
                 {
-                    MelonLogger.Msg("onLoadComplete fired, restoring configurations");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
                     ConfigurationExtensions.RestoreConfigurations();
                 });
             }
@@ -530,11 +557,11 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
                 if (__result != null)
                 {
                     LoadedGridItems[mainPath] = __result;
-                    MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
                 }
                 else
                 {
@@ -556,28 +583,28 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}"); }
                 if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
                 {
-                    MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}"); }
                     if (gridItem is Pot pot)
                     {
-                        MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}"); }
                         string configPath = Path.Combine(mainPath, "Configuration.json");
                         if (File.Exists(configPath))
                         {
-                            MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}");
+                            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}"); }
                             if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
                             {
-                                MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}");
+                                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}"); }
                                 ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
                                 if (configData != null)
                                 {
-                                    MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}");
+                                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}"); }
                                     if (configData.Supply != null)
                                     {
                                         ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
-                                        MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}");
+                                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}"); }
                                     }
                                     else
                                     {
@@ -599,7 +626,7 @@ namespace NoLazyWorkers
                             MelonLogger.Warning($"PotLoaderPatch: No Configuration.json found at: {configPath}");
                         }
                         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
-                        MelonLogger.Msg($"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems"); }
                     }
                     else
                     {
@@ -625,29 +652,29 @@ namespace NoLazyWorkers
         {
             try
             {
-                MelonLogger.Msg($"MixingStationLoaderPatch: Processing Postfix for mainPath: {mainPath}");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Processing Postfix for mainPath: {mainPath}"); }
                 if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
                 {
-                    MelonLogger.Msg($"MixingStationLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}"); }
                     if (gridItem is MixingStation station)
                     {
-                        MelonLogger.Msg($"MixingStationLoaderPatch: GridItem is MixingStation for mainPath: {mainPath}");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: GridItem is MixingStation for mainPath: {mainPath}"); }
                         string configPath = Path.Combine(mainPath, "Configuration.json");
                         if (File.Exists(configPath))
                         {
-                            MelonLogger.Msg($"MixingStationLoaderPatch: Found Configuration.json at: {configPath}");
+                            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Found Configuration.json at: {configPath}"); }
                             if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
                             {
-                                MelonLogger.Msg($"MixingStationLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}");
+                                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}"); }
                                 ExtendedMixingStationConfigurationData configData = JsonUtility.FromJson<ExtendedMixingStationConfigurationData>(text);
                                 if (configData != null)
                                 {
-                                    MelonLogger.Msg($"MixingStationLoaderPatch: Deserialized ExtendedMixingStationConfigurationData for mainPath: {mainPath}");
+                                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Deserialized ExtendedMixingStationConfigurationData for mainPath: {mainPath}"); }
                                     // Store Supply data
                                     if (configData.Supply != null)
                                     {
                                         ConfigurationExtensions.MixerSupplyData[station] = configData.Supply;
-                                        MelonLogger.Msg($"MixingStationLoaderPatch: Associated Supply data with MixingStation for mainPath: {mainPath}, MixerSupplyData count: {ConfigurationExtensions.MixerSupplyData.Count}");
+                                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Associated Supply data with MixingStation for mainPath: {mainPath}, MixerSupplyData count: {ConfigurationExtensions.MixerSupplyData.Count}"); }
                                     }
                                     else
                                     {
@@ -657,7 +684,7 @@ namespace NoLazyWorkers
                                     if (configData.MixerItem != null)
                                     {
                                         ConfigurationExtensions.MixerItemData[station] = configData.MixerItem;
-                                        MelonLogger.Msg($"MixingStationLoaderPatch: Associated MixerItem data with MixingStation for mainPath: {mainPath}, MixerItemData count: {ConfigurationExtensions.MixerItemData.Count}");
+                                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Associated MixerItem data with MixingStation for mainPath: {mainPath}, MixerItemData count: {ConfigurationExtensions.MixerItemData.Count}"); }
                                     }
                                     else
                                     {
@@ -679,7 +706,7 @@ namespace NoLazyWorkers
                             MelonLogger.Warning($"MixingStationLoaderPatch: No Configuration.json found at: {configPath}");
                         }
                         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
-                        MelonLogger.Msg($"MixingStationLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems");
+                        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems"); }
                     }
                     else
                     {
@@ -748,14 +775,14 @@ namespace NoLazyWorkers
                 PotConfiguration potConfig = new PotConfiguration(replicator, pot, pot);
                 configs.Add(potConfig);
                 tempPanel.Bind(configs);
-                MelonLogger.Msg("Bound temporary PotConfigPanel to initialize SeedUI");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("Bound temporary PotConfigPanel to initialize SeedUI"); }
 
                 // Get SeedUI
                 GameObject seedUITemplate = null;
                 if (tempPanel.SeedUI != null && tempPanel.SeedUI.gameObject != null)
                 {
                     seedUITemplate = tempPanel.SeedUI.gameObject;
-                    MelonLogger.Msg("Successfully retrieved SeedUI template from PotConfigPanel prefab");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("Successfully retrieved SeedUI template from PotConfigPanel prefab"); }
                 }
                 else
                 {
@@ -781,7 +808,7 @@ namespace NoLazyWorkers
                 GameObject prefab = GetPrefab(id);
                 if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
                 {
-                    MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
                     return prefab;
                 }
                 else if (prefab != null)
@@ -801,18 +828,18 @@ namespace NoLazyWorkers
 
         public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
         {
-            MelonLogger.Msg("=== ItemFieldUI Details ===");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
 
             // Log basic info
-            MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}");
-            MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}");
-            MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
 
             // Log ItemFieldUI properties
             LogComponentDetails(itemfieldUI, 0);
 
             // Log hierarchy and components
-            MelonLogger.Msg("--- Hierarchy and Components ---");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
             if (itemfieldUI.gameObject != null)
             {
                 LogGameObjectDetails(itemfieldUI.gameObject, 0);
@@ -827,11 +854,11 @@ namespace NoLazyWorkers
         {
             if (go == null)
             {
-                MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
                 return;
             }
 
-            MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
 
             // Log components on this GameObject
             foreach (var component in go.GetComponents<Component>())
@@ -850,11 +877,11 @@ namespace NoLazyWorkers
         {
             if (component == null)
             {
-                MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null");
+                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
                 return;
             }
 
-            MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}");
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
 
             // Use reflection to log all public fields
             var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -864,7 +891,7 @@ namespace NoLazyWorkers
                 {
                     var value = field.GetValue(component);
                     string valueStr = ValueToString(value);
-                    MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
                 }
                 catch (Exception e)
                 {
@@ -883,7 +910,7 @@ namespace NoLazyWorkers
                 {
                     var value = property.GetValue(component);
                     string valueStr = ValueToString(value);
-                    MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}");
+                    if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
                 }
                 catch (Exception e)
                 {
