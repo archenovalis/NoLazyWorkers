@@ -451,6 +451,9 @@
 		<Reference Include="UnityEngine.XRModule">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\UnityEngine.XRModule.dll</HintPath>
 		</Reference>
+		<PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2" PrivateAssets="all" />
+		<Reference Remove="d:\Games\Schedule I\Schedule I_Data\Managed\Assembly-CSharp.dll" />
+		<Reference Include="d:\Games\Schedule I\Schedule I_Data\Managed\Assembly-CSharp.dll" Publicize="true" />
 	</ItemGroup>
 
 	<PropertyGroup>
@@ -462,7 +465,7 @@
 		<Compile Include="*.cs" />
 	</ItemGroup>
 
-	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
-		<Exec Command="COPY &quot;$(TargetPath)&quot; &quot;d:\Games\Schedule I\Mods&quot;" />
+	<Target Name="CopyOutputFileToGame" AfterTargets="Build">
+		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\Games\Schedule I\Mods" Retries="60" />
 	</Target>
 </Project>

@@ -21,6 +21,9 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 using System.Reflection;
+using System.Collections;
+using static ScheduleOne.Registry;
+using ScheduleOne.Management.UI;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -70,6 +73,7 @@ namespace NoLazyWorkers
 
     public static class ConfigurationExtensions
     {
+        public static GameObject ItemFieldUITemplate;
         public static Dictionary<PotConfiguration, ObjectField> PotSupply = new();
         public static Dictionary<Pot, PotConfiguration> PotConfig = new();
         public static Dictionary<PotConfiguration, TransitRoute> PotSourceRoute = new();
@@ -112,47 +116,71 @@ namespace NoLazyWorkers
 
         public static void SourceChanged(this PotConfiguration potConfig, TransitRoute SourceRoute, ObjectField Supply, Pot pot)
         {
-            if (SourceRoute != null)
+            try
             {
-                SourceRoute.Destroy();
-                PotSourceRoute[potConfig] = null;
-            }
-
-            if (Supply.SelectedObject != null)
-            {
-                SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, pot);
-                if (pot.Configuration.IsSelected)
+                MelonLogger.Msg($"SourceChanged(Pot): Called for PotConfig: {potConfig}, Pot: {pot}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+                if (SourceRoute != null)
                 {
-                    SourceRoute.SetVisualsActive(active: true);
+                    MelonLogger.Msg("SourceChanged(Pot): Destroying existing SourceRoute");
+                    SourceRoute.Destroy();
+                    PotSourceRoute[potConfig] = null;
                 }
-                PotSourceRoute[potConfig] = SourceRoute;
+
+                if (Supply.SelectedObject != null)
+                {
+                    MelonLogger.Msg($"SourceChanged(Pot): Creating new TransitRoute from {Supply.SelectedObject.name} to Pot");
+                    SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, pot);
+                    PotSourceRoute[potConfig] = SourceRoute;
+                    if (pot.Configuration.IsSelected)
+                    {
+                        MelonLogger.Msg("SourceChanged(Pot): Pot is selected, enabling TransitRoute visuals");
+                        SourceRoute.SetVisualsActive(active: true);
+                    }
+                }
+                else
+                {
+                    MelonLogger.Msg("SourceChanged(Pot): Supply.SelectedObject is null, setting SourceRoute to null");
+                    PotSourceRoute[potConfig] = null;
+                }
             }
-            else
+            catch (Exception e)
             {
-                PotSourceRoute[potConfig] = null;
+                MelonLogger.Error($"SourceChanged(Pot): Failed for PotConfig: {potConfig}, error: {e}");
             }
         }
 
         public static void SourceChanged(this MixingStationConfiguration mixerConfig, TransitRoute SourceRoute, ObjectField Supply, MixingStation station)
         {
-            if (SourceRoute != null)
+            try
             {
-                SourceRoute.Destroy();
-                MixerSourceRoute[mixerConfig] = null;
-            }
-
-            if (Supply.SelectedObject != null)
-            {
-                SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, station);
-                if (station.Configuration.IsSelected)
+                MelonLogger.Msg($"SourceChanged(MixingStation): Called for MixerConfig: {mixerConfig}, Station: {station}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+                if (SourceRoute != null)
                 {
-                    SourceRoute.SetVisualsActive(active: true);
+                    MelonLogger.Msg("SourceChanged(MixingStation): Destroying existing SourceRoute");
+                    SourceRoute.Destroy();
+                    MixerSourceRoute[mixerConfig] = null;
                 }
-                MixerSourceRoute[mixerConfig] = SourceRoute;
+
+                if (Supply.SelectedObject != null)
+                {
+                    MelonLogger.Msg($"SourceChanged(MixingStation): Creating new TransitRoute from {Supply.SelectedObject.name} to MixingStation");
+                    SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, station);
+                    MixerSourceRoute[mixerConfig] = SourceRoute;
+                    if (station.Configuration.IsSelected)
+                    {
+                        MelonLogger.Msg("SourceChanged(MixingStation): Station is selected, enabling TransitRoute visuals");
+                        SourceRoute.SetVisualsActive(active: true);
+                    }
+                }
+                else
+                {
+                    MelonLogger.Msg("SourceChanged(MixingStation): Supply.SelectedObject is null, setting SourceRoute to null");
+                    MixerSourceRoute[mixerConfig] = null;
+                }
             }
-            else
+            catch (Exception e)
             {
-                MixerSourceRoute[mixerConfig] = null;
+                MelonLogger.Error($"SourceChanged(MixingStation): Failed for MixerConfig: {mixerConfig}, error: {e}");
             }
         }
 
@@ -219,6 +247,86 @@ namespace NoLazyWorkers
                 {
                     MelonLogger.Error($"Failed to restore configuration for MixingStation {station}: {e}");
                 }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(EntityConfiguration), "Selected")]
+    public class EntityConfigurationSelectedPatch
+    {
+        static void Postfix(EntityConfiguration __instance)
+        {
+            try
+            {
+                MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected");
+                if (__instance is PotConfiguration potConfig && ConfigurationExtensions.PotSourceRoute.TryGetValue(potConfig, out var potRoute))
+                {
+                    if (potRoute != null)
+                    {
+                        MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute");
+                        potRoute.SetVisualsActive(active: true);
+                    }
+                    else
+                    {
+                        MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
+                    }
+                }
+                else if (__instance is MixingStationConfiguration mixerConfig && ConfigurationExtensions.MixerSourceRoute.TryGetValue(mixerConfig, out var mixerRoute))
+                {
+                    if (mixerRoute != null)
+                    {
+                        MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute");
+                        mixerRoute.SetVisualsActive(active: true);
+                    }
+                    else
+                    {
+                        MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Error($"EntityConfigurationSelectedPatch: Failed for {__instance?.GetType().Name}, error: {e}");
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(EntityConfiguration), "Deselected")]
+    public class EntityConfigurationDeselectedPatch
+    {
+        static void Postfix(EntityConfiguration __instance)
+        {
+            try
+            {
+                MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected");
+                if (__instance is PotConfiguration potConfig && ConfigurationExtensions.PotSourceRoute.TryGetValue(potConfig, out TransitRoute potRoute))
+                {
+                    if (potRoute != null)
+                    {
+                        MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute");
+                        potRoute.SetVisualsActive(active: false);
+                    }
+                    else
+                    {
+                        MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
+                    }
+                }
+                else if (__instance is MixingStationConfiguration mixerConfig && ConfigurationExtensions.MixerSourceRoute.TryGetValue(mixerConfig, out TransitRoute mixerRoute))
+                {
+                    if (mixerRoute != null)
+                    {
+                        MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute");
+                        mixerRoute.SetVisualsActive(active: false);
+                    }
+                    else
+                    {
+                        MelonLogger.Warning("EntityConfigurationDeselectedPatch: MixingStation SourceRoute is null");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Error($"EntityConfigurationDeselectedPatch: Failed for {__instance?.GetType().Name}, error: {e}");
             }
         }
     }
@@ -368,23 +476,26 @@ namespace NoLazyWorkers
     [HarmonyPatch(typeof(GridItemLoader), "LoadAndCreate")]
     public class GridItemLoaderPatch
     {
-        // Store GridItem (Pot) temporarily, keyed by mainPath
         public static Dictionary<string, GridItem> LoadedGridItems = new Dictionary<string, GridItem>();
 
         static void Postfix(string mainPath, GridItem __result)
         {
             try
             {
+                MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}");
                 if (__result != null)
                 {
-                    // Store the GridItem (will be a Pot for PotLoader) with mainPath as the key
                     LoadedGridItems[mainPath] = __result;
-                    MelonLogger.Msg($"Captured GridItem for {mainPath}");
+                    MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}");
+                }
+                else
+                {
+                    MelonLogger.Warning($"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}");
                 }
             }
             catch (Exception e)
             {
-                MelonLogger.Error($"GridItemLoaderPatch.Postfix failed: {e}");
+                MelonLogger.Error($"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
         }
     }
@@ -397,34 +508,68 @@ namespace NoLazyWorkers
         {
             try
             {
-                // Check if we captured a GridItem (Pot) for this mainPath
-                if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) && gridItem is Pot pot)
+                MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}");
+                if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
                 {
-                    // Process Configuration.json
-                    if (File.Exists(Path.Combine(mainPath, "Configuration.json")) && new Loader().TryLoadFile(mainPath, "Configuration", out string text))
+                    MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    if (gridItem is Pot pot)
                     {
-                        ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
-                        if (configData != null && configData.Supply != null)
+                        MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}");
+                        string configPath = Path.Combine(mainPath, "Configuration.json");
+                        if (File.Exists(configPath))
                         {
-                            ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
-                            MelonLogger.Msg($"Associated Supply data with Pot for {mainPath}");
+                            MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}");
+                            if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
+                            {
+                                MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}");
+                                ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
+                                if (configData != null)
+                                {
+                                    MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}");
+                                    if (configData.Supply != null)
+                                    {
+                                        ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
+                                        MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}");
+                                    }
+                                    else
+                                    {
+                                        MelonLogger.Warning($"PotLoaderPatch: Supply data is null in config for mainPath: {mainPath}");
+                                    }
+                                }
+                                else
+                                {
+                                    MelonLogger.Error($"PotLoaderPatch: Failed to deserialize Configuration.json for mainPath: {mainPath}");
+                                }
+                            }
+                            else
+                            {
+                                MelonLogger.Warning($"PotLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
+                            }
                         }
+                        else
+                        {
+                            MelonLogger.Warning($"PotLoaderPatch: No Configuration.json found at: {configPath}");
+                        }
+                        GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
+                        MelonLogger.Msg($"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems");
                     }
-
-                    // Clean up to avoid memory leaks
-                    GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
+                    else
+                    {
+                        MelonLogger.Warning($"PotLoaderPatch: GridItem is not a Pot for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    }
                 }
                 else
                 {
-                    MelonLogger.Warning($"No Pot found for {mainPath}");
+                    MelonLogger.Warning($"PotLoaderPatch: No GridItem found for mainPath: {mainPath} in LoadedGridItems");
                 }
             }
             catch (Exception e)
             {
-                MelonLogger.Error($"PotLoaderPatch.Postfix failed: {e}");
+                MelonLogger.Error($"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
         }
     }
+
     [HarmonyPatch(typeof(MixingStationLoader), "Load")]
     public class MixingStationLoaderPatch
     {
@@ -432,605 +577,288 @@ namespace NoLazyWorkers
         {
             try
             {
-                // Check if we captured a GridItem (MixingStation) for this mainPath
-                if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) && gridItem is MixingStation station)
+                MelonLogger.Msg($"MixingStationLoaderPatch: Processing Postfix for mainPath: {mainPath}");
+                if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
                 {
-                    // Process Configuration.json
-                    if (File.Exists(Path.Combine(mainPath, "Configuration.json")) && new Loader().TryLoadFile(mainPath, "Configuration", out string text))
+                    MelonLogger.Msg($"MixingStationLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    if (gridItem is MixingStation station)
                     {
-                        ExtendedMixingStationConfigurationData configData = JsonUtility.FromJson<ExtendedMixingStationConfigurationData>(text);
-                        if (configData != null && configData.Supply != null)
+                        MelonLogger.Msg($"MixingStationLoaderPatch: GridItem is MixingStation for mainPath: {mainPath}");
+                        string configPath = Path.Combine(mainPath, "Configuration.json");
+                        if (File.Exists(configPath))
                         {
-                            ConfigurationExtensions.MixerSupplyData[station] = configData.Supply;
-                            MelonLogger.Msg($"Associated Supply data with MixingStation for {mainPath}");
+                            MelonLogger.Msg($"MixingStationLoaderPatch: Found Configuration.json at: {configPath}");
+                            if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
+                            {
+                                MelonLogger.Msg($"MixingStationLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}");
+                                ExtendedMixingStationConfigurationData configData = JsonUtility.FromJson<ExtendedMixingStationConfigurationData>(text);
+                                if (configData != null)
+                                {
+                                    MelonLogger.Msg($"MixingStationLoaderPatch: Deserialized ExtendedMixingStationConfigurationData for mainPath: {mainPath}");
+                                    // Store Supply data
+                                    if (configData.Supply != null)
+                                    {
+                                        ConfigurationExtensions.MixerSupplyData[station] = configData.Supply;
+                                        MelonLogger.Msg($"MixingStationLoaderPatch: Associated Supply data with MixingStation for mainPath: {mainPath}, MixerSupplyData count: {ConfigurationExtensions.MixerSupplyData.Count}");
+                                    }
+                                    else
+                                    {
+                                        MelonLogger.Warning($"MixingStationLoaderPatch: Supply data is null in config for mainPath: {mainPath}");
+                                    }
+                                    // Store MixerItem data
+                                    if (configData.MixerItem != null)
+                                    {
+                                        ConfigurationExtensions.MixerItemData[station] = configData.MixerItem;
+                                        MelonLogger.Msg($"MixingStationLoaderPatch: Associated MixerItem data with MixingStation for mainPath: {mainPath}, MixerItemData count: {ConfigurationExtensions.MixerItemData.Count}");
+                                    }
+                                    else
+                                    {
+                                        MelonLogger.Warning($"MixingStationLoaderPatch: MixerItem data is null in config for mainPath: {mainPath}");
+                                    }
+                                }
+                                else
+                                {
+                                    MelonLogger.Error($"MixingStationLoaderPatch: Failed to deserialize Configuration.json for mainPath: {mainPath}");
+                                }
+                            }
+                            else
+                            {
+                                MelonLogger.Warning($"MixingStationLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
+                            }
                         }
+                        else
+                        {
+                            MelonLogger.Warning($"MixingStationLoaderPatch: No Configuration.json found at: {configPath}");
+                        }
+                        GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
+                        MelonLogger.Msg($"MixingStationLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems");
                     }
-
-                    // Clean up to avoid memory leaks
-                    GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
+                    else
+                    {
+                        MelonLogger.Warning($"MixingStationLoaderPatch: GridItem is not a MixingStation for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    }
                 }
                 else
                 {
-                    MelonLogger.Warning($"No MixingStation found for {mainPath}");
+                    MelonLogger.Warning($"MixingStationLoaderPatch: No GridItem found for mainPath: {mainPath} in LoadedGridItems");
                 }
             }
             catch (Exception e)
             {
-                MelonLogger.Error($"MixingStationLoaderPatch.Postfix failed: {e}");
+                MelonLogger.Error($"MixingStationLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
         }
     }
 
-    [HarmonyPatch(typeof(PotActionBehaviour), "DoesBotanistHaveMaterialsForTask")]
-    public class DoesBotanistHaveMaterialsForTaskPatch
+    public class NoLazyUtilities
     {
-        private static string[] GetRequiredItemIDs(PotActionBehaviour __instance, PotActionBehaviour.EActionType actionType, Pot pot)
-        {
-            PotConfiguration config = ConfigurationExtensions.PotConfig[pot];
-            switch (actionType)
-            {
-                case PotActionBehaviour.EActionType.PourSoil:
-                    return new string[] { "soil", "longlifesoil", "extralonglifesoil" };
-                case PotActionBehaviour.EActionType.SowSeed:
-                    if (config.Seed.SelectedItem == null)
-                        return Singleton<Registry>.Instance.Seeds.ConvertAll<string>(x => x.ID).ToArray();
-                    return new string[] { config.Seed.SelectedItem.ID };
-                case PotActionBehaviour.EActionType.ApplyAdditive:
-                    if (__instance.AdditiveNumber == 1)
-                        return new string[] { config.Additive1.SelectedItem.ID };
-                    if (__instance.AdditiveNumber == 2)
-                        return new string[] { config.Additive2.SelectedItem.ID };
-                    if (__instance.AdditiveNumber == 3)
-                        return new string[] { config.Additive3.SelectedItem.ID };
-                    break;
-            }
-            return new string[0];
-        }
-
-        static bool Prefix(PotActionBehaviour __instance, Botanist botanist, Pot pot, PotActionBehaviour.EActionType actionType, int additiveNumber, ref bool __result)
-        {
-            switch (actionType)
-            {
-                case PotActionBehaviour.EActionType.PourSoil:
-                    __result = botanist.GetItemInSupply(pot, "soil") != null ||
-                                botanist.GetItemInSupply(pot, "longlifesoil") != null ||
-                                botanist.GetItemInSupply(pot, "extralonglifesoil") != null ||
-                                botanist.Inventory.GetMaxItemCount(GetRequiredItemIDs(__instance, actionType, pot)) > 0;
-                    return false;
-
-                case PotActionBehaviour.EActionType.SowSeed:
-                    __result = botanist.GetSeedInSupply(pot) != null ||
-                                botanist.Inventory.GetMaxItemCount(GetRequiredItemIDs(__instance, actionType, pot)) > 0;
-                    return false;
-
-                case PotActionBehaviour.EActionType.ApplyAdditive:
-                    var additiveId = GetAdditiveId(pot, additiveNumber);
-                    __result = additiveId != null && botanist.GetItemInSupply(pot, additiveId) != null ||
-                                botanist.Inventory.GetMaxItemCount(GetRequiredItemIDs(__instance, actionType, pot)) > 0;
-                    return false;
-
-                default:
-                    return true; // Let original method handle other cases
-            }
-        }
-
-        static string GetAdditiveId(Pot pot, int additiveNumber)
-        {
-            PotConfiguration config = ConfigurationExtensions.PotConfig[pot];
-            return additiveNumber switch
-            {
-                1 => config.Additive1?.SelectedItem?.ID,
-                2 => config.Additive2?.SelectedItem?.ID,
-                3 => config.Additive3?.SelectedItem?.ID,
-                _ => null
-            };
-        }
-    }
-
-    [HarmonyPatch(typeof(PotConfiguration))]
-    public class PotConfigurationPatch
-    {
-        [HarmonyPostfix]
-        [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(Pot) })]
-        static void Postfix(PotConfiguration __instance, Pot pot)
+        public static GameObject GetItemFieldUITemplateFromPotConfigPanel()
         {
             try
             {
-                TransitRoute SourceRoute = ConfigurationExtensions.PotSourceRoute.TryGetValue(__instance, out var route) ? route : null;
-                ObjectField Supply = new(__instance)
+                // Get ManagementInterface instance
+                ManagementInterface managementInterface = ManagementInterface.Instance;
+                if (managementInterface == null)
                 {
-                    TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
-                    objectFilter = __instance.DestinationFilter,
-                    DrawTransitLine = true
-                };
-                Supply.onObjectChanged.AddListener(delegate
-                {
-                    ConfigurationExtensions.InvokeChanged(__instance);
-                    ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, pot);
-                });
-                ConfigurationExtensions.PotSupply[__instance] = Supply;
-                ConfigurationExtensions.PotConfig[pot] = __instance;
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"PotConfigurationPatch failed: {e}");
-            }
-        }
-    }
-
-    [HarmonyPatch(typeof(PotConfiguration), "GetSaveString")]
-    public class PotConfigurationGetSaveStringPatch
-    {
-        static void Postfix(PotConfiguration __instance, ref string __result)
-        {
-            try
-            {
-                ExtendedPotConfigurationData data = new(
-                    __instance.Seed.GetData(),
-                    __instance.Additive1.GetData(),
-                    __instance.Additive2.GetData(),
-                    __instance.Additive3.GetData(),
-                    __instance.Destination.GetData()
-                );
-                data.Supply = ConfigurationExtensions.PotSupply[__instance].GetData();
-                __result = data.GetJson(true);
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"PotConfigurationGetSaveStringPatch failed: {e}");
-            }
-        }
-    }
-
-    [HarmonyPatch(typeof(PotConfiguration), "ShouldSave")]
-    public class PotConfigurationShouldSavePatch
-    {
-        static void Postfix(PotConfiguration __instance, ref bool __result)
-        {
-            try
-            {
-                ObjectField supply = ConfigurationExtensions.PotSupply[__instance];
-                __result |= supply?.SelectedObject != null;
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"PotConfigurationShouldSavePatch failed: {e}");
-            }
-        }
-    }
-
-    [Serializable]
-    public class ExtendedPotConfigurationData : PotConfigurationData
-    {
-        public ObjectFieldData Supply;
-
-        public ExtendedPotConfigurationData(ItemFieldData seed, ItemFieldData additive1, ItemFieldData additive2, ItemFieldData additive3, ObjectFieldData destination)
-            : base(seed, additive1, additive2, additive3, destination)
-        {
-            Supply = null;
-        }
-    }
-
-    [HarmonyPatch(typeof(StartMixingStationBehaviour), "ActiveMinPass")]
-    public class StartMixingStationBehaviourPatch
-    {
-        private static readonly FieldInfo startRoutineField = typeof(StartMixingStationBehaviour)
-            .GetField("startRoutine", BindingFlags.NonPublic | BindingFlags.Instance);
-
-        static bool Prefix(StartMixingStationBehaviour __instance)
-        {
-            // Check if startRoutine is not null using reflection
-            if (startRoutineField.GetValue(__instance) != null)
-                return true; // Cooking is in progress, let original logic handle it
-
-            Chemist chemist = __instance.Npc as Chemist;
-            MixingStation station = __instance.targetStation;
-            if (station == null)
-            {
-                __instance.Disable();
-                return false; // Skip original logic
-            }
-
-            // Get the mixer item from the station's configuration
-            MixingStationConfiguration config = ConfigurationExtensions.MixerConfig[station];
-            ItemField mixerItem = ConfigurationExtensions.MixerItem[config];
-            if (mixerItem?.SelectedItem == null)
-            {
-                __instance.Disable();
-                return false; // Skip original logic
-            }
-
-            // Check if the chemist can reach the supply
-            if (!chemist.behaviour.Npc.Movement.CanGetTo(station, 1f))
-            {
-                Debug.LogWarning("Chemist cannot reach supply for mixing station.");
-                __instance.Disable();
-                return false; // Skip original logic
-            }
-
-            // Check if the required mixer item is in the supply
-            if (chemist.GetItemInSupply(station, mixerItem.SelectedItem.ID) == null)
-            {
-                Debug.LogWarning("Required mixer item not found in supply.");
-                __instance.Disable();
-                return false; // Skip original logic
-            }
-
-            return true; // Proceed with original logic
-        }
-    }
-
-    [HarmonyPatch(typeof(MixingStationConfiguration))]
-    public class MixingStationConfigurationPatch
-    {
-        [HarmonyPostfix]
-        [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(MixingStation) })]
-        static void Postfix(MixingStationConfiguration __instance, MixingStation station)
-        {
-            try
-            {
-                TransitRoute SourceRoute = ConfigurationExtensions.MixerSourceRoute.TryGetValue(__instance, out var route) ? route : null;
-                ObjectField Supply = new(__instance)
-                {
-                    TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
-                    objectFilter = __instance.DestinationFilter,
-                    DrawTransitLine = true
-                };
-                Supply.onObjectChanged.AddListener(delegate
-                {
-                    ConfigurationExtensions.InvokeChanged(__instance);
-                    ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, station);
-                });
-                ConfigurationExtensions.MixerSupply[__instance] = Supply;
-                ConfigurationExtensions.MixerConfig[station] = __instance;
-
-                ItemField mixerItem = new(__instance)
-                {
-                    CanSelectNone = false
-                };
-                List<PropertyItemDefinition> validIngredients = NetworkSingleton<ProductManager>.Instance?.ValidMixIngredients;
-                if (validIngredients != null)
-                {
-                    mixerItem.Options = validIngredients.Cast<ItemDefinition>().ToList();
+                    MelonLogger.Error("ManagementInterface instance is null");
+                    return null;
                 }
-                mixerItem.onItemChanged.AddListener(delegate
+
+                // Get PotConfigPanel prefab
+                ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(EConfigurableType.Pot);
+                if (configPanelPrefab == null)
                 {
-                    ConfigurationExtensions.InvokeChanged(__instance);
-                });
-                ConfigurationExtensions.MixerItem[__instance] = mixerItem;
+                    MelonLogger.Error("No ConfigPanel prefab found for EConfigurableType.Pot");
+                    return null;
+                }
+
+                // Verify it's a PotConfigPanel
+                PotConfigPanel potConfigPanelPrefab = configPanelPrefab.GetComponent<PotConfigPanel>();
+                if (potConfigPanelPrefab == null)
+                {
+                    MelonLogger.Error("ConfigPanel prefab for EConfigurableType.Pot is not a PotConfigPanel");
+                    return null;
+                }
+
+                // Instantiate prefab temporarily
+                GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
+                tempPanelObj.SetActive(false); // Keep inactive to avoid rendering
+                PotConfigPanel tempPanel = tempPanelObj.GetComponent<PotConfigPanel>();
+                if (tempPanel == null)
+                {
+                    MelonLogger.Error("Instantiated prefab lacks PotConfigPanel component");
+                    UnityEngine.Object.Destroy(tempPanelObj);
+                    return null;
+                }
+
+                // Bind to initialize SeedUI (mimic game behavior)
+                List<EntityConfiguration> configs = new List<EntityConfiguration>();
+                // Create a dummy PotConfiguration if needed
+                GameObject dummyPot = new GameObject("DummyPot");
+                Pot pot = dummyPot.AddComponent<Pot>();
+                ConfigurationReplicator replicator = new ConfigurationReplicator(); // Adjust if needed
+                PotConfiguration potConfig = new PotConfiguration(replicator, pot, pot);
+                configs.Add(potConfig);
+                tempPanel.Bind(configs);
+                MelonLogger.Msg("Bound temporary PotConfigPanel to initialize SeedUI");
+
+                // Get SeedUI
+                GameObject seedUITemplate = null;
+                if (tempPanel.SeedUI != null && tempPanel.SeedUI.gameObject != null)
+                {
+                    seedUITemplate = tempPanel.SeedUI.gameObject;
+                    MelonLogger.Msg("Successfully retrieved SeedUI template from PotConfigPanel prefab");
+                }
+                else
+                {
+                    MelonLogger.Error("SeedUI is null in instantiated PotConfigPanel");
+                }
+
+                // Clean up
+                UnityEngine.Object.Destroy(tempPanelObj);
+                UnityEngine.Object.Destroy(dummyPot);
+                return seedUITemplate;
             }
             catch (Exception e)
             {
-                MelonLogger.Error($"MixingStationConfigurationPatch failed: {e}");
+                MelonLogger.Error($"Failed to get ItemFieldUI template from PotConfigPanel prefab: {e}");
+                return null;
             }
         }
-    }
 
-    [HarmonyPatch(typeof(MixingStationConfiguration), "GetSaveString")]
-    public class MixingStationConfigurationGetSaveStringPatch
-    {
-        static void Postfix(MixingStationConfiguration __instance, ref string __result)
+        public static GameObject GetPrefabGameObject(string id)
         {
             try
             {
-                ExtendedMixingStationConfigurationData data = new(
-                    __instance.Destination.GetData(),
-                    __instance.StartThrehold.GetData()
-                );
-                data.Supply = ConfigurationExtensions.MixerSupply[__instance].GetData();
-                data.MixerItem = ConfigurationExtensions.MixerItem[__instance].GetData();
-                __result = data.GetJson(true);
+                GameObject prefab = GetPrefab(id);
+                if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
+                {
+                    MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}");
+                    return prefab;
+                }
+                else if (prefab != null)
+                {
+                    MelonLogger.Warning($"Found prefab with ID: {id}, but it lacks PotConfigPanel component");
+                }
+
+                MelonLogger.Warning("No PotConfigPanel prefab found in Registry with any tested ID");
+                return null;
             }
             catch (Exception e)
             {
-                MelonLogger.Error($"MixingStationConfigurationGetSaveStringPatch failed: {e}");
-            }
-        }
-    }
-
-    [HarmonyPatch(typeof(MixingStationConfiguration), "ShouldSave")]
-    public class MixingStationConfigurationShouldSavePatch
-    {
-        static void Postfix(MixingStationConfiguration __instance, ref bool __result)
-        {
-            try
-            {
-                ObjectField supply = ConfigurationExtensions.MixerSupply[__instance];
-                ItemField mixerItem = ConfigurationExtensions.MixerItem[__instance];
-                __result |= supply?.SelectedObject != null || mixerItem?.SelectedItem != null;
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"MixingStationConfigurationShouldSavePatch failed: {e}");
-            }
-        }
-    }
-
-    [Serializable]
-    public class ExtendedMixingStationConfigurationData : MixingStationConfigurationData
-    {
-        public ObjectFieldData Supply;
-        public ItemFieldData MixerItem;
-
-        public ExtendedMixingStationConfigurationData(ObjectFieldData destination, NumberFieldData threshold)
-            : base(destination, threshold)
-        {
-            Supply = null;
-            MixerItem = null;
-        }
-    }
-
-    public class MixingStationPreset : Preset
-    {
-        private static MixingStationPreset DefaultPresetInstance;
-
-        public ItemList MixerItems { get; set; }
-
-        public override Preset GetCopy()
-        {
-            var preset = new MixingStationPreset();
-            CopyTo(preset);
-            return preset;
-        }
-
-        public override void CopyTo(Preset other)
-        {
-            base.CopyTo(other);
-            if (other is MixingStationPreset targetPreset)
-            {
-                MixerItems.CopyTo(targetPreset.MixerItems);
+                MelonLogger.Error($"Failed to find PotConfigPanel prefab: {e}");
+                return null;
             }
         }
 
-        public override void InitializeOptions()
+        public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
         {
-            MixerItems = new ItemList("Mixer Item", NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(), true, true);
-            MixerItems.All = true;
-        }
+            MelonLogger.Msg("=== ItemFieldUI Details ===");
 
-        public static MixingStationPreset GetDefaultPreset()
-        {
-            if (DefaultPresetInstance == null)
+            // Log basic info
+            MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}");
+            MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}");
+            MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}");
+
+            // Log ItemFieldUI properties
+            LogComponentDetails(itemfieldUI, 0);
+
+            // Log hierarchy and components
+            MelonLogger.Msg("--- Hierarchy and Components ---");
+            if (itemfieldUI.gameObject != null)
             {
-                DefaultPresetInstance = new MixingStationPreset
-                {
-                    PresetName = "Default",
-                    ObjectType = (ManageableObjectType)100,
-                    PresetColor = new Color32(180, 180, 180, 255)
-                };
-                DefaultPresetInstance.InitializeOptions();
-            }
-            return DefaultPresetInstance;
-        }
-
-        public static MixingStationPreset GetNewBlankPreset()
-        {
-            MixingStationPreset preset = GetDefaultPreset().GetCopy() as MixingStationPreset;
-            preset.PresetName = "New Preset";
-            return preset;
-        }
-    }
-
-    public class MixingStationPresetEditScreen : PresetEditScreen
-    {
-        public GenericOptionUI MixerItemUI { get; set; }
-        private MixingStationPreset castedPreset { get; set; }
-
-        protected override void Awake()
-        {
-            base.Awake();
-            if (MixerItemUI?.Button != null)
-            {
-                MixerItemUI.Button.onClick.AddListener(new UnityAction(MixerItemUIClicked));
-            }
-        }
-
-        protected virtual void Update()
-        {
-            if (isOpen)
-            {
-                UpdateUI();
-            }
-        }
-
-        public override void Open(Preset preset)
-        {
-            base.Open(preset);
-            castedPreset = (MixingStationPreset)EditedPreset;
-            UpdateUI();
-        }
-
-        private void UpdateUI()
-        {
-            if (MixerItemUI?.ValueLabel != null && castedPreset?.MixerItems != null)
-            {
-                MixerItemUI.ValueLabel.text = castedPreset.MixerItems.GetDisplayString();
-            }
-        }
-
-        private void MixerItemUIClicked()
-        {
-            if (Singleton<ItemSetterScreen>.Instance != null)
-            {
-                Singleton<ItemSetterScreen>.Instance.Open(castedPreset.MixerItems);
+                LogGameObjectDetails(itemfieldUI.gameObject, 0);
             }
             else
             {
-                MelonLogger.Error("ItemSetterScreen instance not found!");
+                MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
             }
         }
-    }
 
-    [HarmonyPatch(typeof(Preset), "GetDefault")]
-    public class PresetPatch
-    {
-        static bool Prefix(ManageableObjectType type, ref Preset __result)
+        static void LogGameObjectDetails(GameObject go, int indentLevel)
         {
-            if (type == (ManageableObjectType)100)
+            if (go == null)
             {
-                __result = MixingStationPreset.GetDefaultPreset();
-                return false;
-            }
-            return true;
-        }
-    }
-
-    [HarmonyPatch(typeof(PotConfigPanel), "Bind")]
-    public class PotConfigPanelBindPatch
-    {
-        static void Postfix(PotConfigPanel __instance, List<EntityConfiguration> configs)
-        {
-            var destinationUI = __instance.DestinationUI;
-            GameObject supplyUIObj = new("SupplyUI");
-            ObjectFieldUI supplyUI = UIExtensions.CloneComponent(destinationUI, supplyUIObj);
-            supplyUI.name = "SupplyUI";
-            UIExtensions.SetField(__instance, "SupplyUI", supplyUI);
-            if (supplyUI == null)
+                MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null");
                 return;
+            }
 
-            List<ObjectField> supplyList = new();
-            foreach (EntityConfiguration config in configs)
+            MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}");
+
+            // Log components on this GameObject
+            foreach (var component in go.GetComponents<Component>())
             {
-                if (config is not PotConfiguration potConfig)
+                LogComponentDetails(component, indentLevel + 1);
+            }
+
+            // Recursively log children
+            foreach (Transform child in go.transform)
+            {
+                LogGameObjectDetails(child.gameObject, indentLevel + 1);
+            }
+        }
+
+        static void LogComponentDetails(Component component, int indentLevel)
+        {
+            if (component == null)
+            {
+                MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null");
+                return;
+            }
+
+            MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}");
+
+            // Use reflection to log all public fields
+            var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var field in fields)
+            {
+                try
                 {
-                    continue;
+                    var value = field.GetValue(component);
+                    string valueStr = ValueToString(value);
+                    MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}");
                 }
-                supplyList.Add(ConfigurationExtensions.PotSupply[potConfig]);
-            }
-
-            supplyUI.Bind(supplyList);
-        }
-    }
-
-    [HarmonyPatch(typeof(PotUIElement), "Initialize")]
-    public class PotUIElementInitializePatch
-    {
-        static void Postfix(PotUIElement __instance)
-        {
-            // Add SupplyIcon by cloning SeedIcon
-            Image seedIcon = __instance.SeedIcon;
-            if (seedIcon != null)
-            {
-                GameObject supply = new("SupplyIcon");
-                Image supplyIcon = supply.AddComponent<Image>();
-                UIExtensions.SetField(__instance, "SupplyIcon", supplyIcon);
-            }
-        }
-    }
-
-    [HarmonyPatch(typeof(PotUIElement), "RefreshUI")]
-    public class PotUIElementRefreshUIPatch
-    {
-        static void Postfix(PotUIElement __instance)
-        {
-            var supplyIcon = UIExtensions.GetField<Image>(__instance, "SupplyIcon");
-            if (supplyIcon == null)
-                return;
-
-            PotConfiguration potConfig = ConfigurationExtensions.PotConfig[__instance.AssignedPot];
-            ObjectField supply = ConfigurationExtensions.PotSupply[potConfig];
-            if (supply?.SelectedObject != null)
-            {
-                supplyIcon.sprite = supply.SelectedObject.ItemInstance.Icon;
-                supplyIcon.gameObject.SetActive(true);
-            }
-            else
-            {
-                supplyIcon.gameObject.SetActive(false);
-            }
-        }
-    }
-
-    [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
-    public class MixingStationConfigPanelBindPatch
-    {
-        static void Postfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
-        {
-            var destinationUI = __instance.DestinationUI;
-            GameObject supplyUIObj = new("SupplyUI");
-            ObjectFieldUI supplyUI = UIExtensions.CloneComponent(destinationUI, supplyUIObj);
-            supplyUI.name = "SupplyUI";
-            UIExtensions.SetField(__instance, "SupplyUI", supplyUI);
-
-            PotConfigPanel potConfigPanel = UnityEngine.Object.FindObjectOfType<PotConfigPanel>();
-            if (potConfigPanel == null || potConfigPanel.SeedUI == null)
-            {
-                MelonLogger.Error("Could not find PotConfigPanel with SeedUI");
-                return;
-            }
-
-            GameObject mixerItemUIObj = new("MixerItemUI");
-            ItemFieldUI mixerItemUI = UIExtensions.CloneComponent(potConfigPanel.SeedUI, mixerItemUIObj);
-            mixerItemUI.name = "MixerItemUI";
-            UIExtensions.SetField(__instance, "MixerItemUI", mixerItemUI);
-            if (supplyUI == null || mixerItemUI == null)
-                return;
-
-            List<ObjectField> supplyList = new();
-            List<ItemField> mixerItemList = new();
-            foreach (EntityConfiguration config in configs)
-            {
-                if (config is not MixingStationConfiguration mixConfig)
+                catch (Exception e)
                 {
-                    continue;
+                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
                 }
-                supplyList.Add(ConfigurationExtensions.MixerSupply[mixConfig]);
-                mixerItemList.Add(ConfigurationExtensions.MixerItem[mixConfig]);
             }
 
-            supplyUI.Bind(supplyList);
-            mixerItemUI.Bind(mixerItemList);
+            // Use reflection to log all public properties
+            var properties = component.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var property in properties)
+            {
+                // Skip properties that can't be read
+                if (!property.CanRead) continue;
+
+                try
+                {
+                    var value = property.GetValue(component);
+                    string valueStr = ValueToString(value);
+                    MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}");
+                }
+                catch (Exception e)
+                {
+                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
+                }
+            }
         }
-    }
 
-    [HarmonyPatch(typeof(MixingStationUIElement), "Initialize")]
-    public class MixingStationUIElementInitializePatch
-    {
-        static void Postfix(MixingStationUIElement __instance)
+        static string ValueToString(object value)
         {
-            // Add SupplyIcon and MixerItemIcon
-            GameObject supplyIconObj = new("SupplyIcon");
-            Image supplyIcon = supplyIconObj.AddComponent<Image>();
-            UIExtensions.SetField(__instance, "SupplyIcon", supplyIcon);
-
-            GameObject mixerItemIconObj = new("MixerItemIcon");
-            Image mixerItemIcon = mixerItemIconObj.AddComponent<Image>();
-            UIExtensions.SetField(__instance, "MixerItemIcon", mixerItemIcon);
-        }
-    }
-
-    [HarmonyPatch(typeof(MixingStationUIElement), "RefreshUI")]
-    public class MixingStationUIElementRefreshUIPatch
-    {
-        static void Postfix(MixingStationUIElement __instance)
-        {
-            Image supplyIcon = UIExtensions.GetField<Image>(__instance, "SupplyIcon");
-            Image mixerItemIcon = UIExtensions.GetField<Image>(__instance, "MixerItemIcon");
-            if (supplyIcon == null || mixerItemIcon == null)
-                return;
-
-            MixingStationConfiguration mixConfig = ConfigurationExtensions.MixerConfig[__instance.AssignedStation];
-            ObjectField supply = ConfigurationExtensions.MixerSupply[mixConfig];
-            if (supply?.SelectedObject != null)
+            if (value == null) return "null";
+            if (value is GameObject go) return $"GameObject({go.name})";
+            if (value is Component comp) return $"{comp.GetType().Name} on {comp.gameObject.name}";
+            if (value is IEnumerable enumerable && !(value is string))
             {
-                supplyIcon.sprite = supply.SelectedObject.ItemInstance.Icon;
-                supplyIcon.gameObject.SetActive(true);
+                var items = new List<string>();
+                foreach (var item in enumerable)
+                {
+                    items.Add(ValueToString(item));
+                }
+                return $"[{string.Join(", ", items)}]";
             }
-            else
-            {
-                supplyIcon.gameObject.SetActive(false);
-            }
-
-            var mixerItem = ConfigurationExtensions.MixerItem[mixConfig];
-            if (mixerItem?.SelectedItem != null)
-            {
-                mixerItemIcon.sprite = mixerItem.SelectedItem.Icon;
-                mixerItemIcon.gameObject.SetActive(true);
-            }
-            else
-            {
-                mixerItemIcon.gameObject.SetActive(false);
-            }
+            return value.ToString();
         }
     }
 }
