@@ -12,8 +12,8 @@ using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.UI;
 using TMPro;
+using ScheduleOne.EntityFramework;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -32,17 +32,16 @@ namespace NoLazyWorkers
         ObjectField Supply = new(__instance)
         {
           TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
-          objectFilter = __instance.DestinationFilter,
           DrawTransitLine = true
         };
         Supply.onObjectChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
-          ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, station);
         });
+        Supply.onObjectChanged.AddListener(new UnityAction<BuildableItem>(item => __instance.SourceChanged(item)));
+
         ConfigurationExtensions.MixerSupply[__instance] = Supply;
         ConfigurationExtensions.MixerConfig[station] = __instance;
-
         ItemField mixerItem = new(__instance)
         {
           CanSelectNone = true,
@@ -310,7 +309,6 @@ namespace NoLazyWorkers
                 mixerItemList.Add(mixerItem);
                 mixerItemUI.Bind(mixerItemList);
               }
-            break;
           }
         }
       }

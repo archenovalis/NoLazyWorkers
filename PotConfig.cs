@@ -7,6 +7,8 @@ using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using UnityEngine.Events;
+using ScheduleOne.EntityFramework;
 
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
@@ -26,14 +28,15 @@ namespace NoLazyWorkers
         ObjectField Supply = new(__instance)
         {
           TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
-          objectFilter = __instance.DestinationFilter,
           DrawTransitLine = true
         };
         Supply.onObjectChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
-          ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, pot);
+          //ConfigurationExtensions.SourceChanged(__instance, SourceRoute, Supply, pot);
         });
+        Supply.onObjectChanged.AddListener(new UnityAction<BuildableItem>(item => __instance.SourceChanged(item)));
+
         ConfigurationExtensions.PotSupply[__instance] = Supply;
         ConfigurationExtensions.PotConfig[pot] = __instance;
       }
@@ -145,7 +148,6 @@ namespace NoLazyWorkers
             {
               supplyList.Add(supply);
               MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply for PotConfiguration, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.ToString() : "null")}");
-              break;
             }
             else
             {

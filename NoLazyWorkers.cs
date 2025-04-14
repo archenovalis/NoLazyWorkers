@@ -113,7 +113,56 @@ namespace NoLazyWorkers
                 MelonLogger.Error($"InvokeChanged failed: {e}");
             }
         }
+        public static void SourceChanged(this PotConfiguration potConfig, BuildableItem item)
+        {
+            TransitRoute SourceRoute = PotSourceRoute[potConfig];
+            if (SourceRoute != null)
+            {
+                SourceRoute.Destroy();
+                PotSourceRoute[potConfig] = null;
+            }
 
+            ObjectField Supply = PotSupply[potConfig];
+            if (Supply.SelectedObject != null)
+            {
+                SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, potConfig.Pot);
+                if (potConfig.Pot.Configuration.IsSelected)
+                {
+                    PotSourceRoute[potConfig] = SourceRoute;
+                    SourceRoute.SetVisualsActive(true);
+                    return;
+                }
+            }
+            else
+            {
+                PotSourceRoute[potConfig] = null;
+            }
+        }
+        public static void SourceChanged(this MixingStationConfiguration mixerConfig, BuildableItem item)//this MixingStationConfiguration mixerConfig, TransitRoute SourceRoute, ObjectField Supply)
+        {
+            TransitRoute SourceRoute = MixerSourceRoute[mixerConfig];
+            if (SourceRoute != null)
+            {
+                SourceRoute.Destroy();
+                MixerSourceRoute[mixerConfig] = null;
+            }
+
+            ObjectField Supply = MixerSupply[mixerConfig];
+            if (Supply.SelectedObject != null)
+            {
+                SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, mixerConfig.station);
+                if (mixerConfig.station.Configuration.IsSelected)
+                {
+                    MixerSourceRoute[mixerConfig] = SourceRoute;
+                    SourceRoute.SetVisualsActive(true);
+                    return;
+                }
+            }
+            else
+            {
+                MixerSourceRoute[mixerConfig] = null;
+            }
+        }
         public static void SourceChanged(this PotConfiguration potConfig, TransitRoute SourceRoute, ObjectField Supply, Pot pot)
         {
             try
@@ -183,7 +232,6 @@ namespace NoLazyWorkers
                 MelonLogger.Error($"SourceChanged(MixingStation): Failed for MixerConfig: {mixerConfig}, error: {e}");
             }
         }
-
         public static void RestoreConfigurations()
         {
             // Restore Pot configurations
