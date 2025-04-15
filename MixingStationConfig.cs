@@ -1,3 +1,4 @@
+using BepInEx.AssemblyPublicizer;
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.DevUtilities;
@@ -13,7 +14,6 @@ using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.Events;
 using TMPro;
-using ScheduleOne.EntityFramework;
 using UnityEngine.UI;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
@@ -29,6 +29,7 @@ namespace NoLazyWorkers
     {
       try
       {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs) MelonLogger.Msg($"MixingStationConfigurationPatch: Initializing for station: {station?.name ?? "null"}");
         TransitRoute SourceRoute = ConfigurationExtensions.MixerSourceRoute.TryGetValue(__instance, out var route) ? route : null;
         ObjectField Supply = new(__instance)
         {
@@ -40,10 +41,26 @@ namespace NoLazyWorkers
         {
           ConfigurationExtensions.InvokeChanged(__instance);
         });
-        Supply.onObjectChanged.AddListener(new UnityAction<BuildableItem>(item => __instance.SourceChanged(item)));
-
-        ConfigurationExtensions.MixerSupply[__instance] = Supply;
-        ConfigurationExtensions.MixerConfig[station] = __instance;
+        Supply.onObjectChanged.AddListener(item =>
+        {
+          try
+          {
+            ConfigurationExtensions.SourceChanged(__instance, item); // Calls SourceChanged(BuildableItem)
+          }
+          catch (Exception e)
+          {
+            MelonLogger.Error($"MixingStationConfigurationPatch: onObjectChanged failed for station: {station?.name ?? "null"}, error: {e}");
+          }
+        });
+        // Ensure dictionary entries are created
+        if (!ConfigurationExtensions.MixerSupply.ContainsKey(__instance))
+        {
+          ConfigurationExtensions.MixerSupply[__instance] = Supply;
+        }
+        if (!ConfigurationExtensions.MixerConfig.ContainsKey(station))
+        {
+          ConfigurationExtensions.MixerConfig[station] = __instance;
+        }
         ItemField mixerItem = new(__instance)
         {
           CanSelectNone = true,
@@ -53,11 +70,15 @@ namespace NoLazyWorkers
         {
           ConfigurationExtensions.InvokeChanged(__instance);
         });
-        ConfigurationExtensions.MixerItem[__instance] = mixerItem;
+        if (!ConfigurationExtensions.MixerItem.ContainsKey(__instance))
+        {
+          ConfigurationExtensions.MixerItem[__instance] = mixerItem;
+        }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs) MelonLogger.Msg($"MixingStationConfigurationPatch: Registered supply, config, and mixer item for station: {station?.name ?? "null"}");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"MixingStationConfigurationPatch failed: {e}");
+        MelonLogger.Error($"MixingStationConfigurationPatch: Failed for station: {station?.name ?? "null"}, error: {e}");
       }
     }
   }
@@ -125,19 +146,17 @@ namespace NoLazyWorkers
         }
         if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: DestinationUI found"); }
 
-        ItemFieldUI mixerItemUI = null;
-        GameObject mixerItemUIObj = null;
-
         // Try to get ItemFieldUI template from PotConfigPanel prefab
         GameObject template = NoLazyUtilities.GetItemFieldUITemplateFromPotConfigPanel();
-        mixerItemUIObj = UnityEngine.Object.Instantiate(template, __instance.transform, false);
+        GameObject mixerItemUIObj = UnityEngine.Object.Instantiate(template, __instance.transform, false);
         mixerItemUIObj.name = "MixerItemUI";
-        mixerItemUI = mixerItemUIObj.GetComponent<ItemFieldUI>();
+        ItemFieldUI mixerItemUI = mixerItemUIObj.GetComponent<ItemFieldUI>();
         if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated MixerItemUI from PotConfigPanel prefab template"); }
 
         // Configure MixerItemUI
         mixerItemUIObj.AddComponent<CanvasRenderer>();
-        TextMeshProUGUI titleTextComponent = mixerItemUIObj.GetComponentsInChildren<TextMeshProUGUI>().FirstOrDefault(t => t.gameObject.name == "Title");
+        TextMeshProUGUI titleTextComponent = mixerItemUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+            .FirstOrDefault(t => t.gameObject.name == "Title");
         titleTextComponent.text = "Mixer";
         if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set MixerItemUI Title to 'Mixer'"); }
 
@@ -152,32 +171,36 @@ namespace NoLazyWorkers
           return;
         }
         if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Found Selection Button"); }
-
+        /* 
         // Clear existing clicked listeners and set new one
         mixerButton.onClick.RemoveAllListeners();
         mixerButton.onClick.AddListener(() =>
         {
           try
           {
-            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixerItemUI Selection Button clicked"); }
-            foreach (EntityConfiguration config in configs)
+            if (DebugConfig.EnableDebugLogs)
+              MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixerItemUI Selection Button clicked");
+
+            MixingStationConfiguration mixConfig = configs.OfType<MixingStationConfiguration>().FirstOrDefault();
+            if (mixConfig != null && ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out var mixerItem))
             {
-              if (config is MixingStationConfiguration mixConfig &&
-                      ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out var mixerItem))
-              {
-                Singleton<ItemSetterScreen>.Instance.Open(new ItemList("Mixer", NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(), true, true));
-                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Opened ItemSetterScreen for MixerItem"); }
-                return;
-              }
+              Singleton<ItemSetterScreen>.Instance.Open(new ItemList(
+                  "Mixer",
+                  NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(),
+                  true,
+                  true));
             }
-            MelonLogger.Warning("MixingStationConfigPanelBindPatch: No MixerItem found for click");
+            else
+            {
+              MelonLogger.Warning("MixingStationConfigPanelBindPatch: No valid MixingStationConfiguration or MixerItem found");
+            }
           }
           catch (Exception e)
           {
             MelonLogger.Error($"MixingStationConfigPanelBindPatch: Button click failed, error: {e}");
           }
         });
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set Selection Button onClick listener"); }
+        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set Selection Button onClick listener"); }  */
 
         // Clone SupplyUI from DestinationUI
         GameObject supplyUIObj = UnityEngine.Object.Instantiate(destinationUI.gameObject, __instance.transform, false);
@@ -197,13 +220,13 @@ namespace NoLazyWorkers
         // Position UI elements
         RectTransform destRect = destinationUI.GetComponent<RectTransform>();
         destRect.anchoredPosition = new Vector2(destRect.anchoredPosition.x, -245.76f);
-
         RectTransform supplyRect = supplyUIObj.GetComponent<RectTransform>();
         supplyRect.anchoredPosition = new Vector2(supplyRect.anchoredPosition.x, -185.76f);
 
         // Bind data
         List<ObjectField> supplyList = new();
         List<ItemField> mixerItemList = new();
+
         foreach (EntityConfiguration config in configs)
         {
           if (config is MixingStationConfiguration mixConfig)
@@ -230,7 +253,7 @@ namespace NoLazyWorkers
                   .FirstOrDefault(t => t.gameObject.name.Contains("Value"));
               if (valueLabel != null)
               {
-                valueLabel.text = mixerItem.SelectedItem.Name ?? "None";
+                valueLabel.text = mixerItem.SelectedItem?.Name ?? "None";
                 if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Set ValueLabel to: {valueLabel.text}"); }
               }
               else

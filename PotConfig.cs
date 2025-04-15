@@ -1,3 +1,4 @@
+using BepInEx.AssemblyPublicizer;
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.Management;
@@ -5,10 +6,7 @@ using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence.Datas;
 using ScheduleOne.UI.Management;
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
-using UnityEngine.Events;
-using ScheduleOne.EntityFramework;
 
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
@@ -24,24 +22,39 @@ namespace NoLazyWorkers
     {
       try
       {
-        TransitRoute SourceRoute = ConfigurationExtensions.PotSourceRoute.TryGetValue(__instance, out var route) ? route : null;
-        ObjectField Supply = new(__instance)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugPotLogs) MelonLogger.Msg($"PotConfigurationPatch: Initializing for pot: {pot?.name ?? "null"}");
+        ObjectField supply = new(__instance)
         {
           TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
           DrawTransitLine = true
         };
-        Supply.onObjectChanged.AddListener(delegate
+        supply.onObjectChanged.RemoveAllListeners();
+        supply.onObjectChanged.AddListener(item =>
         {
-          ConfigurationExtensions.InvokeChanged(__instance);
+          try
+          {
+            ConfigurationExtensions.InvokeChanged(__instance);
+            ConfigurationExtensions.SourceChanged(__instance, item); // Calls SourceChanged(BuildableItem)
+          }
+          catch (Exception e)
+          {
+            MelonLogger.Error($"PotConfigurationPatch: onObjectChanged failed for pot: {pot?.name ?? "null"}, error: {e}");
+          }
         });
-        Supply.onObjectChanged.AddListener(new UnityAction<BuildableItem>(item => __instance.SourceChanged(item)));
-
-        ConfigurationExtensions.PotSupply[__instance] = Supply;
-        ConfigurationExtensions.PotConfig[pot] = __instance;
+        // Ensure dictionary entries are created
+        if (!ConfigurationExtensions.PotSupply.ContainsKey(__instance))
+        {
+          ConfigurationExtensions.PotSupply[__instance] = supply;
+        }
+        if (!ConfigurationExtensions.PotConfig.ContainsKey(pot))
+        {
+          ConfigurationExtensions.PotConfig[pot] = __instance;
+        }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugPotLogs) MelonLogger.Msg($"PotConfigurationPatch: Registered supply and config for pot: {pot?.name ?? "null"}");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"PotConfigurationPatch failed: {e}");
+        MelonLogger.Error($"PotConfigurationPatch: Failed for pot: {pot?.name ?? "null"}, error: {e}");
       }
     }
   }
@@ -163,7 +176,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"PotConfigPanelBindPatch: Postfix failed, error: {e}");
+        MelonLogger.Error($"PotConfigurationPatch: Failed, error: {e}");
       }
     }
   }
