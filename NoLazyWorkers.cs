@@ -27,11 +27,11 @@ namespace NoLazyWorkers
 {
     public static class DebugConfig
     {
-        public static bool EnableDebugLogs = true; // true enables Msg and Warning logs
-        public static bool EnableDebugCoreLogs = true; // true enables Core-only Msg and Warning Logs
-        public static bool EnableDebugPotLogs = true; // true enables Pot-only Msg and Warning Logs
-        public static bool EnableDebugMixingLogs = true; // true enables Mixing-only Msg and Warning Logs
-        public static bool EnableDebugBehaviorLogs = true; // true enables Behavior-only Msg and Warning Logs
+        public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
+        public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
+        public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
+        public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
+        public static bool EnableDebugBehaviorLogs = false; // true enables Behavior-only Msg and Warning Logs
     }
 
     public static class BuildInfo
@@ -425,11 +425,11 @@ namespace NoLazyWorkers
             }
 
             int inventoryCount = npc.Inventory?._GetItemAmount(item.ID) ?? 0;
-            int supplyCount = GetAmountInSupplies(npc, item.GetDefaultInstance());
+            int supplyCount = GetAmountInSupply(npc, item.GetDefaultInstance());
             return inventoryCount + supplyCount;
         }
 
-        public static int GetAmountInSupplies(NPC npc, ItemInstance item)
+        public static int GetAmountInSupply(NPC npc, ItemInstance item)
         {
             if (npc == null || item == null || string.IsNullOrEmpty(item.ID))
             {

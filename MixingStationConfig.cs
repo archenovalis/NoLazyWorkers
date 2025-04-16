@@ -29,8 +29,9 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs) MelonLogger.Msg($"MixingStationConfigurationPatch: Initializing for station: {station?.name ?? "null"}");
-        TransitRoute SourceRoute = ConfigurationExtensions.MixerSourceRoute.TryGetValue(__instance, out var route) ? route : null;
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          MelonLogger.Msg($"MixingStationConfigurationPatch: Initializing for station: {station?.ObjectId.ToString() ?? "null"}, configHash={__instance.GetHashCode()}");
+
         ObjectField Supply = new(__instance)
         {
           TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
@@ -40,6 +41,8 @@ namespace NoLazyWorkers
         Supply.onObjectChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Msg($"MixingStationConfigurationPatch: Supply changed for station {station?.ObjectId.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.ObjectId.ToString() ?? "null"}");
         });
         Supply.onObjectChanged.AddListener(item =>
         {
@@ -49,18 +52,23 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            MelonLogger.Error($"MixingStationConfigurationPatch: onObjectChanged failed for station: {station?.name ?? "null"}, error: {e}");
+            MelonLogger.Error($"MixingStationConfigurationPatch: onObjectChanged failed for station: {station?.ObjectId.ToString() ?? "null"}, error: {e}");
           }
         });
-        // Ensure dictionary entries are created
-        if (!ConfigurationExtensions.MixerSupply.ContainsKey(__instance))
+
+        // Check for existing key to prevent overwrites
+        if (ConfigurationExtensions.MixerSupply.ContainsKey(__instance))
         {
-          ConfigurationExtensions.MixerSupply[__instance] = Supply;
+          MelonLogger.Warning($"MixingStationConfigurationPatch: MixerSupply already contains key for configHash={__instance.GetHashCode()}, station={station?.ObjectId.ToString() ?? "null"}. Overwriting.");
         }
-        if (!ConfigurationExtensions.MixerConfig.ContainsKey(station))
+        ConfigurationExtensions.MixerSupply[__instance] = Supply;
+
+        if (ConfigurationExtensions.MixerConfig.ContainsKey(station))
         {
-          ConfigurationExtensions.MixerConfig[station] = __instance;
+          MelonLogger.Warning($"MixingStationConfigurationPatch: MixerConfig already contains key for station={station?.ObjectId.ToString() ?? "null"}. Overwriting.");
         }
+        ConfigurationExtensions.MixerConfig[station] = __instance;
+
         ItemField mixerItem = new(__instance)
         {
           CanSelectNone = true,
@@ -69,16 +77,22 @@ namespace NoLazyWorkers
         mixerItem.onItemChanged.AddListener(delegate
         {
           ConfigurationExtensions.InvokeChanged(__instance);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Msg($"MixingStationConfigurationPatch: MixerItem changed for station {station?.ObjectId.ToString() ?? "null"}, newItem={mixerItem.SelectedItem?.Name ?? "null"}");
         });
-        if (!ConfigurationExtensions.MixerItem.ContainsKey(__instance))
+
+        if (ConfigurationExtensions.MixerItem.ContainsKey(__instance))
         {
-          ConfigurationExtensions.MixerItem[__instance] = mixerItem;
+          MelonLogger.Warning($"MixingStationConfigurationPatch: MixerItem already contains key for configHash={__instance.GetHashCode()}, station={station?.ObjectId.ToString() ?? "null"}. Overwriting.");
         }
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs) MelonLogger.Msg($"MixingStationConfigurationPatch: Registered supply, config, and mixer item for station: {station?.name ?? "null"}");
+        ConfigurationExtensions.MixerItem[__instance] = mixerItem;
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          MelonLogger.Msg($"MixingStationConfigurationPatch: Registered supply, config, and mixer item for station: {station?.ObjectId.ToString() ?? "null"}, supplyHash={Supply.GetHashCode()}, mixerItemHash={mixerItem.GetHashCode()}");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"MixingStationConfigurationPatch: Failed for station: {station?.name ?? "null"}, error: {e}");
+        MelonLogger.Error($"MixingStationConfigurationPatch: Failed for station: {station?.ObjectId.ToString() ?? "null"}, error: {e}");
       }
     }
   }
@@ -97,10 +111,12 @@ namespace NoLazyWorkers
         data.Supply = ConfigurationExtensions.MixerSupply[__instance].GetData();
         data.MixerItem = ConfigurationExtensions.MixerItem[__instance].GetData();
         __result = data.GetJson(true);
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Saved for configHash={__instance.GetHashCode()}, supply={data.Supply?.ToString() ?? "null"}, mixerItem={data.MixerItem?.ToString() ?? "null"}");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"MixingStationConfigurationGetSaveStringPatch failed: {e}");
+        MelonLogger.Error($"MixingStationConfigurationGetSaveStringPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}");
       }
     }
   }
@@ -123,7 +139,6 @@ namespace NoLazyWorkers
     }
   }
 
-
   [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
   public class MixingStationConfigPanelBindPatch
   {
@@ -131,7 +146,9 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Binding configs, count: {configs?.Count ?? 0}"); }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Binding configs, count: {configs?.Count ?? 0}");
+
         if (__instance == null)
         {
           MelonLogger.Error("MixingStationConfigPanelBindPatch: __instance is null");
@@ -144,25 +161,27 @@ namespace NoLazyWorkers
           MelonLogger.Error("MixingStationConfigPanelBindPatch: DestinationUI is null");
           return;
         }
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: DestinationUI found"); }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: DestinationUI found");
 
-        // Try to get ItemFieldUI template from PotConfigPanel prefab
+        // Instantiate MixerItemUI
         GameObject template = NoLazyUtilities.GetItemFieldUITemplateFromPotConfigPanel();
         GameObject mixerItemUIObj = UnityEngine.Object.Instantiate(template, __instance.transform, false);
         mixerItemUIObj.name = "MixerItemUI";
         ItemFieldUI mixerItemUI = mixerItemUIObj.GetComponent<ItemFieldUI>();
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated MixerItemUI from PotConfigPanel prefab template"); }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated MixerItemUI from PotConfigPanel prefab template");
 
-        // Configure MixerItemUI
         mixerItemUIObj.AddComponent<CanvasRenderer>();
         TextMeshProUGUI titleTextComponent = mixerItemUIObj.GetComponentsInChildren<TextMeshProUGUI>()
             .FirstOrDefault(t => t.gameObject.name == "Title");
         titleTextComponent.text = "Mixer";
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set MixerItemUI Title to 'Mixer'"); }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set MixerItemUI Title to 'Mixer'");
 
         RectTransform mixerRect = mixerItemUIObj.GetComponent<RectTransform>();
         mixerRect.anchoredPosition = new Vector2(mixerRect.anchoredPosition.x, -135.76f);
-        // Find Selection Button
+
         Button mixerButton = mixerItemUIObj.GetComponentsInChildren<Button>()
             .FirstOrDefault(b => b.name == "Selection");
         if (mixerButton == null)
@@ -170,43 +189,15 @@ namespace NoLazyWorkers
           MelonLogger.Error("MixingStationConfigPanelBindPatch: Selection Button not found in MixerItemUI");
           return;
         }
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Found Selection Button"); }
-        /* 
-        // Clear existing clicked listeners and set new one
-        mixerButton.onClick.RemoveAllListeners();
-        mixerButton.onClick.AddListener(() =>
-        {
-          try
-          {
-            if (DebugConfig.EnableDebugLogs)
-              MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixerItemUI Selection Button clicked");
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Found Selection Button");
 
-            MixingStationConfiguration mixConfig = configs.OfType<MixingStationConfiguration>().FirstOrDefault();
-            if (mixConfig != null && ConfigurationExtensions.MixerItem.TryGetValue(mixConfig, out var mixerItem))
-            {
-              Singleton<ItemSetterScreen>.Instance.Open(new ItemList(
-                  "Mixer",
-                  NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(),
-                  true,
-                  true));
-            }
-            else
-            {
-              MelonLogger.Warning("MixingStationConfigPanelBindPatch: No valid MixingStationConfiguration or MixerItem found");
-            }
-          }
-          catch (Exception e)
-          {
-            MelonLogger.Error($"MixingStationConfigPanelBindPatch: Button click failed, error: {e}");
-          }
-        });
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Set Selection Button onClick listener"); }  */
-
-        // Clone SupplyUI from DestinationUI
+        // Instantiate SupplyUI
         GameObject supplyUIObj = UnityEngine.Object.Instantiate(destinationUI.gameObject, __instance.transform, false);
         supplyUIObj.name = "SupplyUI";
         ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
-        if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated SupplyUI successfully"); }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Instantiated SupplyUI successfully");
 
         supplyUIObj.AddComponent<CanvasRenderer>();
         foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
@@ -235,7 +226,15 @@ namespace NoLazyWorkers
             {
               supplyList.Add(supply);
               supplyUI.Bind(supplyList);
-              if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.name : "null")}"); }
+              // Add listener to clear highlights after selection
+              supply.onObjectChanged.AddListener(item =>
+              {
+                ClearShelfHighlights();
+                if (DebugConfig.EnableDebugLogs)
+                  MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Supply selected, item={item?.ObjectId.ToString() ?? "null"}, cleared highlights");
+              });
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Added supply, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.ObjectId : "null")}");
             }
             else
             {
@@ -246,7 +245,8 @@ namespace NoLazyWorkers
             {
               mixerItemList.Add(mixerItem);
               mixerItemUI.Bind(mixerItemList);
-              if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Bound MixerItemUI, SelectedItem: {mixerItem.SelectedItem?.Name ?? "null"}"); }
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Bound MixerItemUI, SelectedItem: {mixerItem.SelectedItem?.Name ?? "null"}");
 
               // Update ValueLabel
               var valueLabel = mixerItemUI.GetComponentsInChildren<TextMeshProUGUI>()
@@ -254,7 +254,8 @@ namespace NoLazyWorkers
               if (valueLabel != null)
               {
                 valueLabel.text = mixerItem.SelectedItem?.Name ?? "None";
-                if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Set ValueLabel to: {valueLabel.text}"); }
+                if (DebugConfig.EnableDebugLogs)
+                  MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Set ValueLabel to: {valueLabel.text}");
               }
               else
               {
@@ -271,6 +272,52 @@ namespace NoLazyWorkers
       catch (Exception e)
       {
         MelonLogger.Error($"MixingStationConfigPanelBindPatch: Postfix failed, error: {e}");
+      }
+    }
+
+    private static void ClearShelfHighlights() //todo: this did not clear the outline from the bugged shelf
+    {
+      try
+      {
+        foreach (var shelf in GameObject.FindObjectsOfType<PlaceableStorageEntity>())
+        {
+          shelf.HideOutline();
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"MixingStationConfigPanelBindPatch: Failed to clear shelf highlights, error: {e}");
+      }
+    }
+  }
+
+  [HarmonyPatch(typeof(MixingStationConfiguration), "Destroy")]
+  public class MixingStationConfigurationDestroyPatch
+  {
+    static void Postfix(MixingStationConfiguration __instance)
+    {
+      try
+      {
+        if (ConfigurationExtensions.MixerSupply.Remove(__instance))
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Msg($"MixingStationConfigurationDestroyPatch: Removed MixerSupply for configHash={__instance.GetHashCode()}");
+        }
+        if (ConfigurationExtensions.MixerItem.Remove(__instance))
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Msg($"MixingStationConfigurationDestroyPatch: Removed MixerItem for configHash={__instance.GetHashCode()}");
+        }
+        foreach (var pair in ConfigurationExtensions.MixerConfig.Where(p => p.Value == __instance).ToList())
+        {
+          ConfigurationExtensions.MixerConfig.Remove(pair.Key);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Msg($"MixingStationConfigurationDestroyPatch: Removed MixerConfig for station={pair.Key?.ObjectId.ToString() ?? "null"}");
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"MixingStationConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}");
       }
     }
   }
