@@ -45,7 +45,7 @@ namespace NoLazyWorkers
         {
           try
           {
-            ConfigurationExtensions.SourceChanged(__instance, item); // Calls SourceChanged(BuildableItem)
+            ConfigurationExtensions.SourceChanged(__instance, item);
           }
           catch (Exception e)
           {

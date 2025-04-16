@@ -2,12 +2,12 @@
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.DevUtilities;
-using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.Management.SetterScreens;
 using ScheduleOne.Management.UI;
+using ScheduleOne.NPCs;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Datas;
@@ -17,10 +17,8 @@ using static ScheduleOne.Registry;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.UI;
-using System.Reflection;
 using System.Collections;
-using ScheduleOne.NPCs;
-using ScheduleOne.Quests;
+using System.Reflection;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -415,6 +413,311 @@ namespace NoLazyWorkers
         }
     }
 
+    public static class NoLazyUtilities
+    {
+        public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
+        {
+            if (npc == null || item == null)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInInventoryAndSupply: NPC or item is null");
+                return 0;
+            }
+
+            int inventoryCount = npc.Inventory?._GetItemAmount(item.ID) ?? 0;
+            int supplyCount = GetAmountInSupplies(npc, item.GetDefaultInstance());
+            return inventoryCount + supplyCount;
+        }
+
+        public static int GetAmountInSupplies(NPC npc, ItemInstance item)
+        {
+            if (npc == null || item == null || string.IsNullOrEmpty(item.ID))
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: NPC={npc}, item={item}, or item.ID={item?.ID} is null for {npc?.fullName ?? "null"}");
+                return 0;
+            }
+
+            if (!ConfigurationExtensions.NPCConfig.TryGetValue(npc, out var config))
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: NPCConfig not found for {npc.fullName}");
+                return 0;
+            }
+
+            if (!ConfigurationExtensions.NPCSupply.TryGetValue(config, out var supply) || supply?.SelectedObject == null)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: Supply or SelectedObject is null for {npc.fullName}");
+                return 0;
+            }
+
+            if (supply.SelectedObject is not ITransitEntity supplyT)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
+                return 0;
+            }
+
+            if (!npc.Movement.CanGetTo(supplyT, 1f))
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: Cannot reach supply for {npc.fullName}");
+                return 0;
+            }
+
+            var slots = (supplyT.OutputSlots ?? Enumerable.Empty<ItemSlot>())
+                .Concat(supplyT.InputSlots ?? Enumerable.Empty<ItemSlot>())
+                .Where(s => s?.ItemInstance != null && s.Quantity > 0)
+                .Distinct();
+
+            if (!slots.Any())
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Warning($"GetAmountInSupplies: No valid slots in supply {supplyT?.Name} for {npc.fullName}");
+                return 0;
+            }
+
+            int quantity = 0;
+            string itemIdLower = item.ID.ToLower();
+            foreach (ItemSlot slot in slots)
+            {
+                if (slot.ItemInstance.ID.ToLower() == itemIdLower)
+                {
+                    quantity += slot.Quantity;
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                        MelonLogger.Msg($"GetAmountInSupplies: Found {itemIdLower} with quantity={slot.Quantity} in slot {slot.GetHashCode()} for {npc.fullName}");
+                }
+                else
+                {
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                        MelonLogger.Msg($"GetAmountInSupplies: Slot {slot.GetHashCode()} contains {slot.ItemInstance.ID} (quantity={slot.Quantity}), not {itemIdLower} for {npc.fullName}");
+                }
+            }
+
+            if (quantity == 0)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Msg($"GetAmountInSupplies: No items of {item.ID} found in supply {supplyT?.Name} for {npc.fullName}");
+            }
+            else
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                    MelonLogger.Msg($"GetAmountInSupplies: Total quantity of {item.ID} is {quantity} in supply {supplyT?.Name} for {npc.fullName}");
+            }
+            return quantity;
+        }
+
+        public static GameObject GetItemFieldUITemplateFromPotConfigPanel()
+        {
+            try
+            {
+                // Get ManagementInterface instance
+                ManagementInterface managementInterface = ManagementInterface.Instance;
+                if (managementInterface == null)
+                {
+                    MelonLogger.Error("ManagementInterface instance is null");
+                    return null;
+                }
+
+                // Get PotConfigPanel prefab
+                ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(EConfigurableType.Pot);
+                if (configPanelPrefab == null)
+                {
+                    MelonLogger.Error("No ConfigPanel prefab found for EConfigurableType.Pot");
+                    return null;
+                }
+
+                // Verify it's a PotConfigPanel
+                PotConfigPanel potConfigPanelPrefab = configPanelPrefab.GetComponent<PotConfigPanel>();
+                if (potConfigPanelPrefab == null)
+                {
+                    MelonLogger.Error("ConfigPanel prefab for EConfigurableType.Pot is not a PotConfigPanel");
+                    return null;
+                }
+
+                // Instantiate prefab temporarily
+                GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
+                tempPanelObj.SetActive(false); // Keep inactive to avoid rendering
+                PotConfigPanel tempPanel = tempPanelObj.GetComponent<PotConfigPanel>();
+                if (tempPanel == null)
+                {
+                    MelonLogger.Error("Instantiated prefab lacks PotConfigPanel component");
+                    UnityEngine.Object.Destroy(tempPanelObj);
+                    return null;
+                }
+
+                // Bind to initialize SeedUI (mimic game behavior)
+                List<EntityConfiguration> configs = new List<EntityConfiguration>();
+                // Create a dummy PotConfiguration if needed
+                GameObject dummyPot = new GameObject("DummyPot");
+                Pot pot = dummyPot.AddComponent<Pot>();
+                ConfigurationReplicator replicator = new ConfigurationReplicator(); // Adjust if needed
+                PotConfiguration potConfig = new PotConfiguration(replicator, pot, pot);
+                configs.Add(potConfig);
+                tempPanel.Bind(configs);
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("Bound temporary PotConfigPanel to initialize SeedUI"); }
+
+                // Get SeedUI
+                GameObject seedUITemplate = null;
+                if (tempPanel.SeedUI != null && tempPanel.SeedUI.gameObject != null)
+                {
+                    seedUITemplate = tempPanel.SeedUI.gameObject;
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("Successfully retrieved SeedUI template from PotConfigPanel prefab"); }
+                }
+                else
+                {
+                    MelonLogger.Error("SeedUI is null in instantiated PotConfigPanel");
+                }
+
+                // Clean up
+                UnityEngine.Object.Destroy(tempPanelObj);
+                UnityEngine.Object.Destroy(dummyPot);
+                return seedUITemplate;
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Error($"Failed to get ItemFieldUI template from PotConfigPanel prefab: {e}");
+                return null;
+            }
+        }
+
+        public static GameObject GetPrefabGameObject(string id)
+        {
+            try
+            {
+                GameObject prefab = GetPrefab(id);
+                if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
+                {
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
+                    return prefab;
+                }
+                else if (prefab != null)
+                {
+                    MelonLogger.Warning($"Found prefab with ID: {id}, but it lacks PotConfigPanel component");
+                }
+
+                MelonLogger.Warning("No PotConfigPanel prefab found in Registry with any tested ID");
+                return null;
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Error($"Failed to find PotConfigPanel prefab: {e}");
+                return null;
+            }
+        }
+
+        public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
+        {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
+
+            // Log basic info
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
+
+            // Log ItemFieldUI properties
+            LogComponentDetails(itemfieldUI, 0);
+
+            // Log hierarchy and components
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
+            if (itemfieldUI.gameObject != null)
+            {
+                LogGameObjectDetails(itemfieldUI.gameObject, 0);
+            }
+            else
+            {
+                MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
+            }
+        }
+
+        static void LogGameObjectDetails(GameObject go, int indentLevel)
+        {
+            if (go == null)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
+                return;
+            }
+
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
+
+            // Log components on this GameObject
+            foreach (var component in go.GetComponents<Component>())
+            {
+                LogComponentDetails(component, indentLevel + 1);
+            }
+
+            // Recursively log children
+            foreach (Transform child in go.transform)
+            {
+                LogGameObjectDetails(child.gameObject, indentLevel + 1);
+            }
+        }
+
+        static void LogComponentDetails(Component component, int indentLevel)
+        {
+            if (component == null)
+            {
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
+                return;
+            }
+
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
+
+            // Use reflection to log all public fields
+            var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var field in fields)
+            {
+                try
+                {
+                    var value = field.GetValue(component);
+                    string valueStr = ValueToString(value);
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
+                }
+                catch (Exception e)
+                {
+                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
+                }
+            }
+
+            // Use reflection to log all public properties
+            var properties = component.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var property in properties)
+            {
+                // Skip properties that can't be read
+                if (!property.CanRead) continue;
+
+                try
+                {
+                    var value = property.GetValue(component);
+                    string valueStr = ValueToString(value);
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
+                }
+                catch (Exception e)
+                {
+                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
+                }
+            }
+        }
+
+        static string ValueToString(object value)
+        {
+            if (value == null) return "null";
+            if (value is GameObject go) return $"GameObject({go.name})";
+            if (value is Component comp) return $"{comp.GetType().Name} on {comp.gameObject.name}";
+            if (value is IEnumerable enumerable && !(value is string))
+            {
+                var items = new List<string>();
+                foreach (var item in enumerable)
+                {
+                    items.Add(ValueToString(item));
+                }
+                return $"[{string.Join(", ", items)}]";
+            }
+            return value.ToString();
+        }
+    }
+
     [HarmonyPatch(typeof(ItemSetterScreen), "Open")]
     public class ItemSetterScreenOpenPatch
     {
@@ -773,265 +1076,6 @@ namespace NoLazyWorkers
             {
                 MelonLogger.Error($"MixingStationLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
-        }
-    }
-
-    public class NoLazyUtilities
-    {
-        public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
-        {
-
-            int inventoryCount = npc.Inventory._GetItemAmount(item.ID);
-            int supplyCount = GetAmountInSupplies(npc, item.GetDefaultInstance());
-            return inventoryCount + supplyCount;
-        }
-
-        public static int GetAmountInSupplies(NPC npc, ItemInstance item)
-        {
-            EntityConfiguration config = ConfigurationExtensions.NPCConfig[npc];
-            if (!ConfigurationExtensions.NPCSupply.TryGetValue(config, out var supply))
-            {
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                    MelonLogger.Warning($"GetAmountInSupplies: Supply is null");
-                return 0;
-            }
-            ITransitEntity supplyT = supply as ITransitEntity;
-            if (item != null)
-            {
-                int quantity = 0;
-                foreach (ItemSlot slot in supplyT.OutputSlots)
-                {
-                    if (slot.ItemInstance?.ID == item.ID) quantity += slot.Quantity;
-                }
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                    MelonLogger.Msg($"GetAmountInSupplies: {item.ID} has quantity={quantity}");
-                return quantity;
-            }
-            return 0;
-        }
-
-        public static ItemDefinition GetAnyMixer(ITransitEntity supply, float threshold)
-        {
-            List<ItemInstance> validItems = NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.Select(i => i.GetDefaultInstance()).ToList();
-            foreach (ItemSlot slot in supply.OutputSlots)
-            {
-                if (validItems.Any(i => i.ID == slot.ItemInstance?.ID) && slot.Quantity >= threshold)
-                {
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                        MelonLogger.Msg($"ChemistPatch.HasSufficientItemsInSupply: Found {slot.Quantity} of valid item {slot.ItemInstance.ID}, threshold={threshold}");
-                    return slot.ItemInstance.definition;
-                }
-            }
-            return null;
-        }
-
-        public static GameObject GetItemFieldUITemplateFromPotConfigPanel()
-        {
-            try
-            {
-                // Get ManagementInterface instance
-                ManagementInterface managementInterface = ManagementInterface.Instance;
-                if (managementInterface == null)
-                {
-                    MelonLogger.Error("ManagementInterface instance is null");
-                    return null;
-                }
-
-                // Get PotConfigPanel prefab
-                ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(EConfigurableType.Pot);
-                if (configPanelPrefab == null)
-                {
-                    MelonLogger.Error("No ConfigPanel prefab found for EConfigurableType.Pot");
-                    return null;
-                }
-
-                // Verify it's a PotConfigPanel
-                PotConfigPanel potConfigPanelPrefab = configPanelPrefab.GetComponent<PotConfigPanel>();
-                if (potConfigPanelPrefab == null)
-                {
-                    MelonLogger.Error("ConfigPanel prefab for EConfigurableType.Pot is not a PotConfigPanel");
-                    return null;
-                }
-
-                // Instantiate prefab temporarily
-                GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
-                tempPanelObj.SetActive(false); // Keep inactive to avoid rendering
-                PotConfigPanel tempPanel = tempPanelObj.GetComponent<PotConfigPanel>();
-                if (tempPanel == null)
-                {
-                    MelonLogger.Error("Instantiated prefab lacks PotConfigPanel component");
-                    UnityEngine.Object.Destroy(tempPanelObj);
-                    return null;
-                }
-
-                // Bind to initialize SeedUI (mimic game behavior)
-                List<EntityConfiguration> configs = new List<EntityConfiguration>();
-                // Create a dummy PotConfiguration if needed
-                GameObject dummyPot = new GameObject("DummyPot");
-                Pot pot = dummyPot.AddComponent<Pot>();
-                ConfigurationReplicator replicator = new ConfigurationReplicator(); // Adjust if needed
-                PotConfiguration potConfig = new PotConfiguration(replicator, pot, pot);
-                configs.Add(potConfig);
-                tempPanel.Bind(configs);
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("Bound temporary PotConfigPanel to initialize SeedUI"); }
-
-                // Get SeedUI
-                GameObject seedUITemplate = null;
-                if (tempPanel.SeedUI != null && tempPanel.SeedUI.gameObject != null)
-                {
-                    seedUITemplate = tempPanel.SeedUI.gameObject;
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("Successfully retrieved SeedUI template from PotConfigPanel prefab"); }
-                }
-                else
-                {
-                    MelonLogger.Error("SeedUI is null in instantiated PotConfigPanel");
-                }
-
-                // Clean up
-                UnityEngine.Object.Destroy(tempPanelObj);
-                UnityEngine.Object.Destroy(dummyPot);
-                return seedUITemplate;
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"Failed to get ItemFieldUI template from PotConfigPanel prefab: {e}");
-                return null;
-            }
-        }
-
-        public static GameObject GetPrefabGameObject(string id)
-        {
-            try
-            {
-                GameObject prefab = GetPrefab(id);
-                if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
-                {
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
-                    return prefab;
-                }
-                else if (prefab != null)
-                {
-                    MelonLogger.Warning($"Found prefab with ID: {id}, but it lacks PotConfigPanel component");
-                }
-
-                MelonLogger.Warning("No PotConfigPanel prefab found in Registry with any tested ID");
-                return null;
-            }
-            catch (Exception e)
-            {
-                MelonLogger.Error($"Failed to find PotConfigPanel prefab: {e}");
-                return null;
-            }
-        }
-
-        public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
-        {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
-
-            // Log basic info
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
-
-            // Log ItemFieldUI properties
-            LogComponentDetails(itemfieldUI, 0);
-
-            // Log hierarchy and components
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
-            if (itemfieldUI.gameObject != null)
-            {
-                LogGameObjectDetails(itemfieldUI.gameObject, 0);
-            }
-            else
-            {
-                MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
-            }
-        }
-
-        static void LogGameObjectDetails(GameObject go, int indentLevel)
-        {
-            if (go == null)
-            {
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
-                return;
-            }
-
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
-
-            // Log components on this GameObject
-            foreach (var component in go.GetComponents<Component>())
-            {
-                LogComponentDetails(component, indentLevel + 1);
-            }
-
-            // Recursively log children
-            foreach (Transform child in go.transform)
-            {
-                LogGameObjectDetails(child.gameObject, indentLevel + 1);
-            }
-        }
-
-        static void LogComponentDetails(Component component, int indentLevel)
-        {
-            if (component == null)
-            {
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
-                return;
-            }
-
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
-
-            // Use reflection to log all public fields
-            var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
-            foreach (var field in fields)
-            {
-                try
-                {
-                    var value = field.GetValue(component);
-                    string valueStr = ValueToString(value);
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
-                }
-                catch (Exception e)
-                {
-                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
-                }
-            }
-
-            // Use reflection to log all public properties
-            var properties = component.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            foreach (var property in properties)
-            {
-                // Skip properties that can't be read
-                if (!property.CanRead) continue;
-
-                try
-                {
-                    var value = property.GetValue(component);
-                    string valueStr = ValueToString(value);
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
-                }
-                catch (Exception e)
-                {
-                    MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
-                }
-            }
-        }
-
-        static string ValueToString(object value)
-        {
-            if (value == null) return "null";
-            if (value is GameObject go) return $"GameObject({go.name})";
-            if (value is Component comp) return $"{comp.GetType().Name} on {comp.gameObject.name}";
-            if (value is IEnumerable enumerable && !(value is string))
-            {
-                var items = new List<string>();
-                foreach (var item in enumerable)
-                {
-                    items.Add(ValueToString(item));
-                }
-                return $"[{string.Join(", ", items)}]";
-            }
-            return value.ToString();
         }
     }
 }
