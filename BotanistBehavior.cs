@@ -1,4 +1,3 @@
-
 using BepInEx.AssemblyPublicizer;
 using HarmonyLib;
 using MelonLoader;
@@ -12,7 +11,7 @@ using ScheduleOne.ObjectScripts;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
@@ -61,7 +60,6 @@ namespace NoLazyWorkers
       return null;
     }
   }
-
 
   [HarmonyPatch(typeof(BotanistConfigPanel), "Bind")]
   public class BotanistConfigPanelBindPatch
