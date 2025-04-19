@@ -1,4 +1,3 @@
-using BepInEx.AssemblyPublicizer;
 using FishNet;
 using HarmonyLib;
 using MelonLoader;
@@ -9,12 +8,12 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
+using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Product;
 using System.Collections;
-using Unity.Mathematics;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
@@ -22,8 +21,8 @@ namespace NoLazyWorkers
   {
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
-      MixingStationConfiguration config = ConfigurationExtensions.MixerConfig[station];
-      ObjectField supply = ConfigurationExtensions.MixerSupply[config];
+      MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
+      ObjectField supply = ConfigurationExtensions.MixingSupply[config];
 
       List<ItemSlot> list = new();
       BuildableItem supplyEntity = supply.SelectedObject;
@@ -56,25 +55,25 @@ namespace NoLazyWorkers
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
           MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Checking stations for {__instance?.name ?? "null"}, total stations={__instance.configuration.MixStations.Count}");
 
-        foreach (MixingStation mixingStation in __instance.configuration.MixStations)
+        foreach (MixingStation station in __instance.configuration.MixStations)
         {
-          if (!((IUsable)mixingStation).IsInUse && mixingStation.CurrentMixOperation == null)
+          if (!((IUsable)station).IsInUse && station.CurrentMixOperation == null)
           {
-            if (!ConfigurationExtensions.MixerConfig.TryGetValue(mixingStation, out var config))
+            if (!ConfigurationExtensions.MixingConfig.TryGetValue(station, out var config))
             {
               if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {mixingStation?.ObjectId.ToString() ?? "null"}");
+                MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {station?.ObjectId.ToString() ?? "null"}");
               continue;
             }
 
-            ItemField mixerItem = ConfigurationExtensions.MixerItem[config];
+            ItemField mixerItem = NoLazyUtilities.GetMixerItemForProductSlot(station);
             float threshold = config.StartThrehold.Value;
-            int mixQuantity = mixingStation.GetMixQuantity();
+            int mixQuantity = station.GetMixQuantity();
 
-            bool canStartMix = mixQuantity >= threshold && mixingStation.ProductSlot.Quantity >= threshold && mixingStation.OutputSlot.Quantity == 0;
+            bool canStartMix = mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0;
             bool canRestock = false;
             bool hasSufficientItems = false;
-            ObjectField supply = ConfigurationExtensions.MixerSupply[config];
+            ObjectField supply = ConfigurationExtensions.MixingSupply[config];
             if (!canStartMix && supply?.SelectedObject != null)
             {
               ConfigurationExtensions.NPCSupply[__instance.configuration] = supply;
@@ -90,21 +89,21 @@ namespace NoLazyWorkers
                 if (mixerDef == null)
                 {
                   if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                    MelonLogger.Warning($"No suitable mixer found for station {mixingStation.ObjectId}");
+                    MelonLogger.Warning($"No suitable mixer found for station {station.ObjectId}");
                   continue;
                 }
                 targetItem = mixerDef.GetDefaultInstance();
               }
               hasSufficientItems = HasSufficientItems(__instance, threshold, targetItem);
-              canRestock = mixingStation.OutputSlot.Quantity == 0 &&
-                           mixingStation.ProductSlot.Quantity >= threshold &&
+              canRestock = station.OutputSlot.Quantity == 0 &&
+                           station.ProductSlot.Quantity >= threshold &&
                            hasSufficientItems;
             }
             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-              MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Station {mixingStation.ObjectId}, Supply={supply?.SelectedObject?.ObjectId.ToString() ?? "null"}, IsInUse={((IUsable)mixingStation).IsInUse}, CurrentMixOperation={mixingStation.CurrentMixOperation != null}, canStartMix={canStartMix}, canRestock={canRestock}, mixQuantity={mixQuantity}, productQuantity={mixingStation.ProductSlot.Quantity}, outputQuantity={mixingStation.OutputSlot.Quantity}, threshold={threshold}, mixerItem={mixerItem.SelectedItem?.Name ?? "null"}{(canRestock ? $", hasSufficientItems={hasSufficientItems}" : "")}");
+              MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Station {station.ObjectId}, Supply={supply?.SelectedObject?.ObjectId.ToString() ?? "null"}, IsInUse={((IUsable)station).IsInUse}, CurrentMixOperation={station.CurrentMixOperation != null}, canStartMix={canStartMix}, canRestock={canRestock}, mixQuantity={mixQuantity}, productQuantity={station.ProductSlot.Quantity}, outputQuantity={station.OutputSlot.Quantity}, threshold={threshold}, mixerItem={mixerItem.SelectedItem?.Name ?? "null"}{(canRestock ? $", hasSufficientItems={hasSufficientItems}" : "")}");
             if (canStartMix || canRestock)
             {
-              list.Add(mixingStation);
+              list.Add(station);
             }
           }
         }
@@ -272,8 +271,8 @@ namespace NoLazyWorkers
           state = states[__instance];
         }
 
-        MixingStationConfiguration config = ConfigurationExtensions.MixerConfig[station];
-        ObjectField mixerSupply = ConfigurationExtensions.MixerSupply[config];
+        MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
+        ObjectField mixerSupply = ConfigurationExtensions.MixingSupply[config];
         if (config == null || mixerSupply == null)
         {
           Disable(__instance);
@@ -282,7 +281,12 @@ namespace NoLazyWorkers
           return false;
         }
 
-        ItemField mixerItem = ConfigurationExtensions.MixerItem[config];
+        ItemField mixerItem = NoLazyUtilities.GetMixerItemForProductSlot(station);
+        if (mixerItem == null)
+        {
+          return false;
+        }
+
         float threshold = config.StartThrehold.Value;
 
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
@@ -960,6 +964,45 @@ namespace NoLazyWorkers
     private static Vector3 GetStationAccessPoint(StartMixingStationBehaviour __instance)
     {
       return __instance.targetStation ? ((ITransitEntity)__instance.targetStation).AccessPoints[0].position : __instance.chemist.transform.position;
+    }
+  }
+
+  [HarmonyPatch(typeof(Chemist), "GetMixStationsReadyToMove")]
+  public class ChemistGetMixStationsReadyToMovePatch
+  {
+    [HarmonyPrefix]
+    static bool Prefix(Chemist __instance, ref List<MixingStation> __result)
+    {
+      List<MixingStation> list = new();
+      foreach (MixingStation station in __instance.configuration.MixStations)
+      {
+        ItemSlot outputSlot = station.OutputSlot;
+        if (outputSlot.Quantity > 0)
+        {
+          ProductDefinition outputProduct = outputSlot.ItemInstance.Definition as ProductDefinition;
+          MixingRoute matchingRoute = ConfigurationExtensions.MixingRoutes[station].FirstOrDefault(r =>
+              r.Product.SelectedItem == outputProduct);
+          if (matchingRoute != null)
+          {
+            TransitRoute route = new(station, station);
+            if (__instance.MoveItemBehaviour.IsTransitRouteValid(route, station.OutputSlot.ItemInstance.ID))
+            {
+              __instance.MoveItemBehaviour.Initialize(route, station.OutputSlot.ItemInstance);
+              __instance.MoveItemBehaviour.Enable_Networked(null);
+              return false;
+            }
+          }
+          if (__instance.MoveItemBehaviour.IsTransitRouteValid(
+              (station.Configuration as MixingStationConfiguration).DestinationRoute,
+              outputSlot.ItemInstance.ID))
+          {
+            // Fallback to existing destination route
+            list.Add(station);
+          }
+        }
+      }
+      __result = list;
+      return false;
     }
   }
 }
