@@ -79,18 +79,20 @@ namespace NoLazyWorkers
     public static class ConfigurationExtensions
     {
         public static GameObject ItemFieldUITemplate;
-        public static Dictionary<PotConfiguration, ObjectField> PotSupply = new();
-        public static Dictionary<Pot, PotConfiguration> PotConfig = new();
-        public static Dictionary<PotConfiguration, TransitRoute> PotSourceRoute = new();
-        public static Dictionary<Pot, ObjectFieldData> PotSupplyData = new();
-        public static Dictionary<MixingStationConfiguration, ObjectField> MixingSupply = new();
-        public static Dictionary<MixingStation, ObjectFieldData> MixingSupplyData = new();
-        public static Dictionary<MixingStation, MixingStationConfiguration> MixingConfig = new();
-        public static Dictionary<MixingStationConfiguration, TransitRoute> MixingSourceRoute = new();
-        public static Dictionary<MixingStation, List<MixingRoute>> MixingRoutes = new();
-        public static Dictionary<MixingStation, List<MixingRouteData>> MixingRoutesData = new();
-        public static Dictionary<EntityConfiguration, ObjectField> NPCSupply = new();
-        public static Dictionary<NPC, EntityConfiguration> NPCConfig = new();
+        public static Dictionary<PotConfiguration, ObjectField> PotSupply = [];
+        public static Dictionary<Pot, PotConfiguration> PotConfig = [];
+        public static Dictionary<PotConfiguration, TransitRoute> PotSourceRoute = [];
+        public static Dictionary<Pot, ObjectFieldData> PotSupplyData = [];
+        public static Dictionary<MixingStationConfiguration, ObjectField> MixingSupply = [];
+        public static Dictionary<MixingStation, ObjectFieldData> MixingSupplyData = [];
+        public static Dictionary<MixingStation, MixingStationConfiguration> MixingConfig = [];
+        public static Dictionary<MixingStationConfiguration, TransitRoute> MixingSourceRoute = [];
+        public static Dictionary<MixingStation, List<MixingRoute>> MixingRoutes = [];
+        public static Dictionary<MixingStation, List<MixingRouteData>> MixingRoutesData = [];
+        public static Dictionary<EntityConfiguration, ObjectField> NPCSupply = [];
+        public static Dictionary<NPC, EntityConfiguration> NPCConfig = [];
+        private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
+        private static readonly float debounceTime = 0.2f;
 
         public static void InvokeChanged(EntityConfiguration config)
         {
@@ -110,8 +112,17 @@ namespace NoLazyWorkers
                     return;
                 }
 
+                float currentTime = Time.time;
+                if (lastInvokeTimes.TryGetValue(config, out float lastTime) && currentTime - lastTime < debounceTime)
+                {
+                    if (DebugConfig.EnableDebugLogs)
+                        MelonLogger.Msg($"InvokeChanged debounced for config: {config}");
+                    return;
+                }
+                lastInvokeTimes[config] = currentTime;
+                if (DebugConfig.EnableDebugLogs)
+                    MelonLogger.Msg($"InvokeChanged called for config: {config}, StackTrace: {new System.Diagnostics.StackTrace()}");
                 method.Invoke(config, null);
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg($"InvokeChanged called for config: {config}");
             }
             catch (Exception e)
             {
@@ -335,7 +346,7 @@ namespace NoLazyWorkers
                         {
                             PotSupply[potConfig] = new ObjectField(potConfig)
                             {
-                                TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
+                                TypeRequirements = [typeof(PlaceableStorageEntity)],
                                 DrawTransitLine = true
                             };
                             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"RestoreConfigurations: Created new ObjectField for PotConfig: {potConfig}");
@@ -378,7 +389,7 @@ namespace NoLazyWorkers
                             {
                                 MixingSupply[mixerConfig] = new ObjectField(mixerConfig)
                                 {
-                                    TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
+                                    TypeRequirements = [typeof(PlaceableStorageEntity)],
                                     DrawTransitLine = true
                                 };
                                 if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"RestoreConfigurations: Created new ObjectField for MixerConfig: {mixerConfig}");
@@ -392,7 +403,7 @@ namespace NoLazyWorkers
                         {
                             if (!MixingRoutes.ContainsKey(station))
                             {
-                                MixingRoutes[station] = new List<MixingRoute>();
+                                MixingRoutes[station] = [];
                                 if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"RestoreConfigurations: Created new ItemField for MixerConfig: {mixerConfig}");
                             }
                             else
@@ -581,7 +592,7 @@ namespace NoLazyWorkers
                 }
 
                 // Bind to initialize UI components (mimic game behavior)
-                List<EntityConfiguration> configs = new List<EntityConfiguration>();
+                List<EntityConfiguration> configs = [];
                 // Create a dummy configuration based on the config type
                 GameObject dummyEntity = new GameObject($"Dummy{configType}");
                 EntityConfiguration config = null;
@@ -959,7 +970,7 @@ namespace NoLazyWorkers
     [HarmonyPatch(typeof(GridItemLoader), "LoadAndCreate")]
     public class GridItemLoaderPatch
     {
-        public static Dictionary<string, GridItem> LoadedGridItems = new Dictionary<string, GridItem>();
+        public static Dictionary<string, GridItem> LoadedGridItems = [];
 
         static void Postfix(string mainPath, GridItem __result)
         {
@@ -984,7 +995,7 @@ namespace NoLazyWorkers
     }
 
     // Patch for PotLoader.Load to use the captured Pot
-    [HarmonyPatch(typeof(PotLoader), "Load")]
+    /* [HarmonyPatch(typeof(PotLoader), "Load")]
     public class PotLoaderPatch
     {
         static void Postfix(string mainPath)
@@ -1051,7 +1062,7 @@ namespace NoLazyWorkers
                 MelonLogger.Error($"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
         }
-    }
+    } */
 
     [HarmonyPatch(typeof(MixingStationLoader), "Load")]
     public class MixingStationLoaderPatch
@@ -1093,7 +1104,7 @@ namespace NoLazyWorkers
                                     // Convert and store MixerRoutes
                                     if (configData.MixingRoutes != null)
                                     {
-                                        List<MixingRoute> mixerRoutes = new List<MixingRoute>();
+                                        List<MixingRoute> mixerRoutes = [];
                                         MixingStationConfiguration config = ConfigurationExtensions.MixingConfig.TryGetValue(station, out var cfg) ? cfg : station.Configuration as MixingStationConfiguration;
 
                                         foreach (var routeData in configData.MixingRoutes)
@@ -1149,6 +1160,63 @@ namespace NoLazyWorkers
             {
                 MelonLogger.Error($"MixingStationLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
             }
+        }
+    }
+
+    [HarmonyPatch(typeof(ConfigurationReplicator), "RpcLogic___ReceiveItemField_2801973956")]
+    public class ConfigurationReplicatorReceiveItemFieldPatch
+    {
+        static bool Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
+        {
+            if (DebugConfig.EnableDebugLogs)
+            {
+                MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}");
+                MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}");
+                for (int i = 0; i < __instance.Configuration.Fields.Count; i++)
+                    MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields[{i}]={__instance.Configuration.Fields[i]?.GetType().Name ?? "null"}");
+            }
+            if (fieldIndex < 0 || fieldIndex >= __instance.Configuration.Fields.Count)
+            {
+                if (DebugConfig.EnableDebugLogs)
+                    MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping");
+                return false;
+            }
+            var itemField = __instance.Configuration.Fields[fieldIndex] as ItemField;
+            if (itemField == null)
+            {
+                if (DebugConfig.EnableDebugLogs)
+                    MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping");
+                return false;
+            }
+            if (string.IsNullOrEmpty(value) && !itemField.CanSelectNone)
+            {
+                if (DebugConfig.EnableDebugLogs)
+                    MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}");
+                return false;
+            }
+            if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(ItemField), "SetItem", new Type[] { typeof(ItemDefinition), typeof(bool) })]
+    public class ItemFieldSetItemPatch
+    {
+        static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
+        {
+            if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
+
+            // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
+            bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
+            if ((item == null && __instance.CanSelectNone) || isProductField)
+            {
+                if (DebugConfig.EnableDebugLogs)
+                    MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
+                return false;
+            }
+            return true;
         }
     }
 }

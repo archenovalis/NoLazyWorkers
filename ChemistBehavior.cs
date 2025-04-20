@@ -67,6 +67,7 @@ namespace NoLazyWorkers
             }
 
             ItemField mixerItem = NoLazyUtilities.GetMixerItemForProductSlot(station);
+            if (mixerItem == null) continue;
             float threshold = config.StartThrehold.Value;
             int mixQuantity = station.GetMixQuantity();
 
@@ -968,7 +969,7 @@ namespace NoLazyWorkers
   }
 
   [HarmonyPatch(typeof(Chemist), "GetMixStationsReadyToMove")]
-  public class ChemistGetMixStationsReadyToMovePatch
+  public class ChemistGetMixStationsReadyToMovePatch // full override
   {
     [HarmonyPrefix]
     static bool Prefix(Chemist __instance, ref List<MixingStation> __result)
