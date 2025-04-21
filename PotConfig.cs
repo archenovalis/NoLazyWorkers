@@ -42,9 +42,9 @@ namespace NoLazyWorkers
           }
         });
         // Ensure dictionary entries are created
-        if (!ConfigurationExtensions.PotSupply.ContainsKey(__instance))
+        if (!ConfigurationExtensions.PotSupply.ContainsKey(pot))
         {
-          ConfigurationExtensions.PotSupply[__instance] = supply;
+          ConfigurationExtensions.PotSupply[pot] = supply;
         }
         if (!ConfigurationExtensions.PotConfig.ContainsKey(pot))
         {
@@ -73,7 +73,7 @@ namespace NoLazyWorkers
             __instance.Additive3.GetData(),
             __instance.Destination.GetData()
         );
-        data.Supply = ConfigurationExtensions.PotSupply[__instance].GetData();
+        data.Supply = ConfigurationExtensions.PotSupply[__instance.Pot].GetData();
         __result = data.GetJson(true);
       }
       catch (Exception e)
@@ -90,7 +90,7 @@ namespace NoLazyWorkers
     {
       try
       {
-        ObjectField supply = ConfigurationExtensions.PotSupply[__instance];
+        ObjectField supply = ConfigurationExtensions.PotSupply[__instance.Pot];
         __result |= supply.SelectedObject != null;
       }
       catch (Exception e)
@@ -156,7 +156,7 @@ namespace NoLazyWorkers
         {
           if (config is PotConfiguration potConfig)
           {
-            if (ConfigurationExtensions.PotSupply.TryGetValue(potConfig, out ObjectField supply))
+            if (ConfigurationExtensions.PotSupply.TryGetValue(potConfig.Pot, out ObjectField supply))
             {
               supplyList.Add(supply);
               if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Added supply for PotConfiguration, SelectedObject: {(supply.SelectedObject != null ? supply.SelectedObject.name : "null")}"); }

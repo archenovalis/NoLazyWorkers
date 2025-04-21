@@ -8,12 +8,11 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Product;
 using System.Collections;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.s", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
@@ -22,7 +21,7 @@ namespace NoLazyWorkers
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
       MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
-      ObjectField supply = ConfigurationExtensions.MixingSupply[config];
+      ObjectField supply = ConfigurationExtensions.MixingSupply[station];
 
       List<ItemSlot> list = new();
       BuildableItem supplyEntity = supply.SelectedObject;
@@ -67,23 +66,23 @@ namespace NoLazyWorkers
             }
 
             ItemField mixerItem = NoLazyUtilities.GetMixerItemForProductSlot(station);
-            if (mixerItem == null) continue;
+            if (mixerItem?.SelectedItem == null) continue;
             float threshold = config.StartThrehold.Value;
             int mixQuantity = station.GetMixQuantity();
 
             bool canStartMix = mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0;
             bool canRestock = false;
             bool hasSufficientItems = false;
-            ObjectField supply = ConfigurationExtensions.MixingSupply[config];
+            ObjectField supply = ConfigurationExtensions.MixingSupply[station];
             if (!canStartMix && supply?.SelectedObject != null)
             {
-              ConfigurationExtensions.NPCSupply[__instance.configuration] = supply;
-              ItemInstance targetItem;
+              ConfigurationExtensions.NPCSupply[__instance] = supply;
+              ItemInstance targetItem = mixerItem?.SelectedItem?.GetDefaultInstance();
               if (mixerItem.SelectedItem != null)
               {
                 targetItem = mixerItem.SelectedItem.GetDefaultInstance();
               }
-              else
+              /* else
               {
                 string preferredId = mixerItem?.SelectedItem?.ID?.ToLower();
                 ItemDefinition mixerDef = GetAnyMixer(supply.SelectedObject as ITransitEntity, threshold, preferredId);
@@ -94,7 +93,7 @@ namespace NoLazyWorkers
                   continue;
                 }
                 targetItem = mixerDef.GetDefaultInstance();
-              }
+              } */
               hasSufficientItems = HasSufficientItems(__instance, threshold, targetItem);
               canRestock = station.OutputSlot.Quantity == 0 &&
                            station.ProductSlot.Quantity >= threshold &&
@@ -159,7 +158,7 @@ namespace NoLazyWorkers
 
     public static bool HasSufficientItems(Chemist chemist, float threshold, ItemInstance item)
     {
-      return NoLazyUtilities.GetAmountInInventoryAndSupply(chemist, item.definition) > threshold;
+      return NoLazyUtilities.GetAmountInInventoryAndSupply(chemist, item?.definition) > threshold;
     }
   }
 
@@ -273,7 +272,7 @@ namespace NoLazyWorkers
         }
 
         MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
-        ObjectField mixerSupply = ConfigurationExtensions.MixingSupply[config];
+        ObjectField mixerSupply = ConfigurationExtensions.MixingSupply[station];
         if (config == null || mixerSupply == null)
         {
           Disable(__instance);
@@ -308,7 +307,7 @@ namespace NoLazyWorkers
               return false;
             }
 
-            ConfigurationExtensions.NPCSupply[chemistConfig] = mixerSupply;
+            ConfigurationExtensions.NPCSupply[chemist] = mixerSupply;
             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
               MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Copied station supply {mixerSupply.SelectedObject?.name} to chemist");
 
@@ -631,7 +630,7 @@ namespace NoLazyWorkers
     {
       Chemist chemist = __instance.chemist;
       ChemistConfiguration config = chemist.configuration;
-      ObjectField supply = ConfigurationExtensions.NPCSupply[config];
+      ObjectField supply = ConfigurationExtensions.NPCSupply[chemist];
       bool atSupplies = config != null && supply != null && supply.SelectedObject != null &&
            NavMeshUtility.IsAtTransitEntity(supply.SelectedObject as ITransitEntity, chemist, 0.4f);
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
@@ -647,8 +646,7 @@ namespace NoLazyWorkers
     private static void WalkToSupplies(StartMixingStationBehaviour __instance, StateData state)
     {
       Chemist chemist = __instance.chemist;
-      ChemistConfiguration config = chemist.configuration;
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(config, out var supply) || supply.SelectedObject == null)
+      if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist, out var supply) || supply.SelectedObject == null)
       {
         Disable(__instance);
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
@@ -686,9 +684,7 @@ namespace NoLazyWorkers
           return;
         }
 
-        ChemistConfiguration config = chemist.configuration;
-
-        if (!ConfigurationExtensions.NPCSupply.TryGetValue(config, out var supply) || supply.SelectedObject == null)
+        if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist, out var supply) || supply.SelectedObject == null)
         {
           Disable(__instance);
           if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)

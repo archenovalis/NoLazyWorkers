@@ -8,6 +8,7 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
+using ScheduleOne.Quests;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 
@@ -18,47 +19,6 @@ namespace NoLazyWorkers
 
   public static class BotanistExtensions
   {
-    public static ItemInstance GetItemInSupply(this Botanist botanist, Pot pot, string id)
-    {
-      PotConfiguration config = ConfigurationExtensions.PotConfig[pot];
-      ObjectField supply = ConfigurationExtensions.PotSupply[config];
-
-      List<ItemSlot> list = new();
-      BuildableItem supplyEntity = supply.SelectedObject;
-      if (supplyEntity != null && botanist.behaviour.Npc.Movement.CanGetTo(supplyEntity as ITransitEntity, 1f))
-      {
-        list.AddRange((supplyEntity as ITransitEntity).OutputSlots);
-        for (int i = 0; i < list.Count; i++)
-        {
-          if (list[i].Quantity > 0 && list[i].ItemInstance.ID.ToLower() == id.ToLower())
-          {
-            return list[i].ItemInstance;
-          }
-        }
-      }
-      return null;
-    }
-
-    public static ItemInstance GetSeedInSupply(this Botanist botanist, Pot pot)
-    {
-      PotConfiguration config = ConfigurationExtensions.PotConfig[pot];
-      ObjectField supply = ConfigurationExtensions.PotSupply[config];
-
-      List<ItemSlot> list = new();
-      BuildableItem supplyEntity = supply.SelectedObject;
-      if (supplyEntity != null && botanist.behaviour.Npc.Movement.CanGetTo(supplyEntity as ITransitEntity, 1f))
-      {
-        list.AddRange((supplyEntity as ITransitEntity).OutputSlots);
-        for (int i = 0; i < list.Count; i++)
-        {
-          if (list[i].Quantity > 0 && list[i].ItemInstance.Definition is SeedDefinition)
-          {
-            return list[i].ItemInstance;
-          }
-        }
-      }
-      return null;
-    }
   }
 
   [HarmonyPatch(typeof(BotanistConfigPanel), "Bind")]
@@ -110,6 +70,30 @@ namespace NoLazyWorkers
       }
     }
   }
+
+  [HarmonyPatch(typeof(Quest_Botanists), "MinPass")]
+  public static class QuestBotanistsMinPassPatch
+  {
+    [HarmonyPrefix]
+    public static bool Prefix(Quest_Botanists __instance)
+    {
+      if (__instance.AssignSuppliesEntry.State == EQuestState.Active)
+      {
+        foreach (Employee employee in __instance.GetEmployees())
+        {
+          Botanist botanist = employee as Botanist;
+          foreach (Pot pot in botanist.AssignedProperty.Container.GetComponentsInChildren<Pot>())
+            if (ConfigurationExtensions.PotSupply[pot] != null)
+            {
+              __instance.AssignSuppliesEntry.Complete();
+              return true;
+            }
+        }
+      }
+      return true;
+    }
+  }
+
   [HarmonyPatch(typeof(PotActionBehaviour), "StartAction")]
   public class PotActionBehaviourStartActionPatch
   {
@@ -130,8 +114,7 @@ namespace NoLazyWorkers
           return;
         }
 
-        if (!ConfigurationExtensions.PotConfig.TryGetValue(__instance.AssignedPot, out var potConfig) ||
-            !ConfigurationExtensions.PotSupply.TryGetValue(potConfig, out var potSupply))
+        if (!ConfigurationExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply))
         {
           MelonLogger.Warning("PotActionBehaviourStartActionPatch: Pot supply not found");
           return;
