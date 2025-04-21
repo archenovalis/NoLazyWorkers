@@ -468,4 +468,7 @@
 	<Target Name="CopyOutputFileToGame" AfterTargets="Build">
 		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\Games\Schedule I\Mods" Retries="60" />
 	</Target>
+	<Target Name="CopyOutputFileToGame" AfterTargets="Build">
+		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\projects\Schedule I\NoLazyWorkers\dist" Retries="60" />
+	</Target>
 </Project>

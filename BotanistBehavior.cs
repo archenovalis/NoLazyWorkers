@@ -77,27 +77,145 @@ namespace NoLazyWorkers
     [HarmonyPrefix]
     public static bool Prefix(Quest_Botanists __instance)
     {
-      if (__instance.AssignSuppliesEntry.State == EQuestState.Active)
+      try
       {
-        foreach (Employee employee in __instance.GetEmployees())
+        if (__instance.AssignSuppliesEntry.State == EQuestState.Active)
         {
-          Botanist botanist = employee as Botanist;
-          foreach (Pot pot in botanist.AssignedProperty.Container.GetComponentsInChildren<Pot>())
-            if (ConfigurationExtensions.PotSupply[pot] != null)
+          foreach (Employee employee in __instance.GetEmployees())
+          {
+            Botanist botanist = employee as Botanist;
+            if (botanist != null && botanist.Configuration is BotanistConfiguration botanistConfig)
             {
-              __instance.AssignSuppliesEntry.Complete();
-              return true;
+              foreach (Pot pot in botanistConfig.AssignedPots)
+              {
+                if (ConfigurationExtensions.PotSupply.TryGetValue(pot, out var potSupply) && potSupply != null)
+                {
+                  __instance.AssignSuppliesEntry.Complete();
+                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                  {
+                    MelonLogger.Msg($"QuestBotanistsMinPassPatch: Completed AssignSuppliesEntry for botanist {botanist.name}, pot {pot.name}");
+                  }
+                  return true;
+                }
+              }
             }
+          }
         }
+        return true;
       }
-      return true;
+      catch (Exception e)
+      {
+        MelonLogger.Error($"QuestBotanistsMinPassPatch: Failed, error: {e}");
+        return true;
+      }
+    }
+  }
+
+  [HarmonyPatch(typeof(BotanistConfiguration), "GetSaveString")]
+  public static class BotanistConfigurationGetSaveStringPatch
+  {
+    [HarmonyPrefix]
+    public static void Prefix(BotanistConfiguration __instance)
+    {
+      __instance.Supplies.SelectedObject = null; // Clear before serialization
+    }
+  }
+
+  [HarmonyPatch(typeof(Botanist), "GetDryableInSupplies")]
+  public static class BotanistGetDryableInSuppliesPatch //todo: add supply to racks then check each rack's supply shelf. otherwise, check shelves with product set matching dryable's product set
+  {
+    [HarmonyPrefix]
+    public static bool Prefix(Botanist __instance, ref QualityItemInstance __result)
+    {
+      try
+      {
+        if (!(__instance.Configuration is BotanistConfiguration botanistConfig))
+        {
+          MelonLogger.Warning("BotanistGetDryableInSuppliesPatch: BotanistConfiguration is null");
+          __result = null;
+          return false;
+        }
+
+        foreach (Pot pot in botanistConfig.AssignedPots)
+        {
+          if (!ConfigurationExtensions.PotSupply.TryGetValue(pot, out var potSupply) || potSupply.SelectedObject == null)
+          {
+            continue;
+          }
+          botanistConfig.Supplies.SelectedObject = potSupply.SelectedObject;
+          if (!__instance.Movement.CanGetTo(potSupply.SelectedObject as ITransitEntity))
+          {
+            continue;
+          }
+
+          List<ItemSlot> slots = new List<ItemSlot>();
+          slots.AddRange((potSupply.SelectedObject as ITransitEntity).OutputSlots);
+          foreach (ItemSlot slot in slots)
+          {
+            if (slot.Quantity > 0 && ItemFilter_Dryable.IsItemDryable(slot.ItemInstance))
+            {
+              __result = slot.ItemInstance as QualityItemInstance;
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+              {
+                MelonLogger.Msg($"BotanistGetDryableInSuppliesPatch: Found dryable {__result?.ID ?? "null"} in pot {pot.name}'s supply");
+              }
+              return false;
+            }
+          }
+        }
+
+        __result = null;
+        return false;
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"BotanistGetDryableInSuppliesPatch: Failed, error: {e}");
+        __result = null;
+        return false;
+      }
+    }
+  }
+
+  [HarmonyPatch(typeof(PotActionBehaviour), "CanGetToSupplies")]
+  public static class PotActionBehaviourCanGetToSuppliesPatch
+  {
+    [HarmonyPrefix]
+    public static bool Prefix(PotActionBehaviour __instance, ref bool __result)
+    {
+      try
+      {
+        if (__instance.AssignedPot == null)
+        {
+          MelonLogger.Warning("PotActionBehaviourCanGetToSuppliesPatch: AssignedPot is null");
+          __result = false;
+          return false;
+        }
+
+        Botanist botanist = __instance.Npc as Botanist;
+        if (botanist == null)
+        {
+          MelonLogger.Warning("PotActionBehaviourCanGetToSuppliesPatch: Botanist is null");
+          __result = false;
+          return false;
+        }
+
+        __result = botanist.Movement.CanGetTo(__instance.AssignedPot);
+        return false;
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"PotActionBehaviourCanGetToSuppliesPatch: Failed, error: {e}");
+        __result = false;
+        return false;
+      }
     }
   }
 
   [HarmonyPatch(typeof(PotActionBehaviour), "StartAction")]
-  public class PotActionBehaviourStartActionPatch
+  public static class PotActionBehaviourStartActionPatch
   {
-    static void Prefix(PotActionBehaviour __instance)
+    [HarmonyPrefix]
+    public static void Prefix(PotActionBehaviour __instance)
     {
       try
       {
@@ -114,14 +232,18 @@ namespace NoLazyWorkers
           return;
         }
 
-        if (!ConfigurationExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply))
+        if (!ConfigurationExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply) || potSupply.SelectedObject == null)
         {
-          MelonLogger.Warning("PotActionBehaviourStartActionPatch: Pot supply not found");
+          MelonLogger.Warning($"PotActionBehaviourStartActionPatch: Pot supply not found or null for pot {__instance.AssignedPot.name}");
+          botanistConfig.Supplies.SelectedObject = null;
           return;
         }
 
         botanistConfig.Supplies.SelectedObject = potSupply.SelectedObject;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs) { MelonLogger.Msg($"PotActionBehaviourStartActionPatch: Set Botanist.Supplies to {potSupply.SelectedObject?.name ?? "null"} for pot {__instance.AssignedPot}"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        {
+          MelonLogger.Msg($"PotActionBehaviourStartActionPatch: Set Botanist.Supplies to {potSupply.SelectedObject?.name ?? "null"} for pot {__instance.AssignedPot.name}");
+        }
       }
       catch (Exception e)
       {

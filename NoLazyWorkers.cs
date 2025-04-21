@@ -36,10 +36,10 @@ namespace NoLazyWorkers
   public static class BuildInfo
   {
     public const string Name = "NoLazyWorkers";
-    public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply.";
+    public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.0";
+    public const string Version = "1.1.0";
     public const string DownloadLink = null;
   }
 
@@ -1044,74 +1044,74 @@ namespace NoLazyWorkers
   }
 
   // Patch for PotLoader.Load to use the captured Pot
-  /* [HarmonyPatch(typeof(PotLoader), "Load")]
+  [HarmonyPatch(typeof(PotLoader), "Load")]
   public class PotLoaderPatch
   {
-      static void Postfix(string mainPath)
+    static void Postfix(string mainPath)
+    {
+      try
       {
-          try
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}"); }
+        if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}"); }
+          if (gridItem is Pot pot)
           {
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}"); }
-              if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}"); }
+            string configPath = Path.Combine(mainPath, "Configuration.json");
+            if (File.Exists(configPath))
+            {
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}"); }
+              if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
               {
-                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}"); }
-                  if (gridItem is Pot pot)
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}"); }
+                ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
+                if (configData != null)
+                {
+                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}"); }
+                  if (configData.Supply != null)
                   {
-                      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}"); }
-                      string configPath = Path.Combine(mainPath, "Configuration.json");
-                      if (File.Exists(configPath))
-                      {
-                          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}"); }
-                          if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
-                          {
-                              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}"); }
-                              ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
-                              if (configData != null)
-                              {
-                                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}"); }
-                                  if (configData.Supply != null)
-                                  {
-                                      ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
-                                      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}"); }
-                                  }
-                                  else
-                                  {
-                                      MelonLogger.Warning($"PotLoaderPatch: Supply data is null in config for mainPath: {mainPath}");
-                                  }
-                              }
-                              else
-                              {
-                                  MelonLogger.Error($"PotLoaderPatch: Failed to deserialize Configuration.json for mainPath: {mainPath}");
-                              }
-                          }
-                          else
-                          {
-                              MelonLogger.Warning($"PotLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
-                          }
-                      }
-                      else
-                      {
-                          MelonLogger.Warning($"PotLoaderPatch: No Configuration.json found at: {configPath}");
-                      }
-                      GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
-                      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems"); }
+                    ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}"); }
                   }
                   else
                   {
-                      MelonLogger.Warning($"PotLoaderPatch: GridItem is not a Pot for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
+                    MelonLogger.Warning($"PotLoaderPatch: Supply data is null in config for mainPath: {mainPath}");
                   }
+                }
+                else
+                {
+                  MelonLogger.Error($"PotLoaderPatch: Failed to deserialize Configuration.json for mainPath: {mainPath}");
+                }
               }
               else
               {
-                  MelonLogger.Warning($"PotLoaderPatch: No GridItem found for mainPath: {mainPath} in LoadedGridItems");
+                MelonLogger.Warning($"PotLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
               }
+            }
+            else
+            {
+              MelonLogger.Warning($"PotLoaderPatch: No Configuration.json found at: {configPath}");
+            }
+            GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems"); }
           }
-          catch (Exception e)
+          else
           {
-              MelonLogger.Error($"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
+            MelonLogger.Warning($"PotLoaderPatch: GridItem is not a Pot for mainPath: {mainPath}, type: {gridItem?.GetType().Name}");
           }
+        }
+        else
+        {
+          MelonLogger.Warning($"PotLoaderPatch: No GridItem found for mainPath: {mainPath} in LoadedGridItems");
+        }
       }
-  } */
+      catch (Exception e)
+      {
+        MelonLogger.Error($"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
+      }
+    }
+  }
 
   [HarmonyPatch(typeof(MixingStationLoader), "Load")]
   public class MixingStationLoaderPatch
