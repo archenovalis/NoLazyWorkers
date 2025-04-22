@@ -19,7 +19,7 @@ using System.Collections;
 using System.Reflection;
 using ScheduleOne.Employees;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.1.1", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
@@ -1071,7 +1071,7 @@ namespace NoLazyWorkers
                   if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}"); }
                   if (configData.Supply != null)
                   {
-                    ConfigurationExtensions.PotSupplyData[pot] = configData.Supply;
+                    ConfigurationExtensions.PotSupply[pot].Load(configData.Supply);
                     if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {ConfigurationExtensions.PotSupplyData.Count}"); }
                   }
                   else

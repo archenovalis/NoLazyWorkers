@@ -12,8 +12,6 @@ using UnityEngine.Events;
 using TMPro;
 using UnityEngine.UI;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
-[assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
   public static class SelectionHelper

@@ -1,4 +1,3 @@
-using BepInEx.AssemblyPublicizer;
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.Management;
@@ -8,9 +7,6 @@ using ScheduleOne.UI.Management;
 using UnityEngine;
 using TMPro;
 
-
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
-[assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
   [HarmonyPatch(typeof(PotConfiguration))]

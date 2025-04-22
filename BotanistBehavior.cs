@@ -1,9 +1,6 @@
-using BepInEx.AssemblyPublicizer;
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.Employees;
-using ScheduleOne.EntityFramework;
-using ScheduleOne.Growing;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
@@ -12,8 +9,6 @@ using ScheduleOne.Quests;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.1", "Archie")]
-[assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
 

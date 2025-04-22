@@ -12,8 +12,6 @@ using ScheduleOne.Product;
 using System.Collections;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkers), "NoLazyWorkers", "1.0.s", "Archie")]
-[assembly: MelonGame("TVGS", "Schedule I")]
 namespace NoLazyWorkers
 {
   public static class ChemistExtensions
