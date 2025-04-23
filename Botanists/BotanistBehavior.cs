@@ -9,7 +9,7 @@ using ScheduleOne.Quests;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 
-namespace NoLazyWorkers
+namespace NoLazyWorkers.Botanists
 {
 
   public static class BotanistExtensions
@@ -83,7 +83,7 @@ namespace NoLazyWorkers
             {
               foreach (Pot pot in botanistConfig.AssignedPots)
               {
-                if (ConfigurationExtensions.PotSupply.TryGetValue(pot, out var potSupply) && potSupply != null)
+                if (PotExtensions.PotSupply.TryGetValue(pot, out var potSupply) && potSupply != null)
                 {
                   __instance.AssignSuppliesEntry.Complete();
                   if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
@@ -133,7 +133,7 @@ namespace NoLazyWorkers
 
         foreach (Pot pot in botanistConfig.AssignedPots)
         {
-          if (!ConfigurationExtensions.PotSupply.TryGetValue(pot, out var potSupply) || potSupply.SelectedObject == null)
+          if (!PotExtensions.PotSupply.TryGetValue(pot, out var potSupply) || potSupply.SelectedObject == null)
           {
             continue;
           }
@@ -227,7 +227,7 @@ namespace NoLazyWorkers
           return;
         }
 
-        if (!ConfigurationExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply) || potSupply.SelectedObject == null)
+        if (!PotExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply) || potSupply.SelectedObject == null)
         {
           MelonLogger.Warning($"PotActionBehaviourStartActionPatch: Pot supply not found or null for pot {__instance.AssignedPot.name}");
           botanistConfig.Supplies.SelectedObject = null;

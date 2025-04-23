@@ -12,14 +12,14 @@ using ScheduleOne.Product;
 using System.Collections;
 using UnityEngine;
 
-namespace NoLazyWorkers
+namespace NoLazyWorkers.Chemists
 {
   public static class ChemistExtensions
   {
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
-      MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
-      ObjectField supply = ConfigurationExtensions.MixingSupply[station];
+      MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station];
+      ObjectField supply = MixingStationExtensions.MixingSupply[station];
 
       List<ItemSlot> list = new();
       BuildableItem supplyEntity = supply.SelectedObject;
@@ -56,7 +56,7 @@ namespace NoLazyWorkers
         {
           if (!((IUsable)station).IsInUse && station.CurrentMixOperation == null)
           {
-            if (!ConfigurationExtensions.MixingConfig.TryGetValue(station, out var config))
+            if (!MixingStationExtensions.MixingConfig.TryGetValue(station, out var config))
             {
               if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
                 MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {station?.ObjectId.ToString() ?? "null"}");
@@ -71,7 +71,7 @@ namespace NoLazyWorkers
             bool canStartMix = mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0;
             bool canRestock = false;
             bool hasSufficientItems = false;
-            ObjectField supply = ConfigurationExtensions.MixingSupply[station];
+            ObjectField supply = MixingStationExtensions.MixingSupply[station];
             if (!canStartMix && supply?.SelectedObject != null)
             {
               ConfigurationExtensions.NPCSupply[__instance] = supply;
@@ -269,8 +269,8 @@ namespace NoLazyWorkers
           state = states[__instance];
         }
 
-        MixingStationConfiguration config = ConfigurationExtensions.MixingConfig[station];
-        ObjectField mixerSupply = ConfigurationExtensions.MixingSupply[station];
+        MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station];
+        ObjectField mixerSupply = MixingStationExtensions.MixingSupply[station];
         if (config == null || mixerSupply == null)
         {
           Disable(__instance);
@@ -975,7 +975,7 @@ namespace NoLazyWorkers
         if (outputSlot.Quantity > 0)
         {
           ProductDefinition outputProduct = outputSlot.ItemInstance.Definition as ProductDefinition;
-          MixingRoute matchingRoute = ConfigurationExtensions.MixingRoutes[station].FirstOrDefault(r =>
+          MixingRoute matchingRoute = MixingStationExtensions.MixingRoutes[station].FirstOrDefault(r =>
               r.Product.SelectedItem == outputProduct);
           if (matchingRoute != null)
           {
