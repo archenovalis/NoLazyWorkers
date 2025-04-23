@@ -13,20 +13,18 @@ using ScheduleOne.Management.UI;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Audio;
-using UnityEngine.Events;
 
 namespace NoLazyWorkers
 {
   public class ConfigurableStorageEntity : PlaceableStorageEntity, IConfigurable
   {
-    public EntityConfiguration Configuration { get; protected set; }
-    public ConfigurationReplicator ConfigReplicator => _configReplicator;
-    public EConfigurableType ConfigurableType => EConfigurableType.MixingStation; // Placeholder
+    public EntityConfiguration Configuration => storageConfiguration;
+    public StorageConfiguration storageConfiguration { get; set; }
+    public ConfigurationReplicator ConfigReplicator => configReplicator;
+    public EConfigurableType ConfigurableType => EConfigurableType.MixingStation;
     public WorldspaceUIElement WorldspaceUI { get; set; }
     public NetworkObject CurrentPlayerConfigurer { get; set; }
     public bool IsBeingConfiguredByOtherPlayer => CurrentPlayerConfigurer != null && !CurrentPlayerConfigurer.IsOwner;
@@ -35,9 +33,8 @@ namespace NoLazyWorkers
     public Transform UIPoint => transform;
     public bool CanBeSelected => true;
 
-    [SerializeField] protected ConfigurationReplicator _configReplicator;
+    public ConfigurationReplicator configReplicator;
 
-    protected StorageConfiguration storageConfiguration { get; set; }
 
     public override void InitializeGridItem(ItemInstance instance, ScheduleOne.Tiles.Grid grid, Vector2 originCoordinate, int rotation, string GUID)
     {
@@ -46,13 +43,13 @@ namespace NoLazyWorkers
 
       if (!initialized && !isGhost)
       {
-        if (_configReplicator == null)
+        if (configReplicator == null)
         {
-          _configReplicator = gameObject.AddComponent<ConfigurationReplicator>();
+          configReplicator = gameObject.AddComponent<ConfigurationReplicator>();
         }
-        storageConfiguration = new StorageConfiguration(_configReplicator, this, this);
-        Configuration = storageConfiguration;
         ParentProperty.AddConfigurable(this);
+        storageConfiguration = new StorageConfiguration(configReplicator, this, this);
+        CreateWorldspaceUI();
 
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"ConfigurableStorageEntity: Initialized configuration for {name}");
@@ -74,26 +71,6 @@ namespace NoLazyWorkers
     public void Deselected()
     {
       Configuration?.Deselected();
-    }
-
-    public override void OnSpawnServer(NetworkConnection connection)
-    {
-      base.OnSpawnServer(connection);
-      SendConfigurationToClient(connection);
-    }
-
-    public override bool CanBeDestroyed(out string reason)
-    {
-      if (!base.CanBeDestroyed(out reason))
-        return false;
-
-      if (storageConfiguration != null && storageConfiguration.ShouldSave())
-      {
-        reason = "Has active configuration";
-        return false;
-      }
-
-      return true;
     }
 
     public override void DestroyItem(bool callOnServer = true)
@@ -135,7 +112,16 @@ namespace NoLazyWorkers
         WorldspaceUI = null;
       }
     }
+    public override void OnSpawnServer(NetworkConnection connection)
+    {
+      base.OnSpawnServer(connection);
+      if (!connection.IsLocalClient && Initialized)
+      {
+        SendInitToClient(connection);
+      }
 
+      SendConfigurationToClient(connection);
+    }
     public void SendConfigurationToClient(NetworkConnection conn)
     {
       if (!conn.IsHost)
@@ -171,7 +157,7 @@ namespace NoLazyWorkers
         ItemField storageItem = new ItemField(this)
         {
           CanSelectNone = true,
-          Options = NetworkSingleton<ProductManager>.Instance?.ValidMixIngredients.Cast<ItemDefinition>().ToList()
+          Options = []
         };
         storageItem.onItemChanged.AddListener(item => InvokeChanged());
         StorageItems.Add(storageItem);
@@ -200,6 +186,10 @@ namespace NoLazyWorkers
     public static int GetItemFieldCount(ConfigurableStorageEntity storage)
     {
       string storageName = storage?.name?.ToLower() ?? "";
+      return GetItemFieldCount(storageName);
+    }
+    public static int GetItemFieldCount(string storageName)
+    {
       if (storageName.Contains("safe_built")) return 8;
       if (storageName.Contains("storagerack_large")) return 8;
       if (storageName.Contains("storagerack_medium")) return 6;
@@ -211,78 +201,6 @@ namespace NoLazyWorkers
   public class StorageConfigPanel : ConfigPanel
   {
     private List<ItemFieldUI> storageItemUIs;
-
-    private static readonly Dictionary<string, ConfigPanel> StorageConfigPanelTemplates = new Dictionary<string, ConfigPanel>();
-
-    private static void InitializeStaticTemplate(string storageType, int itemFieldCount)
-    {
-      if (StorageConfigPanelTemplates.ContainsKey(storageType))
-      {
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg($"StorageConfigPanel: Template for {storageType} already initialized, skipping");
-        return;
-      }
-
-      try
-      {
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg($"StorageConfigPanel: Initializing template for {storageType} with {itemFieldCount} item fields");
-
-        // Create a base ConfigPanel GameObject
-        GameObject templateObj = new GameObject($"StorageConfigPanel_{storageType}");
-        templateObj.AddComponent<CanvasRenderer>();
-        templateObj.SetActive(false);
-
-        // Add StorageConfigPanel component
-        StorageConfigPanel configPanel = templateObj.AddComponent<StorageConfigPanel>();
-
-        // Add RectTransform for UI layout
-        RectTransform rectTransform = templateObj.GetComponent<RectTransform>();
-        if (rectTransform == null)
-        {
-          rectTransform = templateObj.AddComponent<RectTransform>();
-        }
-        rectTransform.sizeDelta = new Vector2(300, 400); // Adjust as needed
-
-        StorageConfigPanelTemplates[storageType] = configPanel;
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg($"StorageConfigPanel: Template for {storageType} initialized successfully");
-      }
-      catch (System.Exception e)
-      {
-        MelonLogger.Error($"StorageConfigPanel: Failed to initialize template for {storageType}, error: {e}");
-      }
-    }
-
-    static bool GetConfigPanelPrefab(EConfigurableType type, ref ConfigPanel __result, ManagementInterface __instance)
-    {
-      if (type == EConfigurableType.MixingStation && __instance.Configurables.Any(c => c is ConfigurableStorageEntity))
-      {
-        ConfigurableStorageEntity storageEntity = __instance.Configurables.OfType<ConfigurableStorageEntity>().FirstOrDefault();
-        if (storageEntity == null)
-        {
-          MelonLogger.Error("StorageConfigPanel: No ConfigurableStorageEntity found in Configurables");
-          return true;
-        }
-
-        string storageType = storageEntity?.name?.ToLower();
-        int itemFieldCount = StorageConfiguration.GetItemFieldCount(storageEntity);
-
-        // Initialize template if not already cached
-        InitializeStaticTemplate(storageType, itemFieldCount);
-
-        // Retrieve cached template
-        if (StorageConfigPanelTemplates.TryGetValue(storageType, out ConfigPanel template))
-        {
-          __result = template;
-          return false;
-        }
-
-        MelonLogger.Error($"StorageConfigPanel: Template for {storageType} not found after initialization");
-        return true;
-      }
-      return true;
-    }
 
     public override void Bind(List<EntityConfiguration> configs)
     {
@@ -296,67 +214,9 @@ namespace NoLazyWorkers
           MelonLogger.Error("StorageConfigPanel: Instance or GameObject is null");
           return;
         }
-
-        storageItemUIs = new List<ItemFieldUI>();
-        Transform templateTransform = NoLazyUtilities.GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "Seed");
-        if (templateTransform == null)
-        {
-          MelonLogger.Error("StorageConfigPanel: Transform template not found");
-          return;
-        }
-        ItemFieldUI templateItemFieldUI = templateTransform.GetComponentInChildren<ItemFieldUI>();
-        if (templateItemFieldUI == null)
-        {
-          MelonLogger.Error("StorageConfigPanel: ItemFieldUI template not found");
-          return;
-        }
-
-        int itemFieldCount = 4;
-        StorageConfiguration firstConfig = configs.OfType<StorageConfiguration>().FirstOrDefault();
-        if (firstConfig != null)
-        {
-          itemFieldCount = firstConfig.StorageItems.Count;
-        }
-        else
-        {
-          MelonLogger.Warning("StorageConfigPanel: No StorageConfiguration found in configs");
-        }
-
-        float initialYPosition = -135.76f;
-        float yOffset = -50f;
-
-        for (int i = 0; i < itemFieldCount; i++)
-        {
-          GameObject storageItemUIObj = UnityEngine.Object.Instantiate(templateItemFieldUI.gameObject, transform, false);
-          storageItemUIObj.name = $"StorageItemUI_{i}";
-          ItemFieldUI storageItemUI = storageItemUIObj.GetComponent<ItemFieldUI>();
-          if (storageItemUI == null)
-          {
-            MelonLogger.Error($"StorageConfigPanel: ItemFieldUI component missing on StorageItemUI_{i}");
-            continue;
-          }
-
-          if (!storageItemUIObj.GetComponent<CanvasRenderer>())
-            storageItemUIObj.AddComponent<CanvasRenderer>();
-
-          TextMeshProUGUI titleTextComponent = storageItemUIObj.GetComponentsInChildren<TextMeshProUGUI>()
-              .FirstOrDefault(t => t.gameObject.name == "Title");
-          if (titleTextComponent != null)
-            titleTextComponent.text = $"Storage Item {i + 1}";
-          else
-            MelonLogger.Warning($"StorageConfigPanel: Title TextMeshProUGUI missing on StorageItemUI_{i}");
-
-          RectTransform storageRect = storageItemUIObj.GetComponent<RectTransform>();
-          storageRect.anchoredPosition = new Vector2(0, initialYPosition + (i * yOffset));
-
-          storageItemUIs.Add(storageItemUI);
-
-          if (DebugConfig.EnableDebugLogs)
-            MelonLogger.Msg($"StorageConfigPanel: Created StorageItemUI_{i} at y-position: {storageRect.anchoredPosition.y}");
-        }
-
         foreach (StorageConfiguration config in configs.OfType<StorageConfiguration>())
         {
+          storageItemUIs = [.. config.Storage.GetComponentsInChildren<ItemFieldUI>()];
           for (int i = 0; i < config.StorageItems.Count && i < storageItemUIs.Count; i++)
           {
             storageItemUIs[i].Bind(new List<ItemField> { config.StorageItems[i] });
@@ -453,13 +313,149 @@ namespace NoLazyWorkers
   public static class StorageConfigurationExtensions
   {
     public static readonly Dictionary<ConfigurableStorageEntity, StorageConfiguration> StorageConfig = new Dictionary<ConfigurableStorageEntity, StorageConfiguration>();
+
+    private static ConfigPanel InitializeStaticTemplate(string storageType, int itemFieldCount)
+    {
+      if (ConfigurationExtensions.StorageConfigPanelTemplates.TryGetValue(storageType, out ConfigPanel template))
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"StorageConfigPanel: Template for {storageType} already initialized, skipping");
+        return template;
+      }
+
+      try
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"StorageConfigPanel: Initializing template for {storageType} with {itemFieldCount} item fields");
+
+        // Create a base ConfigPanel GameObject
+        Transform storageTransform = NoLazyUtilities.GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "");
+        GameObject storageObj = UnityEngine.Object.Instantiate(storageTransform.gameObject);
+        storageObj.name = storageType;
+        storageObj.AddComponent<CanvasRenderer>();
+        // Add StorageConfigPanel component
+        var defaultScript = storageObj.GetComponent<PotConfigPanel>();
+        if (defaultScript == null)
+          return null;
+        UnityEngine.Object.Destroy(defaultScript);
+        StorageConfigPanel configPanel = storageObj.AddComponent<StorageConfigPanel>();
+        if (configPanel == null)
+        {
+          MelonLogger.Error("StorageConfigPanel: configPanel template not found");
+          return null;
+        }
+        Transform itemFieldUITransform = storageTransform.Find("Seed");
+        if (itemFieldUITransform == null)
+        {
+          MelonLogger.Error("StorageConfigPanel: itemFieldUITransform template not found");
+          return null;
+        }
+
+        // clean template
+        var part = storageTransform.Find("Seed");
+        if (part == null)
+          return null;
+        RectTransform partRect = part.GetComponent<RectTransform>();
+        var initialYPosition = partRect.anchoredPosition.y;
+        UnityEngine.Object.Destroy(part);
+        part = storageTransform.Find("Additive1");
+        if (part == null)
+          return null;
+        partRect = part.GetComponent<RectTransform>();
+        var yOffset = initialYPosition - partRect.anchoredPosition.y;
+        UnityEngine.Object.Destroy(part);
+        part = storageTransform.Find("Additive2");
+        if (part == null)
+          return null;
+        UnityEngine.Object.Destroy(part);
+        part = storageTransform.Find("Additive3");
+        if (part == null)
+          return null;
+        UnityEngine.Object.Destroy(part);
+        part = storageTransform.Find("Botanist");
+        if (part == null)
+          return null;
+        UnityEngine.Object.Destroy(part);
+        part = storageTransform.Find("ObjectFieldUI");
+        if (part == null)
+          return null;
+        UnityEngine.Object.Destroy(part);
+
+        for (int i = 0; i < itemFieldCount; i++)
+        {
+          GameObject itemFieldUIObj = UnityEngine.Object.Instantiate(itemFieldUITransform.gameObject, storageTransform, false);
+          itemFieldUIObj.name = $"StorageItemUI_{i}";
+
+          if (!itemFieldUIObj.GetComponent<CanvasRenderer>())
+            itemFieldUIObj.AddComponent<CanvasRenderer>();
+
+          TextMeshProUGUI titleTextComponent = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+              .FirstOrDefault(t => t.gameObject.name == "Title");
+          if (titleTextComponent != null)
+            titleTextComponent.text = $"Storage Item {i + 1}";
+          else
+            MelonLogger.Warning($"StorageConfigPanel: Title TextMeshProUGUI missing on StorageItemUI_{i}");
+
+          RectTransform storageRect = itemFieldUIObj.GetComponent<RectTransform>();
+          storageRect.anchoredPosition = new Vector2(storageRect.anchoredPosition.x, initialYPosition + (i * yOffset));
+
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Msg($"StorageConfigPanel: Created StorageItemUI_{i} at y-position: {storageRect.anchoredPosition.y}");
+        }
+        ConfigurationExtensions.StorageConfigPanelTemplates[storageType] = configPanel;
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"StorageConfigPanel: Template for {storageType} initialized successfully");
+        return configPanel;
+      }
+      catch (System.Exception e)
+      {
+        MelonLogger.Error($"StorageConfigPanel: Failed to initialize template for {storageType}, error: {e}");
+        return null;
+      }
+    }
+
+    public static ConfigPanel SetupConfigPanel(GameObject storage)
+    {
+      if (storage == null)
+      {
+        MelonLogger.Error("StorageConfigPanel: storage is null");
+        return null;
+      }
+      PlaceableStorageEntity defaultScript = storage.GetComponent<PlaceableStorageEntity>();
+      if (defaultScript == null)
+      {
+        MelonLogger.Error("StorageConfigPanel: defaultScript is null");
+        return null;
+      }
+      ConfigurableStorageEntity newComponent = storage.AddComponent<ConfigurableStorageEntity>();
+      if (newComponent == null)
+      {
+        MelonLogger.Error("StorageConfigPanel: newComponent is null");
+        return null;
+      }
+      // duplicate all settings from defaultscript.gameObject to newComponent
+      UnityEngine.Object.Destroy(defaultScript);
+      string storageType = storage?.name?.ToLower();
+      return InitializeStaticTemplate(storageType, StorageConfiguration.GetItemFieldCount(storageType));
+    }
+
+    public static ConfigPanel GetConfigPanel(string storageType)
+    {
+      // Retrieve cached template
+      if (ConfigurationExtensions.StorageConfigPanelTemplates.TryGetValue(storageType, out ConfigPanel template))
+      {
+        return template;
+      }
+      MelonLogger.Error($"StorageConfigPanel: Template for {storageType} not found after initialization");
+      return InitializeStaticTemplate(storageType, StorageConfiguration.GetItemFieldCount(storageType));
+    }
   }
 
   public class StoragePreset : Preset
   {
     private static StoragePreset DefaultPresetInstance;
-
-    public ItemList Items { get; set; }
+    public List<ItemList> StorageItems { get; set; }
+    public int ItemFieldCount { get; set; }
 
     public override Preset GetCopy()
     {
@@ -473,15 +469,35 @@ namespace NoLazyWorkers
       base.CopyTo(other);
       if (other is StoragePreset targetPreset)
       {
-        Items.CopyTo(targetPreset.Items);
+        targetPreset.StorageItems = new List<ItemList>();
+        foreach (var item in StorageItems)
+        {
+          var newItem = new ItemList(item.Name, new List<string>(item.OptionList), false, true)
+          {
+            All = item.All,
+            None = item.None
+          };
+          targetPreset.StorageItems.Add(newItem);
+        }
+        targetPreset.ItemFieldCount = ItemFieldCount;
       }
     }
 
     public override void InitializeOptions()
     {
-      Items = new ItemList("Mixer", NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.ToArray().Select(item => item.ID).ToList(), true, true);
-      Items.All = false;
-      Items.None = true;
+      StorageItems = new List<ItemList>();
+      ItemFieldCount = 4;
+      List<string> ingredients = [];
+
+      for (int i = 0; i < ItemFieldCount; i++)
+      {
+        var itemList = new ItemList($"Storage Item {i + 1}", ingredients, true, true)
+        {
+          All = false,
+          None = true
+        };
+        StorageItems.Add(itemList);
+      }
     }
 
     public static StoragePreset GetDefaultPreset()
@@ -491,7 +507,7 @@ namespace NoLazyWorkers
         DefaultPresetInstance = new StoragePreset
         {
           PresetName = "Default",
-          ObjectType = (ManageableObjectType)100,
+          ObjectType = (ManageableObjectType)200,
           PresetColor = new Color32(180, 180, 180, 255)
         };
         DefaultPresetInstance.InitializeOptions();
@@ -517,19 +533,28 @@ namespace NoLazyWorkers
     public GenericOptionUI StorageItemUI_5 { get; set; }
     public GenericOptionUI StorageItemUI_6 { get; set; }
     public GenericOptionUI StorageItemUI_7 { get; set; }
-    private StoragePreset castedPreset { get; set; }
+
+    private StoragePreset castedPreset;
+    private List<GenericOptionUI> storageItemUIs;
 
     public override void Awake()
     {
       base.Awake();
-      StorageItemUI_0.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_1.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_2.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_3.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_4.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_5.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_6.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
-      StorageItemUI_7.Button.onClick.AddListener(new UnityAction(StorageItemUIClicked));
+      storageItemUIs = new List<GenericOptionUI>
+            {
+                StorageItemUI_0, StorageItemUI_1, StorageItemUI_2, StorageItemUI_3,
+                StorageItemUI_4, StorageItemUI_5, StorageItemUI_6, StorageItemUI_7
+            };
+
+      // Add click listeners with index to identify which UI was clicked
+      for (int i = 0; i < storageItemUIs.Count; i++)
+      {
+        if (storageItemUIs[i] != null && storageItemUIs[i].Button != null)
+        {
+          int index = i; // Capture index in closure
+          storageItemUIs[i].Button.onClick.AddListener(() => StorageItemUIClicked(index));
+        }
+      }
     }
 
     protected virtual void Update()
@@ -549,35 +574,48 @@ namespace NoLazyWorkers
 
     private void UpdateUI()
     {
-      StorageItemUI_0.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_1.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_2.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_3.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_4.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_5.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_6.ValueLabel.text = castedPreset.Items.GetDisplayString();
-      StorageItemUI_7.ValueLabel.text = castedPreset.Items.GetDisplayString();
-    }
+      if (castedPreset == null || castedPreset.StorageItems == null)
+        return;
 
-    private void StorageItemUIClicked()
-    {
-      castedPreset.Items = new ItemList("every item that can be stored in a shelf by group", [], false, true);
-      Singleton<ItemSetterScreen>.Instance.Open(castedPreset.Items);
-    }
-  }
-
-  [HarmonyPatch(typeof(Preset), "GetDefault")]
-  public class PresetPatch
-  {
-    static bool Prefix(ManageableObjectType type, ref Preset __result)
-    {
-      if (type == (ManageableObjectType)100)
+      for (int i = 0; i < storageItemUIs.Count; i++)
       {
-        __result = StoragePreset.GetDefaultPreset();
-        return false;
+        if (storageItemUIs[i] != null && i < castedPreset.StorageItems.Count)
+        {
+          storageItemUIs[i].ValueLabel.text = castedPreset.StorageItems[i].GetDisplayString();
+          storageItemUIs[i].gameObject.SetActive(true);
+        }
+        else if (storageItemUIs[i] != null)
+        {
+          storageItemUIs[i].gameObject.SetActive(false); // Hide unused UIs
+        }
       }
-      return true;
+    }
+
+    private void StorageItemUIClicked(int index)
+    {
+      if (castedPreset == null || index >= castedPreset.StorageItems.Count)
+      {
+        MelonLogger.Error($"StoragePresetEditScreen: Invalid click index {index} or null preset");
+        return;
+      }
+
+      var itemList = castedPreset.StorageItems[index];
+      itemList.OptionList = GetAllStorableItems();
+      Singleton<ItemSetterScreen>.Instance.Open(itemList);
+    }
+
+    [HarmonyPatch(typeof(Preset), "GetDefault")]
+    public class PresetPatch
+    {
+      static bool Prefix(ManageableObjectType type, ref Preset __result)
+      {
+        if (type == (ManageableObjectType)200)
+        {
+          __result = StoragePreset.GetDefaultPreset();
+          return false;
+        }
+        return true;
+      }
     }
   }
-
 }

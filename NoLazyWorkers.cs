@@ -45,6 +45,7 @@ namespace NoLazyWorkers
 
   public class NoLazyWorkers : MelonMod
   {
+    private static bool storageConfigPanel;
     public override void OnInitializeMelon()
     {
       try
@@ -55,6 +56,23 @@ namespace NoLazyWorkers
       catch (Exception e)
       {
         MelonLogger.Error($"Failed to initialize NoLazyWorkers: {e}");
+      }
+    }
+
+    public override void OnSceneWasLoaded(int buildIndex, string sceneName)
+    {
+      if (!storageConfigPanel)
+      {
+        GameObject prefab;
+        List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
+        foreach (string str in strings)
+        {
+          prefab = (GameObject)Resources.Load(str, typeof(GameObject));
+          if (StorageConfigurationExtensions.SetupConfigPanel(prefab) != null)
+            storageConfigPanel = true;
+        }
+        if (!storageConfigPanel)
+          MelonLogger.Warning("not found");
       }
     }
 
@@ -87,6 +105,8 @@ namespace NoLazyWorkers
     public static Dictionary<MixingStation, List<MixingRoute>> MixingRoutes = [];
     public static Dictionary<NPC, ObjectField> NPCSupply = [];
     public static Dictionary<NPC, EntityConfiguration> NPCConfig = [];
+    public static readonly Dictionary<string, ConfigPanel> StorageConfigPanelTemplates = new Dictionary<string, ConfigPanel>();
+
     private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
     private static readonly float debounceTime = 0.2f;
 
@@ -674,20 +694,25 @@ namespace NoLazyWorkers
         tempPanel.Bind(configs);
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
-
-        Transform uiTemplate = tempPanel.transform.Find(childPath);
-        if (uiTemplate == null)
+        if (childPath != "")
         {
-          MelonLogger.Error($"Failed to find {childPath} in ConfigPanel for {configType}");
-        }
-        else if (DebugConfig.EnableDebugLogs)
-        {
-          MelonLogger.Msg($"Successfully retrieved {childPath} from ConfigPanel for {configType}");
-        }
+          Transform uiTemplate = tempPanel.transform.Find(childPath);
+          if (uiTemplate == null)
+          {
+            MelonLogger.Error($"Failed to find {childPath} in ConfigPanel for {configType}");
+          }
+          else if (DebugConfig.EnableDebugLogs)
+          {
+            MelonLogger.Msg($"Successfully retrieved {childPath} from ConfigPanel for {configType}");
+          }
 
+          UnityEngine.Object.Destroy(tempPanelObj);
+          UnityEngine.Object.Destroy(dummyEntity);
+          return uiTemplate;
+        }
         UnityEngine.Object.Destroy(tempPanelObj);
         UnityEngine.Object.Destroy(dummyEntity);
-        return uiTemplate;
+        return tempPanel.transform;
       }
       catch (Exception e)
       {
