@@ -856,23 +856,27 @@ namespace NoLazyWorkers.Chemists
           MelonLogger.Msg($"MixingStationLoaderPatch: Processing Postfix for mainPath: {mainPath}");
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) || gridItem == null)
         {
-          MelonLogger.Warning($"MixingStationLoaderPatch: No GridItem found for mainPath: {mainPath}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Warning($"MixingStationLoaderPatch: No GridItem found for mainPath: {mainPath}");
           return;
         }
         if (gridItem is not MixingStation station)
         {
-          MelonLogger.Warning($"MixingStationLoaderPatch: GridItem is not a MixingStation for mainPath: {mainPath}, type: {gridItem.GetType().Name}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Warning($"MixingStationLoaderPatch: GridItem is not a MixingStation for mainPath: {mainPath}, type: {gridItem.GetType().Name}");
           return;
         }
         string configPath = Path.Combine(mainPath, "Configuration.json");
         if (!File.Exists(configPath))
         {
-          MelonLogger.Warning($"MixingStationLoaderPatch: No Configuration.json found at: {configPath}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Warning($"MixingStationLoaderPatch: No Configuration.json found at: {configPath}");
           return;
         }
         if (!new Loader().TryLoadFile(mainPath, "Configuration", out string text))
         {
-          MelonLogger.Warning($"MixingStationLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+            MelonLogger.Warning($"MixingStationLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
           return;
         }
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
