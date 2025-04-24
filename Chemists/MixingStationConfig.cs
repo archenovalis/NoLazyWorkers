@@ -81,10 +81,10 @@ namespace NoLazyWorkers.Chemists
           return;
         }
         MixingStation station = mixerConfig.station;
-        // Check if mixerConfig is registered
+        // Check if station is registered
         if (!MixingSupply.ContainsKey(station))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"SourceChanged(MixingStation): MixerSupply does not contain key for MixerConfig: {mixerConfig}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"SourceChanged(MixingStation): MixerSupply does not contain key for station: {station}");
           return;
         }
         if (!MixingSourceRoute.ContainsKey(station))
@@ -149,14 +149,9 @@ namespace NoLazyWorkers.Chemists
         }
       }
     }
+
     public static void InitializeStaticTemplate(RouteListFieldUI routeListTemplate)
     {
-      if (MixingStationExtensions.MixingRouteListTemplate != null)
-      {
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixingRouteListTemplate already initialized, skipping");
-        return;
-      }
       if (routeListTemplate == null)
       {
         MelonLogger.Error("MixingStationConfigPanelBindPatch: routeListTemplate is null");
@@ -445,53 +440,145 @@ namespace NoLazyWorkers.Chemists
     public RectTransform MultiEditBlocker;
     public Button AddButton;
     public static readonly int MaxRoutes = 7;
-
-    private List<MixingRoute> Routes;
-    private MixingStationConfiguration Config;
+    private List<List<MixingRoute>> RoutesLists; // List of route lists for each configuration
+    private List<MixingStationConfiguration> Configs; // Corresponding configurations
     private UnityAction OnChanged;
 
     private void Start()
     {
+      if (MixingStationExtensions.MixingRouteListTemplate != null)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("MixingStationConfigPanelBindPatch: MixingRouteListTemplate already initialized, skipping");
+      }
+      else
+      {
+        // Retrieve and initialize the template
+        RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
+            EConfigurableType.Packager,
+            panel => panel.GetComponentInChildren<RouteListFieldUI>());
+        if (routeListTemplate == null)
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+            MelonLogger.Error("OnSceneWasLoaded: Failed to retrieve RouteListFieldUI template");
+        }
+        MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+          MelonLogger.Warning("OnSceneWasLoaded: SetupConfigPanelsComplete failed");
+        else if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+          MelonLogger.Warning("OnSceneWasLoaded: SetupConfigPanelsComplete success");
+      }
+
       FieldLabel = transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
       if (FieldLabel != null) FieldLabel.text = FieldText;
       MultiEditBlocker = transform.Find("Blocker")?.GetComponent<RectTransform>();
       MultiEditBlocker?.gameObject.SetActive(false);
       AddButton = transform.Find("Contents/AddNew")?.GetComponent<Button>();
       if (AddButton != null) AddButton.onClick.AddListener(AddClicked);
+
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg("MixingRouteListFieldUI: Start completed, awaiting Bind");
+    }
+
+    public void Bind(List<List<MixingRoute>> routesLists, List<MixingStationConfiguration> configs = null, UnityAction onChangedCallback = null)
+    {
+      RoutesLists = routesLists?.Select(list => list ?? new List<MixingRoute>()).ToList() ?? new List<List<MixingRoute>>();
+      Configs = configs ?? new List<MixingStationConfiguration>();
+      OnChanged = onChangedCallback;
+
+      // Initialize RouteEntries
       RouteEntries = transform.Find("Contents").GetComponentsInChildren<MixingRouteEntryUI>(true);
+      if (RouteEntries == null || RouteEntries.Length == 0)
+      {
+        MelonLogger.Error("MixingRouteListFieldUI: No RouteEntries found in Contents");
+        return;
+      }
+
+      // Set up onDeleteClicked listeners
       for (int i = 0; i < RouteEntries.Length; i++)
       {
         int index = i;
+        RouteEntries[i].onDeleteClicked.RemoveAllListeners();
         RouteEntries[i].onDeleteClicked.AddListener(() => EntryDeleteClicked(index));
       }
-      Refresh();
-    }
 
-    public void Bind(MixingStationConfiguration config, List<MixingRoute> routes, UnityAction onChangedCallback)
-    {
-      Config = config;
-      Routes = routes ?? new List<MixingRoute>();
-      OnChanged = onChangedCallback;
+      // Set up change listeners for each MixingRoute
+      foreach (var routes in RoutesLists)
+      {
+        foreach (var route in routes)
+        {
+          route.Product.onItemChanged.RemoveAllListeners();
+          route.MixerItem.onItemChanged.RemoveAllListeners();
+          route.Product.onItemChanged.AddListener(item => Refresh());
+          route.MixerItem.onItemChanged.AddListener(item => Refresh());
+        }
+      }
+
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteListFieldUI: Bind completed, RoutesLists count={RoutesLists.Count}, RouteEntries count={RouteEntries.Length}");
       Refresh();
     }
 
     private void Refresh()
     {
+      if (RoutesLists == null || RoutesLists.Count == 0)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning("MixingRouteListFieldUI: Refresh skipped due to null or empty RoutesLists");
+        for (int i = 0; i < RouteEntries.Length; i++)
+        {
+          RouteEntries[i].gameObject.SetActive(false);
+        }
+        if (AddButton != null)
+          AddButton.gameObject.SetActive(false);
+        return;
+      }
+
+      // Determine the maximum number of routes across all configurations
+      int maxRouteCount = RoutesLists.Max(list => list.Count);
+
+      // Bind RouteEntries to the corresponding MixingRoute from each configuration
       for (int i = 0; i < RouteEntries.Length; i++)
       {
-        if (i < Routes.Count)
+        if (i < maxRouteCount)
         {
           RouteEntries[i].gameObject.SetActive(true);
-          RouteEntries[i].Bind(Config, Routes[i]);
+
+          // For multi-selection, bind to the first configuration's route if available
+          // If configs differ, UI will show the first valid route or a placeholder
+          MixingRoute routeToBind = null;
+          MixingStationConfiguration configToBind = null;
+          for (int j = 0; j < RoutesLists.Count; j++)
+          {
+            if (i < RoutesLists[j].Count)
+            {
+              routeToBind = RoutesLists[j][i];
+              configToBind = Configs.ElementAtOrDefault(j);
+              break; // Use the first valid route
+            }
+          }
+
+          if (routeToBind != null && configToBind != null)
+          {
+            RouteEntries[i].Bind(configToBind, routeToBind);
+          }
+          else
+          {
+            // Disable entry if no valid route is available
+            RouteEntries[i].gameObject.SetActive(false);
+          }
         }
         else
         {
           RouteEntries[i].gameObject.SetActive(false);
         }
       }
+
+      // Enable AddButton only if all configurations can add more routes
       if (AddButton != null)
       {
-        AddButton.gameObject.SetActive(Routes.Count < MaxRoutes);
+        bool canAdd = RoutesLists.All(list => list.Count < MaxRoutes);
+        AddButton.gameObject.SetActive(canAdd);
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"MixingRouteListFieldUI: Refresh(): AddButton active={AddButton.gameObject.activeSelf}");
       }
@@ -499,16 +586,36 @@ namespace NoLazyWorkers.Chemists
 
     private void AddClicked()
     {
-      if (Routes.Count < MaxRoutes) Routes.Add(new MixingRoute(Config));
-      Refresh();
-      OnChanged?.Invoke();
+      if (RoutesLists.All(list => list.Count < MaxRoutes))
+      {
+        for (int i = 0; i < RoutesLists.Count; i++)
+        {
+          if (Configs.ElementAtOrDefault(i) != null)
+          {
+            RoutesLists[i].Add(new MixingRoute(Configs[i]));
+          }
+        }
+        Refresh();
+        OnChanged?.Invoke();
+      }
     }
 
     private void EntryDeleteClicked(int index)
     {
-      if (index >= 0 && index < Routes.Count) Routes.RemoveAt(index);
-      Refresh();
-      OnChanged?.Invoke();
+      bool anyRemoved = false;
+      foreach (var routes in RoutesLists)
+      {
+        if (index >= 0 && index < routes.Count)
+        {
+          routes.RemoveAt(index);
+          anyRemoved = true;
+        }
+      }
+      if (anyRemoved)
+      {
+        Refresh();
+        OnChanged?.Invoke();
+      }
     }
   }
 
@@ -524,12 +631,10 @@ namespace NoLazyWorkers.Chemists
 
     private void Awake()
     {
-      ProductButton = transform.Find("ProductIMGUI")?.GetComponent<Button>();
-      MixerButton = transform.Find("MixerItemIMGUI")?.GetComponent<Button>();
       ProductLabel = transform.Find("ProductIMGUI/Label")?.GetComponent<TextMeshProUGUI>();
       MixerLabel = transform.Find("MixerItemIMGUI/Label")?.GetComponent<TextMeshProUGUI>();
-      ProductButton?.onClick.AddListener(ProductClicked);
-      MixerButton?.onClick.AddListener(MixerClicked);
+      ProductButton = transform.Find("ProductIMGUI")?.GetComponent<Button>();
+      MixerButton = transform.Find("MixerItemIMGUI")?.GetComponent<Button>();
       transform.Find("Remove")?.GetComponent<Button>()?.onClick.AddListener(DeleteClicked);
     }
 
@@ -539,27 +644,52 @@ namespace NoLazyWorkers.Chemists
       Route = route;
       ProductLabel.text = Route.Product?.SelectedItem?.Name ?? "Product";
       MixerLabel.text = Route.MixerItem?.SelectedItem?.Name ?? "Mixer";
-      // Keep item selection listeners as they are
+
+      ProductButton?.onClick.RemoveAllListeners();
+      MixerButton?.onClick.RemoveAllListeners();
+      ProductButton?.onClick.AddListener(ProductClicked);
+      MixerButton?.onClick.AddListener(MixerClicked);
+
       Route.Product.onItemChanged.RemoveAllListeners();
+      Route.MixerItem.onItemChanged.RemoveAllListeners();
       Route.Product.onItemChanged.AddListener(item =>
       {
         ProductLabel.text = item?.Name ?? "Product";
         ConfigurationExtensions.InvokeChanged(Config);
       });
-      Route.MixerItem.onItemChanged.RemoveAllListeners();
       Route.MixerItem.onItemChanged.AddListener(item =>
       {
         MixerLabel.text = item?.Name ?? "Mixer";
         ConfigurationExtensions.InvokeChanged(Config);
       });
+
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteEntryUI: Bound Route={Route}, Config={Config}");
     }
 
     public void ProductClicked()
     {
+      if (Route == null || Config == null)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning("MixingRouteEntryUI: ProductClicked ignored due to null Route or Config");
+        return;
+      }
       Route.Product.Options = [.. ProductManager.FavouritedProducts.Cast<ItemDefinition>()];
       OpenItemSelectorScreen(Route.Product, "Favorites", ProductLabel);
     }
-    public void MixerClicked() { OpenItemSelectorScreen(Route.MixerItem, "Mixers", MixerLabel); }
+
+    public void MixerClicked()
+    {
+      if (Route == null || Config == null)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning("MixingRouteEntryUI: MixerClicked ignored due to null Route or Config");
+        return;
+      }
+      OpenItemSelectorScreen(Route.MixerItem, "Mixers", MixerLabel);
+    }
+
     public void DeleteClicked() { onDeleteClicked.Invoke(); }
 
     private void OpenItemSelectorScreen(ItemField itemField, string fieldName, TextMeshProUGUI label)
@@ -623,13 +753,12 @@ namespace NoLazyWorkers.Chemists
         // Clean up existing UI elements
         foreach (Transform child in __instance.transform)
         {
-          if (child.name.Contains("SupplyUI") || child.name.Contains("RouteListFieldUI"))
+          if (child.name == "SupplyUI" || child.name == "RouteListFieldUI")
             UnityEngine.Object.Destroy(child.gameObject);
         }
 
         if (MixingStationExtensions.MixingRouteListTemplate == null)
         {
-          // Retrieve and initialize the template
           RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
               EConfigurableType.Packager,
               panel => panel.GetComponentInChildren<RouteListFieldUI>());
@@ -641,19 +770,38 @@ namespace NoLazyWorkers.Chemists
           MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
         }
 
+        // Instantiate UI objects
+        GameObject supplyUIObj = UnityEngine.Object.Instantiate(__instance.DestinationUI.gameObject, __instance.transform, false);
+        supplyUIObj.name = $"SupplyUI";
+        ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
+        GameObject routeListUIObj = UnityEngine.Object.Instantiate(MixingStationExtensions.MixingRouteListTemplate, __instance.transform, false);
+        routeListUIObj.name = $"RouteListFieldUI";
+        routeListUIObj.SetActive(true);
+        var customRouteListUI = routeListUIObj.GetComponent<MixingRouteListFieldUI>();
+
+        List<ObjectField> supplyList = new();
+        List<List<MixingRoute>> routesLists = new();
+        List<MixingStationConfiguration> configList = new();
+
+        // Bind all selected stations
         foreach (var config in configs.OfType<MixingStationConfiguration>())
         {
           // Supply UI setup
-          GameObject supplyUIObj = UnityEngine.Object.Instantiate(__instance.DestinationUI.gameObject, __instance.transform, false);
-          supplyUIObj.name = $"SupplyUI_{config.station.GetInstanceID()}";
-          ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
           foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
           {
             if (child.gameObject.name == "Title") child.text = "Supplies";
             else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
           }
           if (MixingStationExtensions.MixingSupply.TryGetValue(config.station, out ObjectField supply))
-            supplyUI.Bind([supply]);
+          {
+            if (DebugConfig.EnableDebugLogs)
+              MelonLogger.Msg($"PotConfigPanelBindPatch: Before Bind, pot: {config.station.GUID}, SelectedObject: {supply.SelectedObject?.name ?? "null"}");
+            supplyList.Add(supply);
+          }
+          else
+          {
+            MelonLogger.Warning($"PotConfigPanelBindPatch: No supply found for PotConfiguration, pot: {config.station.GUID}");
+          }
 
           // Destination UI update
           foreach (TextMeshProUGUI child in __instance.DestinationUI.GetComponentsInChildren<TextMeshProUGUI>())
@@ -662,24 +810,25 @@ namespace NoLazyWorkers.Chemists
             else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
           }
 
-          // Instantiate and bind MixingRouteListFieldUI
-          GameObject routeListUIObj = UnityEngine.Object.Instantiate(MixingStationExtensions.MixingRouteListTemplate, __instance.transform, false);
-          routeListUIObj.name = $"RouteListFieldUI_{config.station.GetInstanceID()}";
-          routeListUIObj.SetActive(true);
-          var customRouteListUI = routeListUIObj.GetComponent<MixingRouteListFieldUI>();
+          // Collect routes and configurations
           if (!MixingStationExtensions.MixingRoutes.ContainsKey(config.station))
             MixingStationExtensions.MixingRoutes[config.station] = [];
           var routes = MixingStationExtensions.MixingRoutes[config.station];
-          customRouteListUI.Bind(config, routes, () => ConfigurationExtensions.InvokeChanged(config));
-
-          // Position adjustments
-          RectTransform supplyRect = supplyUIObj.GetComponent<RectTransform>();
-          supplyRect.anchoredPosition = new Vector2(supplyRect.anchoredPosition.x, -135.76f);
-          RectTransform destRect = __instance.DestinationUI.GetComponent<RectTransform>();
-          destRect.anchoredPosition = new Vector2(destRect.anchoredPosition.x, -195.76f);
-          RectTransform routeListRect = routeListUIObj.GetComponent<RectTransform>();
-          routeListRect.anchoredPosition = new Vector2(routeListRect.anchoredPosition.x, -290.76f);
+          routesLists.Add(routes);
+          configList.Add(config);
         }
+
+        // Bind UI components
+        customRouteListUI.Bind(routesLists, configList, () => configs.ForEach(c => ConfigurationExtensions.InvokeChanged(c)));
+        supplyUI.Bind(supplyList);
+
+        // Position adjustments
+        RectTransform supplyRect = supplyUIObj.GetComponent<RectTransform>();
+        supplyRect.anchoredPosition = new Vector2(supplyRect.anchoredPosition.x, -135.76f);
+        RectTransform destRect = __instance.DestinationUI.GetComponent<RectTransform>();
+        destRect.anchoredPosition = new Vector2(destRect.anchoredPosition.x, -195.76f);
+        RectTransform routeListRect = routeListUIObj.GetComponent<RectTransform>();
+        routeListRect.anchoredPosition = new Vector2(routeListRect.anchoredPosition.x, -290.76f);
       }
       catch (Exception e)
       {

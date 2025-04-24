@@ -94,7 +94,7 @@ namespace NoLazyWorkers.Chemists
               } */
               hasSufficientItems = HasSufficientItems(__instance, threshold, targetItem);
               canRestock = station.OutputSlot.Quantity == 0 &&
-                           station.ProductSlot.Quantity >= threshold - 1 &&
+                           station.ProductSlot.Quantity >= threshold &&
                            hasSufficientItems;
             }
             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
@@ -156,7 +156,7 @@ namespace NoLazyWorkers.Chemists
 
     public static bool HasSufficientItems(Chemist chemist, float threshold, ItemInstance item)
     {
-      return NoLazyUtilities.GetAmountInInventoryAndSupply(chemist, item?.definition) > threshold;
+      return NoLazyUtilities.GetAmountInInventoryAndSupply(chemist, item?.definition) >= threshold;
     }
   }
 

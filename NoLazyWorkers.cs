@@ -22,14 +22,14 @@ using System.Reflection;
 using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.2", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.3", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = true; // true enables Msg and Warning logs
+    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
     public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
     public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
     public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
@@ -42,13 +42,13 @@ namespace NoLazyWorkers
     public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.1.2";
+    public const string Version = "1.1.3";
     public const string DownloadLink = null;
   }
 
   public class NoLazyWorkersMod : MelonMod
   {
-    private static bool SetupConfigPanels;
+    private static bool SetupConfigPanelsComplete;
     public override void OnInitializeMelon()
     {
       try
@@ -64,38 +64,26 @@ namespace NoLazyWorkers
 
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
-      if (!SetupConfigPanels)
+      if (!SetupConfigPanelsComplete)
       {
-        /*         GameObject prefab;
-                List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
-                foreach (string str in strings)
-                {
-                  prefab = (GameObject)Resources.Load(str, typeof(GameObject));
-                  if (prefab == null)
-                    MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
-                  if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
-                    SetupConfigPanels = true;
-                } */
-
-        // Retrieve and initialize the template
-        RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
-            EConfigurableType.Packager,
-            panel => panel.GetComponentInChildren<RouteListFieldUI>());
-        if (routeListTemplate == null)
+        /*         
+        GameObject prefab;
+        List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
+        foreach (string str in strings)
         {
-          MelonLogger.Error("OnSceneWasLoaded: Failed to retrieve RouteListFieldUI template");
-          return;
-        }
-        NoLazyWorkers.Chemists.MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
-        if (NoLazyWorkers.Chemists.MixingStationExtensions.MixingRouteListTemplate != null)
-          SetupConfigPanels = true;
-        if (!SetupConfigPanels)
-          MelonLogger.Warning("not found");
+          prefab = (GameObject)Resources.Load(str, typeof(GameObject));
+          if (prefab == null && (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs))
+            MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
+          if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
+            SetupConfigPanels = true;
+        } 
+        */
       }
     }
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
+      SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
       ConfigurationExtensions.NPCConfig.Clear();
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
@@ -835,6 +823,30 @@ namespace NoLazyWorkers
       if (DebugConfig.EnableDebugLogs)
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
       return true;
+    }
+    static void Postfix(ConfigurationReplicator __instance, int fieldIndex, string value)
+    {
+      try
+      {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+          MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
+        if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
+        {
+          if (PotExtensions.PotSupply.TryGetValue(potConfig.Pot, out ObjectField supply))
+          {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+              MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
+          }
+          else
+          {
+            MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
+          }
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}");
+      }
     }
   }
 
