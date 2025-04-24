@@ -11,7 +11,6 @@ using UnityEngine;
 
 namespace NoLazyWorkers.Botanists
 {
-
   public static class BotanistExtensions
   {
   }

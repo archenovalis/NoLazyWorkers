@@ -94,7 +94,7 @@ namespace NoLazyWorkers.Chemists
               } */
               hasSufficientItems = HasSufficientItems(__instance, threshold, targetItem);
               canRestock = station.OutputSlot.Quantity == 0 &&
-                           station.ProductSlot.Quantity >= threshold &&
+                           station.ProductSlot.Quantity >= threshold - 1 &&
                            hasSufficientItems;
             }
             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)

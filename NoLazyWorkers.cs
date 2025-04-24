@@ -18,18 +18,18 @@ using UnityEngine.UI;
 using System.Collections;
 using System.Reflection;
 
-using NoLazyWorkers.Handlers;
+//using NoLazyWorkers.Handlers;
 using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.1", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.2", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
+    public static bool EnableDebugLogs = true; // true enables Msg and Warning logs
     public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
     public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
     public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
@@ -42,7 +42,7 @@ namespace NoLazyWorkers
     public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.1.0";
+    public const string Version = "1.1.2";
     public const string DownloadLink = null;
   }
 
@@ -66,16 +66,16 @@ namespace NoLazyWorkers
     {
       if (!SetupConfigPanels)
       {
-        GameObject prefab;
-        List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
-        foreach (string str in strings)
-        {
-          prefab = (GameObject)Resources.Load(str, typeof(GameObject));
-          if (prefab == null)
-            MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
-          if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
-            SetupConfigPanels = true;
-        }
+        /*         GameObject prefab;
+                List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
+                foreach (string str in strings)
+                {
+                  prefab = (GameObject)Resources.Load(str, typeof(GameObject));
+                  if (prefab == null)
+                    MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
+                  if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
+                    SetupConfigPanels = true;
+                } */
 
         // Retrieve and initialize the template
         RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
@@ -764,7 +764,7 @@ namespace NoLazyWorkers
           if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
           PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
-          StorageExtensions.RestoreConfigurations();
+          //StorageExtensions.RestoreConfigurations();
         });
       }
       catch (Exception e)

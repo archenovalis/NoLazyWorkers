@@ -177,6 +177,7 @@ namespace NoLazyWorkers.Botanists
         {
           try
           {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugPotLogs) MelonLogger.Msg($"PotConfigurationPatch: supply.onObjectChanged Pot: {pot.GUID} Supply: {supply.SelectedObject.GUID}");
             ConfigurationExtensions.InvokeChanged(__instance);
             PotExtensions.SourceChanged(__instance, item);
           }
@@ -235,6 +236,7 @@ namespace NoLazyWorkers.Botanists
       try
       {
         ObjectField supply = PotExtensions.PotSupply[__instance.Pot];
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotConfigurationShouldSavePatch: Pot: {__instance.Pot.GUID} Supply: {supply.SelectedObject?.GUID}"); }
         __result |= supply.SelectedObject != null;
       }
       catch (Exception e)
@@ -309,6 +311,7 @@ namespace NoLazyWorkers.Botanists
             {
               MelonLogger.Warning($"PotConfigPanelBindPatch: No supply found for PotConfiguration");
             }
+            if (DebugConfig.EnableDebugLogs) { MelonLogger.Msg($"PotConfigPanelBindPatch: Pot: {potConfig.Pot} Supply: {supply} {supply?.SelectedObject?.GUID}"); }
           }
           else
           {
@@ -336,25 +339,27 @@ namespace NoLazyWorkers.Botanists
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}"); }
         if (GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found GridItem for mainPath: {mainPath}, type: {gridItem?.GetType().Name}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found GridItem type: {gridItem?.GetType().Name}"); }
           if (gridItem is Pot pot)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot for mainPath: {mainPath}"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: GridItem is Pot"); }
             string configPath = Path.Combine(mainPath, "Configuration.json");
             if (File.Exists(configPath))
             {
               if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Found Configuration.json at: {configPath}"); }
               if (new Loader().TryLoadFile(mainPath, "Configuration", out string text))
               {
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json for mainPath: {mainPath}"); }
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Successfully loaded Configuration.json"); }
                 ExtendedPotConfigurationData configData = JsonUtility.FromJson<ExtendedPotConfigurationData>(text);
                 if (configData != null)
                 {
-                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData for mainPath: {mainPath}"); }
+                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Deserialized ExtendedPotConfigurationData"); }
                   if (configData.Supply != null)
                   {
+                    if (!PotExtensions.PotSupply.ContainsKey(pot) || PotExtensions.PotSupply[pot] is null)
+                      PotExtensions.PotSupply[pot] = new ObjectField(pot.Configuration);
                     PotExtensions.PotSupply[pot].Load(configData.Supply);
-                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data with Pot for mainPath: {mainPath}, PotSupplyData count: {PotExtensions.PotSupplyData.Count}"); }
+                    if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"PotLoaderPatch: Associated Supply data for Pot: {pot.GUID} with Supply: {configData.Supply.ObjectGUID}"); }
                   }
                   else
                   {

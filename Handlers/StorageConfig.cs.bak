@@ -598,7 +598,7 @@ namespace NoLazyWorkers.Handlers
       }
 
       var itemList = castedPreset.StorageItems[index];
-      itemList.OptionList = GetAllStorableItems();
+      //itemList.OptionList = GetAllStorableItems();
       Singleton<ItemSetterScreen>.Instance.Open(itemList);
     }
 
