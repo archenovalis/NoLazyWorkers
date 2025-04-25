@@ -332,7 +332,7 @@ namespace NoLazyWorkers_IL2CPP
       return quantity;
     }
 
-    public static Component GetComponentTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
+    public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
     {
       try
       {
@@ -397,7 +397,7 @@ namespace NoLazyWorkers_IL2CPP
           MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
 
         // Get the UI template
-        Component uiTemplate = tempPanel.transform.Find("RouteListFieldUI") ?? tempPanel.transform.FindChild("RouteListFieldUI");
+        var uiTemplate = tempPanel.transform.Find(componentStr) ?? tempPanel.transform.FindChild(componentStr);
         if (uiTemplate == null)
           MelonLogger.Error($"Failed to retrieve UI template from ConfigPanel for {configType}");
         else if (DebugConfig.EnableDebugLogs)
@@ -412,91 +412,6 @@ namespace NoLazyWorkers_IL2CPP
       catch (Exception e)
       {
         MelonLogger.Error($"Failed to get UI template from ConfigPanel for {configType}: {e}");
-        return null;
-      }
-    }
-
-    public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string childPath)
-    {
-      try
-      {
-        ManagementInterface managementInterface = ManagementInterface.Instance;
-        if (managementInterface == null)
-        {
-          MelonLogger.Error("ManagementInterface instance is null");
-          return null;
-        }
-
-        ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(configType);
-        if (configPanelPrefab == null)
-        {
-          MelonLogger.Error($"No ConfigPanel prefab found for {configType}");
-          return null;
-        }
-
-        GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
-        tempPanelObj.SetActive(false);
-        ConfigPanel tempPanel = tempPanelObj.GetComponent<ConfigPanel>();
-        if (tempPanel == null)
-        {
-          MelonLogger.Error($"Instantiated prefab for {configType} lacks ConfigPanel component");
-          UnityEngine.Object.Destroy(tempPanelObj);
-          return null;
-        }
-
-        Il2CppSystem.Collections.Generic.List<EntityConfiguration> configs = new();
-        GameObject dummyEntity = new($"Dummy{configType}");
-        EntityConfiguration config = null;
-        ConfigurationReplicator replicator = new();
-        switch (configType)
-        {
-          case EConfigurableType.Pot:
-            Pot pot = dummyEntity.AddComponent<Pot>();
-            config = new PotConfiguration(replicator, pot.Cast<IConfigurable>(), pot);
-            break;
-          case EConfigurableType.Packager:
-            Packager packager = dummyEntity.AddComponent<Packager>();
-            config = new PackagerConfiguration(replicator, packager.Cast<IConfigurable>(), packager);
-            break;
-          case EConfigurableType.MixingStation:
-            MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
-            config = new MixingStationConfiguration(replicator, mixingStation.Cast<IConfigurable>(), mixingStation);
-            break;
-          // Add other types as needed
-          default:
-            MelonLogger.Error($"Unsupported EConfigurableType: {configType}");
-            UnityEngine.Object.Destroy(tempPanelObj);
-            UnityEngine.Object.Destroy(dummyEntity);
-            return null;
-        }
-
-        configs.Add(config);
-        tempPanel.Bind(configs);
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
-        if (childPath != "")
-        {
-          Transform uiTemplate = tempPanel.transform.Find(childPath);
-          if (uiTemplate == null)
-          {
-            MelonLogger.Error($"Failed to find {childPath} in ConfigPanel for {configType}");
-          }
-          else if (DebugConfig.EnableDebugLogs)
-          {
-            MelonLogger.Msg($"Successfully retrieved {childPath} from ConfigPanel for {configType}");
-          }
-
-          UnityEngine.Object.Destroy(tempPanelObj);
-          UnityEngine.Object.Destroy(dummyEntity);
-          return uiTemplate;
-        }
-        UnityEngine.Object.Destroy(tempPanelObj);
-        UnityEngine.Object.Destroy(dummyEntity);
-        return tempPanel.transform;
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"Failed to get UI template {childPath} from ConfigPanel for {configType}: {e}");
         return null;
       }
     }
