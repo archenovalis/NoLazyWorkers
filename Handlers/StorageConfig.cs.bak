@@ -1,28 +1,30 @@
-using FishNet.Connection;
-using FishNet.Object;
+using Il2CppFishNet.Connection;
+using Il2CppFishNet.Object;
 using HarmonyLib;
 using MelonLoader;
-using ScheduleOne.DevUtilities;
-using ScheduleOne.EntityFramework;
-using ScheduleOne.ItemFramework;
-using ScheduleOne.Management;
-using ScheduleOne.Management.Presets;
-using ScheduleOne.Management.Presets.Options;
-using ScheduleOne.Management.SetterScreens;
-using ScheduleOne.Management.UI;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Datas;
-using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.UI.Management;
-using TMPro;
+using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.EntityFramework;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Management;
+using Il2CppScheduleOne.Management.Presets;
+using Il2CppScheduleOne.Management.Presets.Options;
+using Il2CppScheduleOne.Management.SetterScreens;
+using Il2CppScheduleOne.Management.UI;
+using Il2CppScheduleOne.ObjectScripts;
+using Il2CppScheduleOne.Persistence.Datas;
+using Il2CppScheduleOne.Persistence.Loaders;
+using Il2CppScheduleOne.UI.Management;
+using Il2CppTMPro;
+using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers_IL2CPP.Handlers
 {
   public static class StorageExtensions
   {
-    public static Dictionary<string, ConfigPanel> StorageConfigPanelTemplates = new Dictionary<string, ConfigPanel>();
-    public static Dictionary<ConfigurableStorageEntity, StorageConfiguration> StorageConfig = new Dictionary<ConfigurableStorageEntity, StorageConfiguration>();
+    public static Dictionary<string, ConfigPanel> StorageConfigPanelTemplates = [];
+    public static Dictionary<ConfigurableStorageEntity, StorageConfiguration> StorageConfig = [];
 
     private static ConfigPanel InitializeStaticTemplate(string storageType, int itemFieldCount)
     {
@@ -291,7 +293,7 @@ namespace NoLazyWorkers.Handlers
         : base(replicator, configurable)
     {
       Storage = storage;
-      StorageItems = new List<ItemField>();
+      StorageItems = [];
 
       itemFieldCount = GetItemFieldCount(storage);
       // todo: use the template here?
@@ -450,7 +452,7 @@ namespace NoLazyWorkers.Handlers
 
     public ExtendedStorageConfigurationData()
     {
-      StorageItems = new List<ItemFieldData>();
+      StorageItems = [];
     }
   }
 
@@ -472,7 +474,7 @@ namespace NoLazyWorkers.Handlers
       base.CopyTo(other);
       if (other is StoragePreset targetPreset)
       {
-        targetPreset.StorageItems = new List<ItemList>();
+        targetPreset.StorageItems = [];
         foreach (var item in StorageItems)
         {
           var newItem = new ItemList(item.Name, new List<string>(item.OptionList), false, true)
@@ -488,7 +490,7 @@ namespace NoLazyWorkers.Handlers
 
     public override void InitializeOptions()
     {
-      StorageItems = new List<ItemList>();
+      StorageItems = [];
       ItemFieldCount = 4;
       List<string> ingredients = [];
 
@@ -543,11 +545,11 @@ namespace NoLazyWorkers.Handlers
     public override void Awake()
     {
       base.Awake();
-      storageItemUIs = new List<GenericOptionUI>
-            {
+      storageItemUIs =
+            [
                 StorageItemUI_0, StorageItemUI_1, StorageItemUI_2, StorageItemUI_3,
                 StorageItemUI_4, StorageItemUI_5, StorageItemUI_6, StorageItemUI_7
-            };
+            ];
 
       // Add click listeners with index to identify which UI was clicked
       for (int i = 0; i < storageItemUIs.Count; i++)

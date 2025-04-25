@@ -1,15 +1,15 @@
 using HarmonyLib;
 using MelonLoader;
-using ScheduleOne.Employees;
-using ScheduleOne.ItemFramework;
-using ScheduleOne.Management;
-using ScheduleOne.NPCs.Behaviour;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Quests;
-using ScheduleOne.UI.Management;
+using Il2CppScheduleOne.Employees;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Management;
+using Il2CppScheduleOne.NPCs.Behaviour;
+using Il2CppScheduleOne.ObjectScripts;
+using Il2CppScheduleOne.Quests;
+using Il2CppScheduleOne.UI.Management;
 using UnityEngine;
 
-namespace NoLazyWorkers.Botanists
+namespace NoLazyWorkers_IL2CPP.Botanists
 {
 
   public static class BotanistExtensions
@@ -138,13 +138,12 @@ namespace NoLazyWorkers.Botanists
             continue;
           }
           botanistConfig.Supplies.SelectedObject = potSupply.SelectedObject;
-          if (!__instance.Movement.CanGetTo(potSupply.SelectedObject as ITransitEntity))
+          if (!__instance.Movement.CanGetTo(potSupply.SelectedObject.Cast<ITransitEntity>()))
           {
             continue;
           }
 
-          List<ItemSlot> slots = new List<ItemSlot>();
-          slots.AddRange((potSupply.SelectedObject as ITransitEntity).OutputSlots);
+          List<ItemSlot> slots = [.. (IEnumerable<ItemSlot>)potSupply.SelectedObject.Cast<ITransitEntity>().OutputSlots];
           foreach (ItemSlot slot in slots)
           {
             if (slot.Quantity > 0 && ItemFilter_Dryable.IsItemDryable(slot.ItemInstance))
@@ -194,7 +193,7 @@ namespace NoLazyWorkers.Botanists
           return false;
         }
 
-        __result = botanist.Movement.CanGetTo(__instance.AssignedPot);
+        __result = botanist.Movement.CanGetTo(__instance.AssignedPot.Cast<ITransitEntity>());
         return false;
       }
       catch (Exception e)

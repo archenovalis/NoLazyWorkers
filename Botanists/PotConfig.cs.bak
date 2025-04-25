@@ -1,15 +1,17 @@
 using HarmonyLib;
 using MelonLoader;
-using ScheduleOne.EntityFramework;
-using ScheduleOne.Management;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Datas;
-using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.UI.Management;
-using TMPro;
+using Il2CppScheduleOne.EntityFramework;
+using Il2CppScheduleOne.Management;
+using Il2CppScheduleOne.ObjectScripts;
+using Il2CppScheduleOne.Persistence.Datas;
+using Il2CppScheduleOne.Persistence.Loaders;
+using Il2CppInterop.Runtime;
+using Il2CppScheduleOne.UI.Management;
+using Il2CppTMPro;
 using UnityEngine;
+using UnityEngine.Events;
 
-namespace NoLazyWorkers.Botanists
+namespace NoLazyWorkers_IL2CPP.Botanists
 {
   public static class PotExtensions
   {
@@ -49,7 +51,7 @@ namespace NoLazyWorkers.Botanists
         ObjectField Supply = PotSupply[pot];
         if (Supply.SelectedObject != null)
         {
-          SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, pot);
+          SourceRoute = new TransitRoute(Supply.SelectedObject.Cast<ITransitEntity>(), pot.Cast<ITransitEntity>());
           PotSourceRoute[pot] = SourceRoute;
           if (potConfig.IsSelected)
           {
@@ -94,7 +96,7 @@ namespace NoLazyWorkers.Botanists
         if (Supply.SelectedObject != null)
         {
           if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg($"SourceChanged(Pot): Creating new TransitRoute from {Supply.SelectedObject.name} to Pot");
-          SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, pot);
+          SourceRoute = new TransitRoute(Supply.SelectedObject.Cast<ITransitEntity>(), pot.Cast<ITransitEntity>());
           PotSourceRoute[pot] = SourceRoute;
           if (pot.Configuration.IsSelected)
           {
@@ -134,7 +136,7 @@ namespace NoLazyWorkers.Botanists
             {
               PotSupply[pot] = new ObjectField(potConfig)
               {
-                TypeRequirements = [typeof(PlaceableStorageEntity)],
+                TypeRequirements = new(),
                 DrawTransitLine = true
               };
               if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
@@ -157,11 +159,25 @@ namespace NoLazyWorkers.Botanists
 
   }
 
+
   [HarmonyPatch(typeof(PotConfiguration))]
   public class PotConfigurationPatch
   {
+    private static void SupplyOnObjectChanged(PotConfiguration __instance, Pot pot, BuildableItem item)
+    {
+      try
+      {
+        ConfigurationExtensions.InvokeChanged(__instance);
+        PotExtensions.SourceChanged(__instance, item);
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"PotConfigurationPatch: onObjectChanged failed for pot: {pot?.name ?? "null"}, error: {e}");
+      }
+    }
+
     [HarmonyPostfix]
-    [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(Pot) })]
+    [HarmonyPatch(MethodType.Constructor, [typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(Pot)])]
     static void Postfix(PotConfiguration __instance, Pot pot)
     {
       try
@@ -169,22 +185,11 @@ namespace NoLazyWorkers.Botanists
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugPotLogs) MelonLogger.Msg($"PotConfigurationPatch: Initializing for pot: {pot?.name ?? "null"}");
         ObjectField supply = new(__instance)
         {
-          TypeRequirements = new List<Type> { typeof(PlaceableStorageEntity) },
+          TypeRequirements = new(),
           DrawTransitLine = true
         };
         supply.onObjectChanged.RemoveAllListeners();
-        supply.onObjectChanged.AddListener(item =>
-        {
-          try
-          {
-            ConfigurationExtensions.InvokeChanged(__instance);
-            PotExtensions.SourceChanged(__instance, item);
-          }
-          catch (Exception e)
-          {
-            MelonLogger.Error($"PotConfigurationPatch: onObjectChanged failed for pot: {pot?.name ?? "null"}, error: {e}");
-          }
-        });
+        supply.onObjectChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<BuildableItem>>(SupplyOnObjectChanged));
         // Ensure dictionary entries are created
         if (!PotExtensions.PotSupply.ContainsKey(pot))
         {
@@ -295,7 +300,7 @@ namespace NoLazyWorkers.Botanists
         destinationRect.anchoredPosition = new Vector2(destinationRect.anchoredPosition.x, -340f);
 
         // Bind supply data
-        List<ObjectField> supplyList = new();
+        Il2CppSystem.Collections.Generic.List<ObjectField> supplyList = new();
         foreach (EntityConfiguration config in configs)
         {
           if (config is PotConfiguration potConfig)

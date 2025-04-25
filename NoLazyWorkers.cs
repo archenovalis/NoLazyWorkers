@@ -1,35 +1,36 @@
 ﻿using HarmonyLib;
 using MelonLoader;
-using ScheduleOne.Employees;
-using ScheduleOne.EntityFramework;
-using ScheduleOne.ItemFramework;
-using ScheduleOne.Management;
-using ScheduleOne.Management.SetterScreens;
-using ScheduleOne.Management.UI;
-using ScheduleOne.NPCs;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence;
-using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.Product;
-using static ScheduleOne.Registry;
-using ScheduleOne.UI.Management;
-using UnityEngine;
-using UnityEngine.UI;
+using Il2CppScheduleOne.Employees;
+using Il2CppScheduleOne.EntityFramework;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Management;
+using Il2CppScheduleOne.Management.SetterScreens;
+using Il2CppScheduleOne.Management.UI;
+using Il2CppScheduleOne.NPCs;
+using Il2CppScheduleOne.ObjectScripts;
+using Il2CppScheduleOne.Persistence;
+using Il2CppScheduleOne.Persistence.Loaders;
+using Il2CppScheduleOne.Product;
+using static Il2CppScheduleOne.Registry;
+using Il2CppInterop.Runtime;
+using Il2CppScheduleOne.UI.Management;
 using System.Collections;
 using System.Reflection;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.UI;
 
-using NoLazyWorkers.Handlers;
-using NoLazyWorkers.Chemists;
-using NoLazyWorkers.Botanists;
+using NoLazyWorkers_IL2CPP.Chemists;
+//using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.1", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.2", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
-namespace NoLazyWorkers
+namespace NoLazyWorkers_IL2CPP
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
+    public static bool EnableDebugLogs = true; // true enables Msg and Warning logs
     public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
     public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
     public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
@@ -38,64 +39,52 @@ namespace NoLazyWorkers
 
   public static class BuildInfo
   {
-    public const string Name = "NoLazyWorkers";
+    public const string Name = "NoLazyWorkers_IL2CPP";
     public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.1.0";
+    public const string Version = "1.0.2";
     public const string DownloadLink = null;
   }
 
   public class NoLazyWorkersMod : MelonMod
   {
-    private static bool SetupConfigPanels;
+    private static bool SetupConfigPanelsComplete;
     public override void OnInitializeMelon()
     {
       try
       {
         HarmonyInstance.PatchAll();
-        MelonLogger.Msg("NoLazyWorkers loaded!");
+        MelonLogger.Msg("NoLazyWorkers_IL2CPP loaded!");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to initialize NoLazyWorkers: {e}");
+        MelonLogger.Error($"Failed to initialize NoLazyWorkers_IL2CPP: {e}");
       }
     }
 
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
-      if (!SetupConfigPanels)
+      if (!SetupConfigPanelsComplete)
       {
+        /*         
         GameObject prefab;
-        List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
+        Il2CppSystem.Collections.Generic.List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
         foreach (string str in strings)
         {
           prefab = (GameObject)Resources.Load(str, typeof(GameObject));
-          if (prefab == null)
+          if (prefab == null && (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs))
             MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
           if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
             SetupConfigPanels = true;
-        }
-
-        // Retrieve and initialize the template
-        RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
-            EConfigurableType.Packager,
-            panel => panel.GetComponentInChildren<RouteListFieldUI>());
-        if (routeListTemplate == null)
-        {
-          MelonLogger.Error("OnSceneWasLoaded: Failed to retrieve RouteListFieldUI template");
-          return;
-        }
-        NoLazyWorkers.Chemists.MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
-        if (NoLazyWorkers.Chemists.MixingStationExtensions.MixingRouteListTemplate != null)
-          SetupConfigPanels = true;
-        if (!SetupConfigPanels)
-          MelonLogger.Warning("not found");
+        } 
+        */
       }
     }
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
+      SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
       ConfigurationExtensions.NPCConfig.Clear();
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
@@ -105,10 +94,10 @@ namespace NoLazyWorkers
 
   public static class ConfigurationExtensions
   {
-    public static Dictionary<NPC, ObjectField> NPCSupply = [];
-    public static Dictionary<NPC, EntityConfiguration> NPCConfig = [];
+    public static System.Collections.Generic.Dictionary<NPC, ObjectField> NPCSupply = [];
+    public static System.Collections.Generic.Dictionary<NPC, EntityConfiguration> NPCConfig = [];
 
-    private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
+    private static readonly System.Collections.Generic.Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
     private static readonly float debounceTime = 0.2f;
 
     public static void InvokeChanged(EntityConfiguration config)
@@ -150,6 +139,49 @@ namespace NoLazyWorkers
 
   public static class NoLazyUtilities
   {
+    /// <summary>
+    /// Converts a System.Collections.Generic.List<T> to an Il2CppSystem.Collections.Generic.List<T>.
+    /// </summary>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <param name="systemList">The System list to convert.</param>
+    /// <returns>An Il2CppSystem list containing the same elements, or an empty list if the input is null.</returns>
+    public static Il2CppSystem.Collections.Generic.List<T> ConvertList<T>(List<T> systemList)
+        where T : Il2CppSystem.Object
+    {
+      if (systemList == null)
+        return new Il2CppSystem.Collections.Generic.List<T>();
+
+      Il2CppSystem.Collections.Generic.List<T> il2cppList = new(systemList.Count);
+      foreach (var item in systemList)
+      {
+        if (item != null)
+          il2cppList.Add(item);
+      }
+      return il2cppList;
+    }
+
+    /// <summary>
+    /// Converts an Il2CppSystem.Collections.Generic.List<T> to a System.Collections.Generic.List<T>.
+    /// </summary>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <param name="il2cppList">The Il2CppSystem list to convert.</param>
+    /// <returns>A System list containing the same elements, or an empty list if the input is null.</returns>
+    public static List<T> ConvertList<T>(Il2CppSystem.Collections.Generic.List<T> il2cppList)
+        where T : Il2CppSystem.Object
+    {
+      if (il2cppList == null)
+        return [];
+
+      List<T> systemList = new(il2cppList.Count);
+      for (int i = 0; i < il2cppList.Count; i++)
+      {
+        var item = il2cppList[i];
+        if (item != null)
+          systemList.Add(item);
+      }
+      return systemList;
+    }
+
     public static ItemField GetMixerItemForProductSlot(MixingStation station)
     {
       // Get the product from the product slot
@@ -162,7 +194,7 @@ namespace NoLazyWorkers
       }
 
       // Get the routes for the station
-      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station, out var routes) || routes == null || !routes.Any())
+      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station, out var routes) || routes == null || routes.Count == 0)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
           MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.ObjectId}");
@@ -223,7 +255,7 @@ namespace NoLazyWorkers
         return 0;
       }
 
-      if (supply.SelectedObject is not ITransitEntity supplyT)
+      if (supply.SelectedObject.Cast<ITransitEntity>() is not ITransitEntity supplyT)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
           MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
@@ -237,12 +269,33 @@ namespace NoLazyWorkers
         return 0;
       }
 
-      var slots = (supplyT.OutputSlots ?? Enumerable.Empty<ItemSlot>())
-          .Concat(supplyT.InputSlots ?? Enumerable.Empty<ItemSlot>())
-          .Where(s => s?.ItemInstance != null && s.Quantity > 0)
-          .Distinct();
+      var slots = new Il2CppSystem.Collections.Generic.List<ItemSlot>();
+      if (supplyT.OutputSlots != null)
+      {
+        for (int i = 0; i < supplyT.OutputSlots.Count; i++)
+        {
+          var slot = supplyT.OutputSlots[i];
+          if (slot != null && slot.ItemInstance != null && slot.Quantity > 0)
+          {
+            if (!slots.Contains(slot)) // Manual Distinct
+              slots.Add(slot);
+          }
+        }
+      }
+      if (supplyT.InputSlots != null)
+      {
+        for (int i = 0; i < supplyT.InputSlots.Count; i++)
+        {
+          var slot = supplyT.InputSlots[i];
+          if (slot != null && slot.ItemInstance != null && slot.Quantity > 0)
+          {
+            if (!slots.Contains(slot)) // Manual Distinct
+              slots.Add(slot);
+          }
+        }
+      }
 
-      if (!slots.Any())
+      if (slots.Count == 0)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
           MelonLogger.Warning($"GetAmountInSupplies: No valid slots in supply {supplyT?.Name} for {npc.fullName}");
@@ -279,7 +332,7 @@ namespace NoLazyWorkers
       return quantity;
     }
 
-    public static T GetComponentTemplateFromConfigPanel<T>(EConfigurableType configType, Func<ConfigPanel, T> getUITemplate) where T : Component
+    public static Component GetComponentTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
     {
       try
       {
@@ -311,24 +364,24 @@ namespace NoLazyWorkers
         }
 
         // Bind to initialize UI components (mimic game behavior)
-        List<EntityConfiguration> configs = [];
+        Il2CppSystem.Collections.Generic.List<EntityConfiguration> configs = new();
         // Create a dummy configuration based on the config type
-        GameObject dummyEntity = new GameObject($"Dummy{configType}");
+        GameObject dummyEntity = new($"Dummy{configType}");
         EntityConfiguration config = null;
-        ConfigurationReplicator replicator = new ConfigurationReplicator();
+        ConfigurationReplicator replicator = new();
         switch (configType)
         {
           case EConfigurableType.Pot:
             Pot pot = dummyEntity.AddComponent<Pot>();
-            config = new PotConfiguration(replicator, pot, pot);
+            config = new PotConfiguration(replicator, pot.Cast<IConfigurable>(), pot);
             break;
           case EConfigurableType.Packager:
             Packager packager = dummyEntity.AddComponent<Packager>();
-            config = new PackagerConfiguration(replicator, packager, packager);
+            config = new PackagerConfiguration(replicator, packager.Cast<IConfigurable>(), packager);
             break;
           case EConfigurableType.MixingStation:
             MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
-            config = new MixingStationConfiguration(replicator, mixingStation, mixingStation);
+            config = new MixingStationConfiguration(replicator, mixingStation.Cast<IConfigurable>(), mixingStation);
             break;
           // Add other types as needed
           default:
@@ -344,15 +397,12 @@ namespace NoLazyWorkers
           MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
 
         // Get the UI template
-        T uiTemplate = getUITemplate(tempPanel);
+        Component uiTemplate = tempPanel.transform.Find("RouteListFieldUI") ?? tempPanel.transform.FindChild("RouteListFieldUI");
         if (uiTemplate == null)
-        {
           MelonLogger.Error($"Failed to retrieve UI template from ConfigPanel for {configType}");
-        }
         else if (DebugConfig.EnableDebugLogs)
-        {
           MelonLogger.Msg($"Successfully retrieved UI template from ConfigPanel for {configType}");
-        }
+
 
         // Clean up
         UnityEngine.Object.Destroy(tempPanelObj);
@@ -394,23 +444,23 @@ namespace NoLazyWorkers
           return null;
         }
 
-        List<EntityConfiguration> configs = [];
-        GameObject dummyEntity = new GameObject($"Dummy{configType}");
+        Il2CppSystem.Collections.Generic.List<EntityConfiguration> configs = new();
+        GameObject dummyEntity = new($"Dummy{configType}");
         EntityConfiguration config = null;
-        ConfigurationReplicator replicator = new ConfigurationReplicator();
+        ConfigurationReplicator replicator = new();
         switch (configType)
         {
           case EConfigurableType.Pot:
             Pot pot = dummyEntity.AddComponent<Pot>();
-            config = new PotConfiguration(replicator, pot, pot);
+            config = new PotConfiguration(replicator, pot.Cast<IConfigurable>(), pot);
             break;
           case EConfigurableType.Packager:
             Packager packager = dummyEntity.AddComponent<Packager>();
-            config = new PackagerConfiguration(replicator, packager, packager);
+            config = new PackagerConfiguration(replicator, packager.Cast<IConfigurable>(), packager);
             break;
           case EConfigurableType.MixingStation:
             MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
-            config = new MixingStationConfiguration(replicator, mixingStation, mixingStation);
+            config = new MixingStationConfiguration(replicator, mixingStation.Cast<IConfigurable>(), mixingStation);
             break;
           // Add other types as needed
           default:
@@ -576,7 +626,7 @@ namespace NoLazyWorkers
       if (value is Component comp) return $"{comp.GetType().Name} on {comp.gameObject.name}";
       if (value is IEnumerable enumerable && !(value is string))
       {
-        var items = new List<string>();
+        var items = new Il2CppSystem.Collections.Generic.List<string>();
         foreach (var item in enumerable)
         {
           items.Add(ValueToString(item));
@@ -627,7 +677,7 @@ namespace NoLazyWorkers
       try
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
-        if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out var potRoute))
+        /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out var potRoute))
         {
           if (potRoute != null)
           {
@@ -639,7 +689,8 @@ namespace NoLazyWorkers
             MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
           }
         }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out var mixerRoute))
+        else  */
+        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out var mixerRoute))
         {
           if (mixerRoute != null)
           {
@@ -667,7 +718,7 @@ namespace NoLazyWorkers
       try
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
-        if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out TransitRoute potRoute))
+        /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out TransitRoute potRoute))
         {
           if (potRoute != null)
           {
@@ -679,7 +730,8 @@ namespace NoLazyWorkers
             MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
           }
         }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out TransitRoute mixerRoute))
+        else  */
+        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out TransitRoute mixerRoute))
         {
           if (mixerRoute != null)
           {
@@ -744,7 +796,7 @@ namespace NoLazyWorkers
       // Copy specific event listeners (e.g., for Button)
       if (newComponent is Button button && source is Button sourceButton)
       {
-        button.onClick.AddListener(() => sourceButton.onClick.Invoke());
+        button.onClick.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(() => sourceButton.onClick.Invoke()));
       }
       return newComponent;
     }
@@ -759,13 +811,12 @@ namespace NoLazyWorkers
     {
       try
       {
-        __instance.onLoadComplete.AddListener(delegate
+        __instance.onLoadComplete.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(() =>
         {
           if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
-          PotExtensions.RestoreConfigurations();
+          //PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
-          StorageExtensions.RestoreConfigurations();
-        });
+        }));
       }
       catch (Exception e)
       {
@@ -836,9 +887,33 @@ namespace NoLazyWorkers
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
       return true;
     }
+    static void Postfix(ConfigurationReplicator __instance, int fieldIndex, string value)
+    {
+      try
+      {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+          MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
+        if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
+        {
+          /* if (PotExtensions.PotSupply.TryGetValue(potConfig.Pot, out ObjectField supply))
+          {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+              MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
+          }
+          else
+          {
+            MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
+          } */
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}");
+      }
+    }
   }
 
-  [HarmonyPatch(typeof(ItemField), "SetItem", new Type[] { typeof(ItemDefinition), typeof(bool) })]
+  [HarmonyPatch(typeof(ItemField), "SetItem", [typeof(ItemDefinition), typeof(bool)])]
   public class ItemFieldSetItemPatch
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
@@ -847,7 +922,18 @@ namespace NoLazyWorkers
         MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
-      bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
+      bool isProductField = __instance.Options != null;
+      if (isProductField)
+      {
+        for (int i = 0; i < __instance.Options.Count; i++)
+        {
+          if (ProductManager.FavouritedProducts.Cast<Il2CppSystem.Collections.Generic.List<ItemDefinition>>().Contains(__instance.Options[i]))
+          {
+            isProductField = true;
+            break;
+          }
+        }
+      }
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
         if (DebugConfig.EnableDebugLogs)
