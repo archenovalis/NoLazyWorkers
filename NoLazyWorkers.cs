@@ -109,15 +109,6 @@ namespace NoLazyWorkers_IL2CPP
           MelonLogger.Error("InvokeChanged: EntityConfiguration is null");
           return;
         }
-
-        var method = typeof(EntityConfiguration).GetMethod("InvokeChanged",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-        if (method == null)
-        {
-          MelonLogger.Error("InvokeChanged: Method not found on EntityConfiguration");
-          return;
-        }
-
         float currentTime = Time.time;
         if (lastInvokeTimes.TryGetValue(config, out float lastTime) && currentTime - lastTime < debounceTime)
         {
@@ -128,7 +119,7 @@ namespace NoLazyWorkers_IL2CPP
         lastInvokeTimes[config] = currentTime;
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"InvokeChanged called for config: {config}, StackTrace: {new System.Diagnostics.StackTrace()}");
-        method.Invoke(config, null);
+        config.InvokeChanged();
       }
       catch (Exception e)
       {
@@ -194,7 +185,7 @@ namespace NoLazyWorkers_IL2CPP
       }
 
       // Get the routes for the station
-      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station, out var routes) || routes == null || routes.Count == 0)
+      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station.GUID, out var routes) || routes == null || routes.Count == 0)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
           MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.ObjectId}");
@@ -605,7 +596,7 @@ namespace NoLazyWorkers_IL2CPP
           }
         }
         else  */
-        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out var mixerRoute))
+        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
         {
           if (mixerRoute != null)
           {
@@ -646,7 +637,7 @@ namespace NoLazyWorkers_IL2CPP
           }
         }
         else  */
-        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out TransitRoute mixerRoute))
+        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
         {
           if (mixerRoute != null)
           {
@@ -842,7 +833,7 @@ namespace NoLazyWorkers_IL2CPP
       {
         for (int i = 0; i < __instance.Options.Count; i++)
         {
-          if (ProductManager.FavouritedProducts.Cast<Il2CppSystem.Collections.Generic.List<ItemDefinition>>().Contains(__instance.Options[i]))
+          if (ProductManager.FavouritedProducts.TryCast<Il2CppSystem.Collections.Generic.List<ItemDefinition>>().Contains(__instance.Options[i]))
           {
             isProductField = true;
             break;

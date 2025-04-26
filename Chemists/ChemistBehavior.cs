@@ -19,8 +19,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
   {
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
-      MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station];
-      ObjectField supply = MixingStationExtensions.MixingSupply[station];
+      MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
+      ObjectField supply = MixingStationExtensions.MixingSupply[station.GUID];
 
       List<ItemSlot> list = [];
       BuildableItem supplyEntity = supply.SelectedObject;
@@ -57,7 +57,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         {
           if (!station.GetComponent<IUsable>().IsInUse && station.CurrentMixOperation == null)
           {
-            if (!MixingStationExtensions.MixingConfig.TryGetValue(station, out var config))
+            if (!MixingStationExtensions.MixingConfig.TryGetValue(station.GUID, out var config))
             {
               if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
                 MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {station?.ObjectId.ToString() ?? "null"}");
@@ -72,7 +72,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             bool canStartMix = mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0;
             bool canRestock = false;
             bool hasSufficientItems = false;
-            ObjectField supply = MixingStationExtensions.MixingSupply[station];
+            ObjectField supply = MixingStationExtensions.MixingSupply[station.GUID];
             if (!canStartMix && supply?.SelectedObject != null)
             {
               ConfigurationExtensions.NPCSupply[__instance] = supply;
@@ -304,8 +304,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           state = states[__instance];
         }
 
-        MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station];
-        ObjectField mixerSupply = MixingStationExtensions.MixingSupply[station];
+        MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
+        ObjectField mixerSupply = MixingStationExtensions.MixingSupply[station.GUID];
         if (config == null || mixerSupply == null)
         {
           Disable(__instance);
@@ -1058,7 +1058,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           }
 
           // Check if station has routes defined
-          if (!MixingStationExtensions.MixingRoutes.TryGetValue(station, out var routes) || routes == null || routes.Count == 0)
+          if (!MixingStationExtensions.MixingRoutes.TryGetValue(station.GUID, out var routes) || routes == null || routes.Count == 0)
           {
             if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
               MelonLogger.Warning($"ChemistGetMixStationsReadyToMovePatch: No routes defined for station={station.ObjectId}");
