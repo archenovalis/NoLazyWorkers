@@ -23,27 +23,28 @@ using UnityEngine.UI;
 using NoLazyWorkers_IL2CPP.Chemists;
 //using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.2", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.3", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = true; // true enables Msg and Warning logs
+    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
     public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
     public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
     public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
     public static bool EnableDebugBehaviorLogs = false; // true enables Behavior-only Msg and Warning Logs
+    public static bool EnableDebugStacktrace = false; // true enables Msg and Warning logs
   }
 
   public static class BuildInfo
   {
     public const string Name = "NoLazyWorkers_IL2CPP";
-    public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
+    public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.0.2";
+    public const string Version = "1.0.3";
     public const string DownloadLink = null;
   }
 
@@ -56,6 +57,7 @@ namespace NoLazyWorkers_IL2CPP
       {
         HarmonyInstance.PatchAll();
         MelonLogger.Msg("NoLazyWorkers_IL2CPP loaded!");
+        MelonLogger.Warning("Please ignore the initial yellow errors and the three red error spam.");
       }
       catch (Exception e)
       {
@@ -86,7 +88,6 @@ namespace NoLazyWorkers_IL2CPP
     {
       SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
-      ConfigurationExtensions.NPCConfig.Clear();
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
         MelonLogger.Msg("Cleared ConfigurationExtensions dictionaries on scene unload.");
     }
@@ -94,10 +95,9 @@ namespace NoLazyWorkers_IL2CPP
 
   public static class ConfigurationExtensions
   {
-    public static System.Collections.Generic.Dictionary<NPC, ObjectField> NPCSupply = [];
-    public static System.Collections.Generic.Dictionary<NPC, EntityConfiguration> NPCConfig = [];
+    public static Dictionary<Il2CppSystem.Guid, ObjectField> NPCSupply = [];
 
-    private static readonly System.Collections.Generic.Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
+    private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
     private static readonly float debounceTime = 0.2f;
 
     public static void InvokeChanged(EntityConfiguration config)
@@ -117,7 +117,7 @@ namespace NoLazyWorkers_IL2CPP
           return;
         }
         lastInvokeTimes[config] = currentTime;
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugStacktrace)
           MelonLogger.Msg($"InvokeChanged called for config: {config}, StackTrace: {new System.Diagnostics.StackTrace()}");
         config.InvokeChanged();
       }
@@ -173,42 +173,6 @@ namespace NoLazyWorkers_IL2CPP
       return systemList;
     }
 
-    public static ItemField GetMixerItemForProductSlot(MixingStation station)
-    {
-      // Get the product from the product slot
-      var productInSlot = station.ProductSlot.ItemInstance?.Definition as ProductDefinition;
-      if (productInSlot == null)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot item is not a ProductDefinition for station={station?.ObjectId.ToString() ?? "null"}");
-        return null;
-      }
-
-      // Get the routes for the station
-      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station.GUID, out var routes) || routes == null || routes.Count == 0)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.ObjectId}");
-        return null;
-      }
-
-      // Find the first route where the product matches
-      var matchingRoute = routes.FirstOrDefault(route =>
-          route.Product?.SelectedItem != null &&
-          route.Product.SelectedItem == productInSlot);
-
-      if (matchingRoute == null)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No route matches product={productInSlot.Name} for station={station.ObjectId.ToString()}");
-        return null;
-      }
-      // Return the mixerItem from the matching route
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-        MelonLogger.Msg($"GetMixerItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={station.ObjectId.ToString()}");
-      return matchingRoute.MixerItem;
-    }
-
     public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
     {
       if (npc == null || item == null)
@@ -232,14 +196,7 @@ namespace NoLazyWorkers_IL2CPP
         return 0;
       }
 
-      if (!ConfigurationExtensions.NPCConfig.TryGetValue(npc, out var config))
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-          MelonLogger.Warning($"GetAmountInSupplies: NPCConfig not found for {npc.fullName}");
-        return 0;
-      }
-
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc, out var supply) || supply?.SelectedObject == null)
+      if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc.GUID, out var supply) || supply?.SelectedObject == null)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
           MelonLogger.Warning($"GetAmountInSupplies: Supply or SelectedObject is null for {npc.fullName}");
@@ -331,7 +288,8 @@ namespace NoLazyWorkers_IL2CPP
         ManagementInterface managementInterface = ManagementInterface.Instance;
         if (managementInterface == null)
         {
-          MelonLogger.Error("ManagementInterface instance is null");
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Warning("ManagementInterface instance is null");
           return null;
         }
 
@@ -824,7 +782,7 @@ namespace NoLazyWorkers_IL2CPP
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
-      if (DebugConfig.EnableDebugLogs)
+      if (DebugConfig.EnableDebugStacktrace)
         MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
@@ -833,7 +791,7 @@ namespace NoLazyWorkers_IL2CPP
       {
         for (int i = 0; i < __instance.Options.Count; i++)
         {
-          if (ProductManager.FavouritedProducts.TryCast<Il2CppSystem.Collections.Generic.List<ItemDefinition>>().Contains(__instance.Options[i]))
+          if (ProductManager.FavouritedProducts.Contains(__instance.Options[i].TryCast<ProductDefinition>()))
           {
             isProductField = true;
             break;
@@ -842,9 +800,9 @@ namespace NoLazyWorkers_IL2CPP
       }
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugStacktrace)
           MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
-        return false;
+        /* return false; */
       }
       return true;
     }

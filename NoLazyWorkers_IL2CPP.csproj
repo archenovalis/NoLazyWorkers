@@ -469,6 +469,6 @@
 		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\Games\Schedule I (il2cpp)\Mods" Retries="60" />
 	</Target>
 	<Target Name="CopyOutputFileDist" AfterTargets="Build">
-		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\projects\Schedule I (il2cpp)\NoLazyWorkers_IL2CPP\dist" Retries="60" />
+		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="d:\projects\Schedule I\NoLazyWorkers_IL2CPP\dist" Retries="60" />
 	</Target>
 </Project>
