@@ -45,10 +45,17 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.GUID}");
         return null;
       }
+
+      MixingRoute matchingRoute = null;
       // Find the first route where the product matches
-      var matchingRoute = routes.FirstOrDefault(route =>
-          route.Product?.SelectedItem != null &&
-          route.Product.SelectedItem == productInSlot);
+      foreach (var route in routes)
+      {
+        if (route.Product?.SelectedItem != null && route.Product.SelectedItem == productInSlot)
+        {
+          matchingRoute = route;
+          break;
+        }
+      }
       if (matchingRoute == null)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
@@ -64,7 +71,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
       MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
-      ObjectField supply = MixingStationExtensions.MixingSupply[station.GUID];
+      ObjectField supply = MixingStationExtensions.Supply[station.GUID];
 
       List<ItemSlot> list = [];
       BuildableItem supplyEntity = supply.SelectedObject;
@@ -93,8 +100,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
     {
       try
       {
-        List<MixingStation> list = [];
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        Il2CppSystem.Collections.Generic.List<MixingStation> list = new();
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Checking stations for {__instance?.name ?? "null"}, total stations={__instance.configuration.MixStations.Count}");
 
         foreach (MixingStation station in __instance.configuration.MixStations)
@@ -103,7 +110,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           {
             if (!MixingStationExtensions.MixingConfig.TryGetValue(station.GUID, out var config))
             {
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                 MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {station?.GUID}");
               continue;
             }
@@ -116,7 +123,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             bool canStartMix = mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0;
             bool canRestock = false;
             bool hasSufficientItems = false;
-            ObjectField supply = MixingStationExtensions.MixingSupply[station.GUID];
+            ObjectField supply = MixingStationExtensions.Supply[station.GUID];
             if (!canStartMix && supply?.SelectedObject != null)
             {
               ConfigurationExtensions.NPCSupply[__instance.GUID] = supply;
@@ -132,7 +139,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
                 if (mixerDef == null)
                 {
                   if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-                    MelonLogger.Warning($"No suitable mixer found for station {station.ObjectId}");
+                    MelonLogger.Warning($"No suitable mixer found for station {station.GUID}");
                   continue;
                 }
                 targetItem = mixerDef.GetDefaultInstance();
@@ -142,8 +149,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
                            station.ProductSlot.Quantity >= threshold &&
                            hasSufficientItems;
             }
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-              MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Station {station.ObjectId}, Supply={supply?.SelectedObject?.GUID}, IsInUse={station.GetComponent<IUsable>().IsInUse}, CurrentMixOperation={station.CurrentMixOperation != null}, canStartMix={canStartMix}, canRestock={canRestock}, mixQuantity={mixQuantity}, productQuantity={station.ProductSlot.Quantity}, outputQuantity={station.OutputSlot.Quantity}, threshold={threshold}, mixerItem={mixerItem.SelectedItem?.Name ?? "null"}{(canRestock ? $", hasSufficientItems={hasSufficientItems}" : "")}");
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+              MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Station {station.GUID}, Supply={supply?.SelectedObject?.GUID}, IsInUse={station.GetComponent<IUsable>().IsInUse}, CurrentMixOperation={station.CurrentMixOperation != null}, canStartMix={canStartMix}, canRestock={canRestock}, mixQuantity={mixQuantity}, productQuantity={station.ProductSlot.Quantity}, outputQuantity={station.OutputSlot.Quantity}, threshold={threshold}, mixerItem={mixerItem.SelectedItem?.Name ?? "null"}{(canRestock ? $", hasSufficientItems={hasSufficientItems}" : "")}");
             if (canStartMix || canRestock)
             {
               list.Add(station);
@@ -151,8 +158,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           }
         }
 
-        __result = ConvertList(list);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        __result = list;
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"ChemistPatch.GetMixingStationsReadyToStart: Found {list.Count} stations ready for {__instance?.name ?? "null"}");
         return false;
       }
@@ -168,66 +175,32 @@ namespace NoLazyWorkers_IL2CPP.Chemists
     {
       if (supply == null || supply.OutputSlots == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning("GetAnyMixer: Supply or OutputSlots is null");
         return null;
       }
 
-      var validItems = NetworkSingleton<ProductManager>.Instance.ValidMixIngredients;
-      var slots = new List<ItemSlot>();
-      if (supply.OutputSlots != null)
-      {
-        for (int i = 0; i < supply.OutputSlots.Count; i++)
-        {
-          var slot = supply.OutputSlots[i];
-          if (slot != null && slot.ItemInstance != null && slot.Quantity >= threshold)
-          {
-            bool isValid = false;
-            for (int j = 0; j < validItems.Count; j++)
-            {
-              if (validItems[j].ID.ToLower() == slot.ItemInstance.ID.ToLower())
-              {
-                isValid = true;
-                break;
-              }
-            }
-            if (isValid)
-              slots.Add(slot);
-          }
-        }
-      }
+      var validItems = ConvertList(NetworkSingleton<ProductManager>.Instance.ValidMixIngredients);
+      var slots = ConvertList(supply.OutputSlots)
+          .Where(s => s?.ItemInstance != null &&
+                      validItems.Any(v => v.ID.ToLower() == s.ItemInstance.ID.ToLower()) &&
+                      s.Quantity >= threshold);
 
       if (preferredId != null)
       {
-        ItemSlot preferredSlot = null;
-        for (int i = 0; i < slots.Count; i++)
-        {
-          if (slots[i] != null && slots[i].ItemInstance != null && slots[i].ItemInstance.ID.ToLower() == preferredId.ToLower())
-          {
-            preferredSlot = slots[i];
-            break;
-          }
-        }
+        var preferredSlot = slots.FirstOrDefault(s => s.ItemInstance.ID.ToLower() == preferredId.ToLower());
         if (preferredSlot != null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Msg($"GetAnyMixer: Selected preferred item {preferredId} with quantity={preferredSlot.Quantity}");
           return preferredSlot.ItemInstance.definition;
         }
       }
 
-      ItemSlot firstSlot = null;
-      for (int i = 0; i < slots.Count; i++)
-      {
-        if (slots[i] != null && slots[i].ItemInstance != null)
-        {
-          firstSlot = slots[i];
-          break;
-        }
-      }
+      var firstSlot = slots.FirstOrDefault();
       if (firstSlot != null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"GetAnyMixer: Selected first available item {firstSlot.ItemInstance.ID} with quantity={firstSlot.Quantity}");
       }
       return firstSlot?.ItemInstance?.definition;
@@ -304,7 +277,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           CookPending = false,
           Any = false
         };
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.Awake: Initialized state for {__instance.chemist?.fullName ?? "null"}");
         /* } */
       }
@@ -322,7 +295,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       {
         if (!InstanceFinder.IsServer)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Skipping, not server");
           return false;
         }
@@ -334,7 +307,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         if (station == null || chemist == null)
         {
           Disable(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: Station, Chemist, or ChemistConfig null for chemist: {chemist?.fullName ?? "null"}");
           return false;
         }
@@ -342,18 +315,18 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         // Initialize state if missing
         if (!states.TryGetValue(__instance, out var state))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: State missing for {chemist?.fullName}, initializing");
           states[__instance] = new StateData { CurrentState = EState.Idle };
           state = states[__instance];
         }
 
         MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
-        ObjectField mixerSupply = MixingStationExtensions.MixingSupply[station.GUID];
+        ObjectField mixerSupply = MixingStationExtensions.Supply[station.GUID];
         if (config == null || mixerSupply == null)
         {
           Disable(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: MixerConfig or MixerSupply not found for station: {station?.GUID}");
           return false;
         }
@@ -366,8 +339,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
         float threshold = config.StartThrehold.Value;
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-          MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: State={state.CurrentState}, station={station.ObjectId}, chemist={chemist.fullName}");
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+          MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: State={state.CurrentState}, station={station.GUID}, chemist={chemist.fullName}");
 
         switch (state.CurrentState)
         {
@@ -379,25 +352,25 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             if (outputQuantity > 0 || productQuantity < threshold)
             {
               Disable(__instance);
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                 MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Disabling for {chemist.fullName}, outputQuantity={outputQuantity}, productQuantity={productQuantity}, threshold={threshold}");
               return false;
             }
 
             ConfigurationExtensions.NPCSupply[chemist.GUID] = mixerSupply;
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
               MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Copied station supply {mixerSupply.SelectedObject?.name} to chemist");
 
             bool hasSufficientItems = ChemistPatch.HasSufficientItems(chemist, threshold - mixQuantity, mixerItem.SelectedItem?.GetDefaultInstance());
             if (!hasSufficientItems && mixQuantity < threshold)
             {
               Disable(__instance);
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                 MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Disabling for {chemist.fullName}, hasSufficientItems={hasSufficientItems}, mixQuantity={mixQuantity}, threshold={threshold}");
               return false;
             }
 
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
               MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - mixQuantity={mixQuantity}, productQuantity={productQuantity}, outputQuantity={outputQuantity}, threshold={threshold}, mixerItem={mixerItem.SelectedItem?.Name ?? "null"}, cookPending={state.CookPending}, mixOperation={(station.CurrentMixOperation != null)}");
 
             if (!state.CookPending && station.CurrentMixOperation == null && mixQuantity >= threshold && station.ProductSlot.Quantity >= threshold && station.OutputSlot.Quantity == 0)
@@ -409,7 +382,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
                 int supplyCount = NoLazyUtilities.GetAmountInInventoryAndSupply(chemist, mixerItem.SelectedItem);
                 bool canFetchMore = supplyCount >= 0;
 
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                   MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Cooking conditions met, checking mixer: mixQuantity={mixQuantity}, productQuantity={productQuantity}, additionalMixerNeeded={additionalMixerNeeded}, supplyCount={supplyCount}, canFetchMore={canFetchMore}");
 
                 if (canFetchMore)
@@ -424,20 +397,20 @@ namespace NoLazyWorkers_IL2CPP.Chemists
                 state.CurrentState = EState.Cooking;
                 state.CookPending = true;
                 __instance.StartCook();
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                   MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Starting cook for {chemist.fullName}");
               }
               else
               {
                 state.CurrentState = EState.WalkingToStation;
                 __instance.SetDestination(GetStationAccessPoint(__instance), true);
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                   MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Walking to station for {chemist.fullName}");
               }
             }
             else
             {
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
                 MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Idle - Preparing to fetch for {chemist.fullName}, reason={(state.CookPending ? "cook pending" : station.CurrentMixOperation != null ? "mix operation active" : mixQuantity < threshold ? "low mixQuantity" : "other")}");
               PrepareToFetchItem(__instance, state, mixerItem, productQuantity, mixQuantity, threshold, mixerSupply, station);
             }
@@ -452,44 +425,41 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             break;
 
           case EState.WalkingToStation:
-            if (!chemist.Movement.IsMoving)
+            if (IsAtStation(__instance))
             {
-              if (IsAtStation(__instance))
-              {
-                int insertedQuantity = InsertItemsFromInventory(__instance, state, station);
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-                  MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Inserted {insertedQuantity} items to station for {chemist.fullName}");
+              int insertedQuantity = InsertItemsFromInventory(__instance, state, station);
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+                MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Inserted {insertedQuantity} items to station for {chemist.fullName}");
 
-                // Recalculate mixQuantity after insertion
-                int updatedMixQuantity = station.GetMixQuantity();
-                if (insertedQuantity > 0 && !state.CookPending && station.CurrentMixOperation == null && updatedMixQuantity >= threshold)
-                {
-                  state.CurrentState = EState.Cooking;
-                  state.CookPending = true;
-                  __instance.StartCook();
-                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-                    MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Arrived at station, starting cook for {chemist.fullName}, updatedMixQuantity={updatedMixQuantity}");
-                }
-                else
-                {
-                  state.CurrentState = EState.Idle;
-                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-                    MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Arrived at station, returning to Idle for {chemist.fullName}, reason={(insertedQuantity == 0 ? "no items inserted" : state.CookPending ? "cook pending" : station.CurrentMixOperation != null ? "mix operation active" : updatedMixQuantity < threshold ? "low mixQuantity" : "other")}, updatedMixQuantity={updatedMixQuantity}");
-                }
+              // Recalculate mixQuantity after insertion
+              int updatedMixQuantity = station.GetMixQuantity();
+              if (insertedQuantity > 0 && !state.CookPending && station.CurrentMixOperation == null && updatedMixQuantity >= threshold)
+              {
+                state.CurrentState = EState.Cooking;
+                state.CookPending = true;
+                __instance.StartCook();
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+                  MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Arrived at station, starting cook for {chemist.fullName}, updatedMixQuantity={updatedMixQuantity}");
               }
               else
               {
                 state.CurrentState = EState.Idle;
-                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-                  MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Not at station after walking, returning to Idle for {chemist.fullName}");
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+                  MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Arrived at station, returning to Idle for {chemist.fullName}, reason={(insertedQuantity == 0 ? "no items inserted" : state.CookPending ? "cook pending" : station.CurrentMixOperation != null ? "mix operation active" : updatedMixQuantity < threshold ? "low mixQuantity" : "other")}, updatedMixQuantity={updatedMixQuantity}");
               }
+            }
+            else
+            {
+              state.CurrentState = EState.Idle;
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+                MelonLogger.Warning($"StartMixingStationBehaviourPatch.ActiveMinPass: WalkingToStation - Not at station after walking, returning to Idle for {chemist.fullName}");
             }
             break;
 
           case EState.Cooking:
             // Handled by MonitorMixOperation coroutine
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-              MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Cooking - Waiting for mix operation for {chemist.fullName}, station={station.ObjectId}");
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+              MelonLogger.Msg($"StartMixingStationBehaviourPatch.ActiveMinPass: Cooking - Waiting for mix operation for {chemist.fullName}, station={station.GUID}");
             break;
         }
         return false;
@@ -509,7 +479,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       state.TargetMixer = mixerItem.SelectedItem;
       state.Any = state.TargetMixer == null;
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
         MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: mixQuantity={mixQuantity}, threshold={threshold}, targetMixerId={state.TargetMixer?.ID ?? "null"}, quantityToFetch={state.QuantityToFetch}, any={state.Any}");
 
       // Check inventory for sufficient items
@@ -524,7 +494,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         else if (inventoryCount > 0)
         {
           state.QuantityToFetch -= inventoryCount;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Using {inventoryCount} from inventory, still need {state.QuantityToFetch} for {chemist?.fullName}");
         }
       }
@@ -534,7 +504,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (supplyEntity == null || supplyEntity.OutputSlots == null)
       {
         Disable(__instance);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Invalid supply entity for {chemist?.fullName}");
         return;
       }
@@ -554,19 +524,12 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         if (productManager == null)
         {
           Disable(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.PrepareToFetchItem: ProductManager is null");
           return;
         }
-        var validMixIngredientIds = new Il2CppSystem.Collections.Generic.HashSet<string>();
-        if (productManager.ValidMixIngredients != null)
-        {
-          for (int i = 0; i < productManager.ValidMixIngredients.Count; i++)
-          {
-            validMixIngredientIds.Add(productManager.ValidMixIngredients[i].ID);
-          }
-        }
 
+        var validMixIngredientIds = ConvertList(productManager.ValidMixIngredients).Select(i => i.ID).ToHashSet();
         foreach (ItemSlot slot in supplyEntity.OutputSlots)
         {
           if (slot?.ItemInstance == null || !validMixIngredientIds.Contains(slot.ItemInstance.ID))
@@ -580,7 +543,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           {
             state.TargetMixer = slot.ItemInstance.definition;
             fetchable = Mathf.Min(productQuantity - invQuantity, supplyQuantity);
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
               MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Selected mixer {state.TargetMixer.ID}, quantityToFetch={state.QuantityToFetch}");
             break;
           }
@@ -591,7 +554,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (state.TargetMixer == null)
       {
         Disable(__instance);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning($"StartMixingStationBehaviourPatch.PrepareToFetchItem: No suitable mixer available for {chemist?.fullName}");
         return;
       }
@@ -601,14 +564,14 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (IsAtSupplies(__instance))
       {
         state.CurrentState = EState.GrabbingSupplies;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: At supplies, grabbing {state.TargetMixer.ID}");
         GrabItem(__instance, state);
       }
       else
       {
         state.CurrentState = EState.WalkingToSupplies;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Walking to supplies for {state.TargetMixer.ID}");
         WalkToSupplies(__instance, state);
       }
@@ -619,7 +582,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (IsAtStation(__instance))
       {
         int inserted = InsertItemsFromInventory(__instance, state, station);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Inserted {inserted} items from inventory for {chemist?.fullName}");
         state.CurrentState = EState.Idle;
       }
@@ -627,7 +590,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       {
         state.CurrentState = EState.WalkingToStation;
         __instance.SetDestination(GetStationAccessPoint(__instance), true);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.PrepareToFetchItem: Walking to station with {inventoryCount} inventory items for {chemist?.fullName}");
       }
     }
@@ -643,18 +606,18 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         {
           states[__instance] = new StateData { CurrentState = EState.Idle };
           state = states[__instance];
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.StartCook: State missing, initialized for {__instance.chemist?.fullName ?? "null"}");
         }
 
         if (state.CurrentState != EState.Cooking || !state.CookPending || __instance.targetStation.CurrentMixOperation != null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.StartCook: Invalid state {state.CurrentState}, cookPending={state.CookPending}, mixOperation={(__instance.targetStation.CurrentMixOperation != null)} for {__instance.chemist?.fullName ?? "null"}");
           return false;
         }
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.StartCook: Starting cook for {__instance.chemist?.fullName ?? "null"}");
         state.CurrentState = EState.Cooking;
         return true;
@@ -666,22 +629,6 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       }
     }
 
-    [HarmonyPatch("StartCook")]
-    [HarmonyPostfix]
-    static void StartCookPostfix(StartMixingStationBehaviour __instance)
-    {
-      try
-      {
-        if (states.TryGetValue(__instance, out var state))
-        {
-          __instance.StartCoroutine(MonitorMixOperation(__instance, state));
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"StartMixingStationBehaviourPatch.StartCookPostfix: Failed for chemist: {__instance.chemist?.fullName ?? "null"}, error: {e}");
-      }
-    }
     private static IEnumerator MonitorMixOperation(StartMixingStationBehaviour __instance, StateData state)
     {
       return new MonitorMixOperationCoroutine(__instance, state);
@@ -706,7 +653,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       ObjectField supply = ConfigurationExtensions.NPCSupply[chemist.GUID];
       bool atSupplies = config != null && supply != null && supply.SelectedObject != null &&
            NavMeshUtility.IsAtTransitEntity(supply.SelectedObject.Cast<ITransitEntity>(), chemist, 0.4f);
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
       {
         Vector3 chemistPos = chemist.transform.position;
         Vector3 supplyPos = supply?.SelectedObject != null ? supply.SelectedObject.transform.position : Vector3.zero;
@@ -718,13 +665,13 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
     private static void WalkToSupplies(StartMixingStationBehaviour __instance, StateData state)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
         MelonLogger.Warning($"StartMixingStationBehaviourPatch.WalkToSupplies: Started");
       Chemist chemist = __instance.chemist;
       if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist.GUID, out var supply) || supply.SelectedObject == null)
       {
         Disable(__instance);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning($"StartMixingStationBehaviourPatch.WalkToSupplies: Supply not found for {chemist?.fullName ?? "null"}");
         return;
       }
@@ -733,15 +680,15 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (!chemist.Movement.CanGetTo(supplyEntity, 1f))
       {
         Disable(__instance);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning($"StartMixingStationBehaviourPatch.WalkToSupplies: Cannot reach supply for {chemist?.fullName ?? "null"}");
         return;
       }
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
         MelonLogger.Msg($"StartMixingStationBehaviourPatch.WalkToSupplies: {__instance} Walking to supply {supplyEntity.Name} for {chemist?.fullName} {state.CurrentState}");
 
-      state.WalkToSuppliesRoutine = __instance.StartCoroutine(WalkRoutine(__instance, supplyEntity, state));
+      state.WalkToSuppliesRoutine = (Coroutine)MelonCoroutines.Start(WalkRoutine(__instance, supplyEntity, state));
     }
 
     private static void GrabItem(StartMixingStationBehaviour __instance, StateData state)
@@ -753,7 +700,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       {
         if (station.OutputSlot.Quantity > 0)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabItem: Output quantity {station.OutputSlot.Quantity} > 0, disabling for {chemist?.fullName}");
           Disable(__instance);
           return;
@@ -762,7 +709,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist.GUID, out var supply) || supply.SelectedObject == null)
         {
           Disable(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabItem: Supply not found for {chemist?.fullName ?? "null"}");
           return;
         }
@@ -775,7 +722,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           int currentQuantity = station.MixerSlot.Quantity;
           chemist.Inventory.InsertItem(station.MixerSlot.ItemInstance.GetCopy(currentQuantity));
           station.MixerSlot.SetQuantity(0);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Msg($"StartMixingStationBehaviourPatch.GrabItem: Cleared MixerSlot ({currentQuantity} items returned to inventory) for {chemist?.fullName}");
         }
 
@@ -809,21 +756,15 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         if (slots.Count == 0)
         {
           Disable(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabItem: No slots containing {state.TargetMixer.ID} in supply for {chemist?.fullName}");
           return;
         }
-        int totalAvailable = 0;
-        for (int i = 0; i < slots.Count; i++)
-        {
-          if (slots[i] != null)
-          {
-            totalAvailable += slots[i].Quantity;
-          }
-        }
+
+        int totalAvailable = slots.Sum(s => s.Quantity);
         int quantityToFetch = Mathf.Min(state.QuantityToFetch, totalAvailable);
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabItem: Availability: {totalAvailable}/{state.QuantityToFetch} for {state.TargetMixer.ID}");
         if (quantityToFetch <= 0)
         {
@@ -844,7 +785,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             slot.ChangeQuantity(-amountToTake, false);
             remainingToFetch -= amountToTake;
 
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
               MelonLogger.Msg($"StartMixingStationBehaviourPatch.GrabItem: Took {amountToTake} of {state.TargetMixer.ID} from slot {slot.GetHashCode()}, remainingToFetch={remainingToFetch} for {chemist?.fullName}");
           }
           if (remainingToFetch <= 0)
@@ -853,14 +794,14 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
         if (remainingToFetch > 0)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabItem: Could not fetch full quantity, still need {remainingToFetch} of {state.TargetMixer.ID} for {chemist?.fullName}");
         }
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.GrabItem: Grabbed {quantityToFetch - remainingToFetch} of {state.TargetMixer.ID} into inventory for {chemist?.fullName}");
 
-        state.GrabRoutine = __instance.StartCoroutine(GrabRoutine(__instance, state));
+        state.GrabRoutine = (Coroutine)MelonCoroutines.Start(GrabRoutine(__instance, state));
       }
       catch (Exception e)
       {
@@ -869,104 +810,74 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       }
     }
 
-    private static IEnumerator WalkRoutine(StartMixingStationBehaviour __instance, ITransitEntity supply, StateData state)
+    private static System.Collections.IEnumerator WalkRoutine(StartMixingStationBehaviour __instance, ITransitEntity supply, StateData state)
     {
-      return new WalkRoutineCoroutine(__instance, supply, state);
-    }
+      Chemist chemist = __instance.chemist;
+      Vector3 startPos = chemist.transform.position;
+      __instance.SetDestination(supply, true);
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+        MelonLogger.Msg($"StartMixingStationBehaviourPatch.WalkRoutine: Set destination for {chemist?.fullName}, IsMoving={chemist.Movement.IsMoving}");
 
-    private class WalkRoutineCoroutine : IEnumerator
-    {
-      private readonly StartMixingStationBehaviour _instance;
-      private readonly ITransitEntity _supply;
-      private readonly StateData _state;
-      private readonly Vector3 _startPos;
-      private float _elapsed = 0f;
-      private readonly float _timeout = 10f;
-      private bool _isDone = false;
-      private bool _initialWaitDone = false;
-
-      public WalkRoutineCoroutine(StartMixingStationBehaviour instance, ITransitEntity supply, StateData state) : base(instance.Pointer)
+      yield return new WaitForSeconds(0.2f); // Allow pathfinding to start
+      float timeout = 10f;
+      float elapsed = 0f;
+      while (chemist.Movement.IsMoving && elapsed < timeout)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-          MelonLogger.Msg($"WalkRoutineCoroutine: {instance} | {supply} | {state} | {instance.chemist} | {instance.chemist?.transform} | {instance.chemist?.transform?.position}");
-        _instance = instance;
-        _supply = supply;
-        _state = state;
-        _startPos = instance.chemist.transform.position;
-        instance.SetDestination(supply, true);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-          MelonLogger.Msg($"WalkRoutineCoroutine: Set destination for {instance.chemist?.fullName}, IsMoving={instance.chemist.Movement.IsMoving}");
+        yield return null;
+        elapsed += Time.deltaTime;
+      }
+      if (elapsed >= timeout)
+      {
+        Disable(__instance);
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+          MelonLogger.Warning($"StartMixingStationBehaviourPatch.WalkRoutine: Timeout walking to supply for {chemist?.fullName}");
       }
 
-      public new bool MoveNext()
+      state.WalkToSuppliesRoutine = null;
+      state.CurrentState = EState.Idle;
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
       {
-        if (_isDone)
-          return false;
-
-        Chemist chemist = _instance.chemist;
-
-        if (!_initialWaitDone)
-        {
-          _elapsed += Time.deltaTime;
-          if (_elapsed >= 0.2f)
-          {
-            _initialWaitDone = true;
-            _elapsed = 0f; // Reset for timeout tracking
-          }
-          return true; // Wait for 0.2 seconds
-        }
-
-        _elapsed += Time.deltaTime;
-        if (chemist.Movement.IsMoving && _elapsed < _timeout)
-        {
-          return true; // Continue waiting
-        }
-
-        if (_elapsed >= _timeout)
-        {
-          Disable(_instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-            MelonLogger.Warning($"StartMixingStationBehaviourPatch.WalkRoutine: Timeout walking to supply for {chemist?.fullName}");
-        }
-
-        _state.WalkToSuppliesRoutine = null;
-        _state.CurrentState = EState.Idle;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-        {
-          bool atSupplies = IsAtSupplies(_instance);
-          Vector3 chemistPos = chemist.transform.position;
-          Vector3 supplyPos = _supply != null ? _supply.Cast<ObjectField>().SelectedObject.transform.position : Vector3.zero;
-          float distanceMoved = Vector3.Distance(_startPos, chemistPos);
-          MelonLogger.Msg($"StartMixingStationBehaviourPatch.WalkRoutine: Completed walk to supply, reverting to Idle for {chemist?.fullName}. AtSupplies={atSupplies}, ChemistPos={chemistPos}, SupplyPos={supplyPos}, DistanceMoved={distanceMoved}, Elapsed={_elapsed}, Timeout={_elapsed >= _timeout}, IsMoving={chemist.Movement.IsMoving}");
-        }
-
-        _isDone = true;
-        return false; // Coroutine complete
-      }
-
-      public override void Reset()
-      {
-        _elapsed = 0f;
-        _isDone = false;
-        _initialWaitDone = false;
+        bool atSupplies = IsAtSupplies(__instance);
+        Vector3 chemistPos = chemist.transform.position;
+        Vector3 supplyPos = supply != null ? supply.TryCast<BuildableItem>().transform.position : Vector3.zero;
+        float distanceMoved = Vector3.Distance(startPos, chemistPos);
+        MelonLogger.Msg($"StartMixingStationBehaviourPatch.WalkRoutine: Completed walk to supply, reverting to Idle for {chemist?.fullName}. AtSupplies={atSupplies}, ChemistPos={chemistPos}, SupplyPos={supplyPos}, DistanceMoved={distanceMoved}, Elapsed={elapsed}, Timeout={elapsed >= timeout}, IsMoving={chemist.Movement.IsMoving}");
       }
     }
 
-    private static IEnumerator GrabRoutine(StartMixingStationBehaviour __instance, StateData state)
+    private static System.Collections.IEnumerator GrabRoutine(StartMixingStationBehaviour __instance, StateData state)
     {
-      return new GrabRoutineCoroutine(__instance, state);
-    }
-
-    private class GrabRoutineCoroutine : IEnumerator
-    {
-      private readonly StartMixingStationBehaviour _instance;
-      private readonly StateData _state;
-
-      public GrabRoutineCoroutine(StartMixingStationBehaviour instance, StateData state) : base(instance.Pointer)
+      Chemist chemist = __instance.chemist;
+      yield return new WaitForSeconds(0.2f);
+      try
       {
-        _instance = instance;
-        _state = state;
+        if (chemist.Avatar?.Anim != null)
+        {
+          chemist.Avatar.Anim.ResetTrigger("GrabItem");
+          chemist.Avatar.Anim.SetTrigger("GrabItem");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+            MelonLogger.Msg($"StartMixingStationBehaviourPatch.GrabRoutine: Triggered GrabItem animation for {chemist?.fullName}");
+        }
+        else
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+            MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabRoutine: Animator missing for {chemist?.fullName}, skipping animation");
+        }
       }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"StartMixingStationBehaviourPatch.GrabRoutine: Failed for {chemist?.fullName}, error: {e}");
+        state.GrabRoutine = null;
+        state.CurrentState = EState.Idle;
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+          MelonLogger.Warning($"StartMixingStationBehaviourPatch.GrabRoutine: Reverted to Idle due to error for {chemist?.fullName}");
+      }
+      yield return new WaitForSeconds(0.2f);
+      state.GrabRoutine = null;
+      state.CurrentState = EState.WalkingToStation;
+      __instance.SetDestination(GetStationAccessPoint(__instance), true);
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+        MelonLogger.Msg($"StartMixingStationBehaviourPatch.GrabRoutine: Grab complete, walking to station for {chemist?.fullName}");
     }
 
     private static int InsertItemsFromInventory(StartMixingStationBehaviour __instance, StateData state, MixingStation station)
@@ -977,14 +888,14 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       {
         if (state.TargetMixer == null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: TargetMixer is null for {chemist?.fullName}");
           return 0;
         }
 
         if (station.MixerSlot == null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: MixerSlot is null for station {station?.ObjectId}");
           return 0;
         }
@@ -992,7 +903,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         quantity = chemist.Inventory._GetItemAmount(state.TargetMixer.ID);
         if (quantity <= 0)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: No items of {state.TargetMixer.ID} in inventory for {chemist?.fullName}");
           return 0;
         }
@@ -1000,12 +911,12 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         ItemInstance item = state.TargetMixer.GetDefaultInstance();
         if (item == null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: Failed to get default instance for {state.TargetMixer.ID}");
           return 0;
         }
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: Attempting to insert {quantity} of {state.TargetMixer.ID} for {chemist?.fullName}");
 
         // Insert into MixerSlot
@@ -1035,13 +946,13 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
         if (quantityToRemove > 0)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
             MelonLogger.Warning($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: Failed to remove {quantityToRemove} of {state.TargetMixer.ID}, inventory may be inconsistent for {chemist?.fullName}");
           station.MixerSlot.SetQuantity(currentQuantity); // Revert insertion
           return 0;
         }
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"StartMixingStationBehaviourPatch.InsertItemsFromInventory: Successfully inserted {quantity} of {state.TargetMixer.ID}, MixerSlot quantity changed from {currentQuantity} to {newQuantity} for {chemist?.fullName}");
 
         return quantity;
@@ -1058,12 +969,12 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       {
         if (state.WalkToSuppliesRoutine != null)
         {
-          __instance.StopCoroutine(state.WalkToSuppliesRoutine);
+          MelonCoroutines.Stop(state.WalkToSuppliesRoutine);
           state.WalkToSuppliesRoutine = null;
         }
         if (state.GrabRoutine != null)
         {
-          __instance.StopCoroutine(state.GrabRoutine);
+          MelonCoroutines.Stop(state.GrabRoutine);
           state.GrabRoutine = null;
         }
         state.TargetMixer = null;
@@ -1076,7 +987,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       }
       states.Remove(__instance);
       __instance.Disable();
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
         MelonLogger.Msg($"StartMixingStationBehaviourPatch.Disable: Disabled behaviour for {__instance.chemist?.fullName ?? "null"}");
     }
 
@@ -1084,7 +995,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
     {
       bool atStation = __instance.targetStation != null &&
                          Vector3.Distance(__instance.chemist.transform.position, GetStationAccessPoint(__instance)) < 1f;
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
         MelonLogger.Msg($"StartMixingStationBehaviourPatch.IsAtStation: Result={atStation}, chemist={__instance.chemist?.fullName ?? "null"}");
       return atStation;
     }
@@ -1096,76 +1007,68 @@ namespace NoLazyWorkers_IL2CPP.Chemists
   }
 
   [HarmonyPatch(typeof(Chemist), "GetMixStationsReadyToMove")]
-  public class ChemistGetMixStationsReadyToMovePatch
+  public class ChemistGetMixStationsReadyToMovePatch // full override
   {
     [HarmonyPrefix]
     static bool Prefix(Chemist __instance, ref Il2CppSystem.Collections.Generic.List<MixingStation> __result)
     {
       try
       {
-        List<MixingStation> list = [];
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        Il2CppSystem.Collections.Generic.List<MixingStation> list = new();
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Checking stations for {__instance?.name ?? "null"}, total stations={__instance.configuration.MixStations.Count}");
 
         foreach (MixingStation station in __instance.configuration.MixStations)
         {
           ItemSlot outputSlot = station.OutputSlot;
-          if (outputSlot.Quantity <= 0 || outputSlot.ItemInstance == null)
-            continue;
-
-          // Safely get ProductDefinition
-          ProductDefinition outputProduct = outputSlot.ItemInstance?.Definition.TryCast<ProductDefinition>();
-          if (outputProduct == null)
+          if (outputSlot.Quantity > 0)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-              MelonLogger.Warning($"ChemistGetMixStationsReadyToMovePatch: Output slot item is not a ProductDefinition for station={station.ObjectId}");
-            continue;
-          }
-
-          // Check if station has routes defined
-          if (!MixingStationExtensions.MixingRoutes.TryGetValue(station.GUID, out var routes) || routes == null || routes.Count == 0)
-          {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-              MelonLogger.Warning($"ChemistGetMixStationsReadyToMovePatch: No routes defined for station={station.ObjectId}");
-            // Fallback to destination route
-            if (IsDestinationRouteValid(__instance, station, outputSlot))
-              list.Add(station);
-            continue;
-          }
-
-          // Find matching route
-          MixingRoute matchingRoute = routes.FirstOrDefault(r =>
-              r.Product?.SelectedItem != null && r.Product.SelectedItem == outputProduct);
-
-          if (matchingRoute != null)
-          {
-            // Create a route for the matching product
-            TransitRoute route = new(station.Cast<ITransitEntity>(), station.Cast<ITransitEntity>());
-            if (__instance.MoveItemBehaviour.IsTransitRouteValid(route, outputSlot.ItemInstance.ID))
+            ProductDefinition outputProduct = outputSlot.ItemInstance?.Definition.TryCast<ProductDefinition>();
+            MixingRoute matchingRoute = null;
+            // Find the first route where the product matches
+            foreach (var route in MixingStationExtensions.MixingRoutes[station.GUID])
             {
-              __instance.MoveItemBehaviour.Initialize(route, outputSlot.ItemInstance);
-              __instance.MoveItemBehaviour.Enable_Networked(null);
-              __result = new Il2CppSystem.Collections.Generic.List<MixingStation>(); // Return empty list as we're handling the move
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-                MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Initialized MoveItemBehaviour for station={station.ObjectId}, product={outputProduct.Name}");
-              return false;
+              if (route.Product.SelectedItem == outputProduct)
+              {
+                matchingRoute = route;
+                break;
+              }
+            }
+            if (matchingRoute != null)
+            {
+              // Create a route for the matching product
+              TransitRoute route = new(station.Cast<ITransitEntity>(), station.Cast<ITransitEntity>());
+              if (__instance.MoveItemBehaviour.IsTransitRouteValid(route, station.OutputSlot.ItemInstance.ID))
+              {
+                __instance.MoveItemBehaviour.Initialize(route, station.OutputSlot.ItemInstance);
+                __instance.MoveItemBehaviour.Enable_Networked(null);
+                if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+                  MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Initialized MoveItemBehaviour for station={station.GUID}, product={outputProduct.Name}");
+                return false;
+              }
+            }
+            else if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+              MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Output to destination check.");
+
+            if (__instance.MoveItemBehaviour.IsTransitRouteValid(
+                  station.Configuration.TryCast<MixingStationConfiguration>().DestinationRoute,
+                  outputSlot.ItemInstance.ID))
+            {
+              // Fallback to existing destination route
+              if (IsDestinationRouteValid(__instance, station, outputSlot))
+                list.Add(station);
             }
           }
-
-          // Fallback to existing destination route
-          if (IsDestinationRouteValid(__instance, station, outputSlot))
-            list.Add(station);
         }
-
-        __result = NoLazyUtilities.ConvertList(list);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
+        __result = list;
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
           MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Found {list.Count} stations ready to move for {__instance?.name ?? "null"}");
         return false;
       }
       catch (Exception e)
       {
         MelonLogger.Error($"ChemistGetMixStationsReadyToMovePatch: Failed for chemist: {__instance?.name ?? "null"}, error: {e}");
-        __result = new Il2CppSystem.Collections.Generic.List<MixingStation>();
+        __result = new();
         return false;
       }
     }
@@ -1175,14 +1078,14 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       var config = station.Configuration.TryCast<MixingStationConfiguration>();
       if (config?.DestinationRoute == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-          MelonLogger.Warning($"ChemistGetMixStationsReadyToMovePatch: No valid destination route for station={station.ObjectId}");
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+          MelonLogger.Warning($"ChemistGetMixStationsReadyToMovePatch: No valid destination route for station={station.GUID}");
         return false;
       }
 
       bool isValid = chemist.MoveItemBehaviour.IsTransitRouteValid(config.DestinationRoute, outputSlot.ItemInstance.ID);
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
-        MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Destination route valid={isValid} for station={station.ObjectId}");
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugChemistBehavior)
+        MelonLogger.Msg($"ChemistGetMixStationsReadyToMovePatch: Destination route valid={isValid} for station={station.GUID}");
       return isValid;
     }
   }

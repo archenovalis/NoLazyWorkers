@@ -1,12 +1,17 @@
 using MelonLoader;
-using System.Reflection;
 using HarmonyLib;
 using Il2CppScheduleOne.Employees;
-using Il2CppScheduleOne.NPCs.CharacterClasses;
-using Guid = Il2CppSystem.Guid;
+using System.Collections;
+using System.Reflection;
+using UnityEngine;
 
 namespace NoLazyWorkers_IL2CPP.Settings
 {
+  public class SettingsExtensions
+  {
+    public static readonly List<Il2CppSystem.Guid> Configured = new();
+  }
+
   [Serializable]
   public class BaseEmployee
   {
@@ -51,7 +56,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
   }
 
   [Serializable]
-  public class FixerSettings : BaseEmployee
+  public class FixerSettings
   {
     public string AdditionalSigningFee1 { get; set; }
     public string AdditionalSigningFee2 { get; set; }
@@ -127,10 +132,14 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     private static void SetProperty(object target, string key, string value)
     {
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        MelonLogger.Msg($"Settings: SetProperty");
       var property = target.GetType().GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
       if (property == null || property.PropertyType != typeof(string))
         return;
 
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        MelonLogger.Msg($"Settings: SetProperty {property} | {target}");
       property.SetValue(target, value);
     }
 
@@ -160,10 +169,10 @@ namespace NoLazyWorkers_IL2CPP.Settings
                 $"DailyWage = {Chemist.DailyWage}",
                 $"WalkSpeed = {Chemist.WalkSpeed}",
                 $"MaxHealth = {Chemist.MaxHealth}",
-                $"#MixingPerIngredientTime = {Chemist.MixingPerIngredientTime} #not implemented yet",
-                $"#PlaceIngredientsTime = {Chemist.PlaceIngredientsTime} #not implemented yet",
-                $"#StirTime = {Chemist.StirTime} #not implemented yet",
-                $"#BurnerTime = {Chemist.BurnerTime} #not implemented yet",
+                $"MixingPerIngredientTime = {Chemist.MixingPerIngredientTime}",
+                $"PlaceIngredientsTime = {Chemist.PlaceIngredientsTime}",
+                $"StirTime = {Chemist.StirTime}",
+                $"BurnerTime = {Chemist.BurnerTime}",
                 "",
                 "#cleaner",
                 $"SigningFee = {Cleaner.SigningFee}",
@@ -179,17 +188,13 @@ namespace NoLazyWorkers_IL2CPP.Settings
                 $"PackagingSpeedMultiplier = {Packager.PackagingSpeedMultiplier}",
                 "",
                 "#fixer",
-                $"SigningFee = {Fixer.SigningFee}",
-                $"DailyWage = {Fixer.DailyWage}",
-                $"WalkSpeed = {Fixer.WalkSpeed}",
-                $"MaxHealth = {Fixer.MaxHealth}",
-                $"#AdditionalSigningFee1 = {Fixer.AdditionalSigningFee1} #not implemented yet",
-                $"#AdditionalSigningFee2 = {Fixer.AdditionalSigningFee2} #not implemented yet",
-                $"#MaxAdditionalFee = {Fixer.MaxAdditionalFee} #not implemented yet",
-                $"#AdditionalFeeThreshold = {Fixer.AdditionalFeeThreshold} #not implemented yet",
+                $"AdditionalSigningFee1 = {Fixer.AdditionalSigningFee1}",
+                $"AdditionalSigningFee2 = {Fixer.AdditionalSigningFee2}",
+                $"MaxAdditionalFee = {Fixer.MaxAdditionalFee}",
+                $"AdditionalFeeThreshold = {Fixer.AdditionalFeeThreshold}",
                 "",
                 "#misc",
-                $"#StoreDeliveryFee = {Misc.StoreDeliveryFee} #not implemented yet"
+                $"StoreDeliveryFee = {Misc.StoreDeliveryFee}"
             };
       File.WriteAllLines(filePath, lines);
     }
@@ -242,10 +247,6 @@ namespace NoLazyWorkers_IL2CPP.Settings
       };
       Fixer = new FixerSettings
       {
-        SigningFee = "1250",
-        DailyWage = "250",
-        WalkSpeed = "1.2",
-        MaxHealth = "100",
         AdditionalSigningFee1 = "100",
         AdditionalSigningFee2 = "250",
         MaxAdditionalFee = "500",
@@ -271,46 +272,99 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public void StartCoroutine(Employee employee)
     {
+      if (employee == null)
+      {
+        MelonLogger.Error("Settings: StartCoroutine: Employee is null");
+        return;
+      }
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: StartCoroutine {employee.name}");
+        MelonLogger.Msg($"Settings: StartCoroutine for {employee.fullName} | {employee.ObjectId} | {employee.GUID}");
       MelonCoroutines.Start(ConfigureRoutine(employee));
     }
 
-    private System.Collections.IEnumerator ConfigureRoutine(Employee employee)
+    private IEnumerator ConfigureRoutine(Employee employee)
     {
-      // Wait until the end of the frame to ensure NPC is fully initialized
-      yield return null;
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ConfigureRoutine {employee.name}");
-
-      ApplySettings(employee);
-    }
-
-    public void ApplySettings(Employee employee)
-    {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ApplySettings {employee.name}");
-      switch (employee)
+      if (employee == null)
       {
-        case Botanist botanist:
-          ApplyBotanistSettings(botanist);
-          break;
-        case Chemist chemist:
-          ApplyChemistSettings(chemist);
-          break;
-        case Cleaner cleaner:
-          ApplyCleanerSettings(cleaner);
-          break;
-        case Packager packager:
-          ApplyPackagerSettings(packager);
-          break;
+        MelonLogger.Error("Settings: ConfigureRoutine: Employee is null");
+        yield break;
+      }
+
+      int attempts = 0;
+      const int maxAttempts = 50; // ~1 second at 50 FPS
+
+      while (attempts < maxAttempts)
+      {
+        int objectId = 0;
+        bool isObjectIdValid = false;
+        try
+        {
+          objectId = employee.ObjectId; // Attempt to access ObjectId
+          isObjectIdValid = objectId > 0; // Assume positive ObjectId is valid
+        }
+        catch (Exception ex)
+        {
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+            MelonLogger.Msg($"Settings: ConfigureRoutine: Error accessing ObjectId for {employee.fullName} on attempt {attempts + 1}: {ex.Message}");
+        }
+
+        string guid = employee.GUID.ToString();
+        bool isGuidValid = !string.IsNullOrEmpty(guid) && guid != "00000000-0000-0000-0000-000000000000";
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          MelonLogger.Msg($"Settings: ConfigureRoutine: Waiting for valid ObjectId and GUID for {employee.fullName} | Attempt {attempts + 1} | ObjectId: {(isObjectIdValid ? objectId.ToString() : "Invalid")} | GUID: {guid}");
+
+        if (isObjectIdValid && isGuidValid)
+        {
+          // Check if ObjectId is already configured
+          if (SettingsExtensions.Configured.Contains(employee.GUID))
+          {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+              MelonLogger.Msg($"Settings: ConfigureRoutine: Skipping already configured employee {employee.fullName} | ObjectId: {objectId} | GUID: {guid}");
+            yield break;
+          }
+
+          // Add ObjectId to configured list
+          SettingsExtensions.Configured.Add(employee.GUID);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+            MelonLogger.Msg($"Settings: ConfigureRoutine: Added ObjectId {objectId} for {employee.fullName} | GUID: {guid}");
+
+          // Apply settings based on employee type
+          switch (employee.Type)
+          {
+            case EEmployeeType.Botanist:
+              ApplyBotanistSettings(employee.Cast<Botanist>());
+              break;
+            case EEmployeeType.Chemist:
+              ApplyChemistSettings(employee.Cast<Chemist>());
+              break;
+            case EEmployeeType.Cleaner:
+              ApplyCleanerSettings(employee.Cast<Cleaner>());
+              break;
+            case EEmployeeType.Handler:
+              ApplyPackagerSettings(employee.Cast<Packager>());
+              break;
+            default:
+              MelonLogger.Warning($"Settings: ConfigureRoutine: Unknown employee type {employee.Type} for {employee.fullName}");
+              break;
+          }
+          yield break;
+        }
+
+        attempts++;
+        yield return null; // Wait one frame
       }
     }
 
-    private void ApplyBotanistSettings(Botanist botanist)
+    public void ApplyBotanistSettings(Botanist botanist)
     {
+      if (botanist == null)
+      {
+        MelonLogger.Error("Settings: ApplyBotanistSettings: Botanist is null");
+        return;
+      }
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ApplyBotanistSettings {botanist.fullName}");
+        MelonLogger.Msg($"Settings: ApplyBotanistSettings {botanist.fullName} | {botanist.ObjectId} | {botanist.GUID}");
       if (int.TryParse(config.Botanist.SigningFee, out int signingFee))
         botanist.SigningFee = signingFee;
       else
@@ -365,10 +419,15 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error($"Invalid HarvestTime for Botanist: {config.Botanist.HarvestTime}");
     }
 
-    private void ApplyChemistSettings(Chemist chemist)
+    public void ApplyChemistSettings(Chemist chemist)
     {
+      if (chemist == null)
+      {
+        MelonLogger.Error("Settings: ApplyChemistSettings: Chemist is null");
+        return;
+      }
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ApplyChemistSettings {chemist.fullName}");
+        MelonLogger.Msg($"Settings: ApplyChemistSettings {chemist.fullName} | {chemist.ObjectId} | {chemist.GUID}");
       if (int.TryParse(config.Chemist.SigningFee, out int signingFee))
         chemist.SigningFee = signingFee;
       else
@@ -404,10 +463,15 @@ namespace NoLazyWorkers_IL2CPP.Settings
       //    MelonLogger.Error($"Invalid BurnerTime for Chemist: {config.Chemist.BurnerTime}");
     }
 
-    private void ApplyCleanerSettings(Cleaner cleaner)
+    public void ApplyCleanerSettings(Cleaner cleaner)
     {
+      if (cleaner == null)
+      {
+        MelonLogger.Error("Settings: ApplyCleanerSettings: Cleaner is null");
+        return;
+      }
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ApplyCleanerSettings {cleaner.fullName}");
+        MelonLogger.Msg($"Settings: ApplyCleanerSettings {cleaner.fullName} | {cleaner.ObjectId} | {cleaner.GUID}");
       if (int.TryParse(config.Cleaner.SigningFee, out int signingFee))
         cleaner.SigningFee = signingFee;
       else
@@ -426,10 +490,15 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error($"Invalid MaxHealth for Cleaner: {config.Cleaner.MaxHealth}");
     }
 
-    private void ApplyPackagerSettings(Packager packager)
+    public void ApplyPackagerSettings(Packager packager)
     {
+      if (packager == null)
+      {
+        MelonLogger.Error("Settings: ApplyPackagerSettings: Packager is null");
+        return;
+      }
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: ApplyPackagerSettings {packager.fullName}");
+        MelonLogger.Msg($"Settings: ApplyPackagerSettings {packager.fullName} | {packager.ObjectId} | {packager.GUID}");
       if (int.TryParse(config.Packager.SigningFee, out int signingFee))
         packager.SigningFee = signingFee;
       else
@@ -438,14 +507,14 @@ namespace NoLazyWorkers_IL2CPP.Settings
         packager.DailyWage = dailyWage;
       else
         MelonLogger.Error($"Invalid DailyWage for Packager: {config.Packager.DailyWage}");
-      if (float.TryParse(config.Packager.WalkSpeed, out float walkSpeed))
+      if (packager.movement != null && float.TryParse(config.Packager.WalkSpeed, out float walkSpeed))
         packager.movement.WalkSpeed = walkSpeed;
       else
-        MelonLogger.Error($"Invalid WalkSpeed for Packager: {config.Packager.WalkSpeed}");
-      if (float.TryParse(config.Packager.MaxHealth, out float maxHealth))
+        MelonLogger.Error($"Invalid WalkSpeed for Packager: {config.Packager.WalkSpeed} or movement is null");
+      if (packager.Health != null && float.TryParse(config.Packager.MaxHealth, out float maxHealth))
         packager.Health.MaxHealth = maxHealth;
       else
-        MelonLogger.Error($"Invalid MaxHealth for Packager: {config.Packager.MaxHealth}");
+        MelonLogger.Error($"Invalid MaxHealth for Packager: {config.Packager.MaxHealth} or Health is null");
       if (float.TryParse(config.Packager.PackagingSpeedMultiplier, out float packagingSpeed))
         packager.PackagingSpeedMultiplier = packagingSpeed;
       else
@@ -453,9 +522,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
     }
 
     public void ApplyFixerSettings()
-    {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: ApplyFixerSettings");
+    {/* 
       if (int.TryParse(config.Fixer.AdditionalSigningFee1, out int signingFee1))
         Fixer.ADDITIONAL_SIGNING_FEE_1 = signingFee1;
       else
@@ -471,7 +538,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
       if (int.TryParse(config.Fixer.AdditionalFeeThreshold, out int feeThreshold))
         Fixer.ADDITIONAL_FEE_THRESHOLD = feeThreshold;
       else
-        MelonLogger.Error($"Invalid AdditionalFeeThreshold for Fixer: {config.Fixer.AdditionalFeeThreshold}");
+        MelonLogger.Error($"Invalid AdditionalFeeThreshold for Fixer: {config.Fixer.AdditionalFeeThreshold}"); */
     }
 
     public void ApplyMiscSettings()
@@ -489,58 +556,94 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error($"Invalid StoreDeliveryFee: {config.Misc.StoreDeliveryFee}");
       }
     }
+
+    public IEnumerator ApplyOneShotSettingsRoutine()
+    {
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        MelonLogger.Msg("Settings: ApplyOneShotSettingsRoutine started");
+      bool settingsApplied = false;
+      float elapsedTime = 0f;
+      const float maxTime = 30f; // 30 seconds
+      const float interval = 1f; // 1 second
+
+      while (elapsedTime < maxTime && !settingsApplied)
+      {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          MelonLogger.Msg($"Settings: ApplyOneShotSettingsRoutine attempt at {elapsedTime} seconds");
+        //ApplyFixerSettings();
+        ApplyMiscSettings();
+        settingsApplied = true; // Assume success unless game-specific checks indicate otherwise
+        elapsedTime += interval;
+        yield return new WaitForSeconds(interval);
+      }
+
+      if (settingsApplied)
+      {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          MelonLogger.Msg("Settings: ApplyOneShotSettingsRoutine completed successfully");
+      }
+      else
+      {
+        MelonLogger.Error("Settings: ApplyOneShotSettingsRoutine failed to apply settings after 30 seconds");
+      }
+    }
   }
 
   [HarmonyPatch]
   public static class EmployeePatches
   {
-    private static readonly List<Guid> Configured = [];
-
     [HarmonyPostfix]
-    [HarmonyPatch(typeof(Chemist), "Awake")]
-    public static void ChemistAwakePostfix(Chemist __instance)
+    [HarmonyPatch(typeof(Chemist), "NetworkInitialize___Early")]
+    public static void ChemistNetworkInitializePostfix(Chemist __instance)
     {
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: ChemistAwakePostfix");
+        MelonLogger.Msg("Settings: ChemistNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Packager), "NetworkInitialize___Early")]
-    public static void PackagerAwakePostfix(Packager __instance)
+    public static void PackagerNetworkInitializePostfix(Packager __instance)
     {
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: PackagerAwakePostfix");
+        MelonLogger.Msg("Settings: PackagerNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
 
     [HarmonyPostfix]
-    [HarmonyPatch(typeof(Botanist), "Start")]
-    public static void BotanistAwakePostfix(Botanist __instance)
+    [HarmonyPatch(typeof(Botanist), "NetworkInitialize___Early")]
+    public static void BotanistNetworkInitializePostfix(Botanist __instance)
     {
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: BotanistAwakePostfix");
+        MelonLogger.Msg("Settings: BotanistNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Cleaner), "NetworkInitialize___Early")]
-    public static void CleanerAwakePostfix(Cleaner __instance)
+    public static void CleanerNetworkInitializePostfix(Cleaner __instance)
     {
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: CleanerAwakePostfix");
+        MelonLogger.Msg("Settings: CleanerNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
 
     private static void ConfigureEmployee(Employee employee)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg("Settings: CleanerAwakePostfix");
-      if (!Configured.Contains(employee.GUID))
+      if (employee == null)
       {
-        new Configure().StartCoroutine(employee);
-        Configured.Add(employee.GUID);
+        MelonLogger.Error("Settings: ConfigureEmployee: Employee is null");
+        return;
       }
+      // Check if already configured
+      if (SettingsExtensions.Configured.Contains(employee.GUID))
+      {
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          MelonLogger.Msg($"Settings: ConfigureEmployee: Skipping already configured employee {employee.fullName} | ObjectId: {employee.ObjectId} | GUID: {employee.GUID}");
+        return;
+      }
+      // Start coroutine for GUID validation
+      new Configure().StartCoroutine(employee);
     }
   }
 }
