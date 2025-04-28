@@ -1,5 +1,6 @@
 ﻿using HarmonyLib;
 using MelonLoader;
+using MelonLoader.Utils;
 using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
@@ -11,7 +12,6 @@ using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Loaders;
 using ScheduleOne.Product;
-using static ScheduleOne.Registry;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.UI;
@@ -22,18 +22,22 @@ using System.Reflection;
 using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.3", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.4", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
-    public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
-    public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
-    public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
-    public static bool EnableDebugBehaviorLogs = false; // true enables Behavior-only Msg and Warning Logs
+    public static bool EnableDebugLogs = false; // enables all but stacktrace logs
+    public static bool EnableDebugCore = false;
+    public static bool EnableDebugSettings = false;
+    public static bool EnableDebugPot = false;
+    public static bool EnableDebugMixingStation = false;
+    public static bool EnableDebugChemistBehavior = false;
+    public static bool EnableDebugBotanistBehavior = false;
+    public static bool EnableDebugPackagerBehavior = false;
+    public static bool EnableDebugStacktrace = false;
   }
 
   public static class BuildInfo
@@ -42,37 +46,68 @@ namespace NoLazyWorkers
     public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.1.3";
+    public const string Version = "1.1.4";
     public const string DownloadLink = null;
   }
 
   public class NoLazyWorkersMod : MelonMod
   {
-    private static bool SetupConfigPanelsComplete;
+    public static NoLazyWorkersMod Instance { get; private set; }
+    public Settings.Default Config { get; private set; }
+    private bool oneShotSettingsApplied = false;
+    private bool SetupConfigPanelsComplete = false;
     public override void OnInitializeMelon()
     {
       try
       {
         HarmonyInstance.PatchAll();
-        MelonLogger.Msg("NoLazyWorkers loaded!");
+        MelonLogger.Msg("NoLazyWorkers_Alternative loaded!");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to initialize NoLazyWorkers: {e}");
+        MelonLogger.Error($"Failed to initialize NoLazyWorkers_Alternative: {e}");
       }
+
+      Instance = this;
+      string configPath = Path.Combine(MelonEnvironment.UserDataDirectory, "NoLazyWorkers.cfg");
+
+      if (File.Exists(configPath))
+      {
+        Config = Settings.Default.LoadFromFile(configPath);
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+          MelonLogger.Msg("Config loaded.");
+      }
+      else
+      {
+        Config = new Settings.Default();
+        Config.SaveToFile(configPath);
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+          MelonLogger.Msg("Default config created.");
+      }
+
+      // Register scene load callback
+      MelonEvents.OnSceneWasLoaded.Subscribe(OnSceneWasLoaded);
     }
 
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
-      if (!SetupConfigPanelsComplete)
+      if (sceneName == "Main")
       {
+        var configure = new Settings.Configure();
+        //configure.ApplyFixerSettings(); // read-only values
+        configure.ApplyMiscSettings();
+        oneShotSettingsApplied = true;
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+          MelonLogger.Msg("Applied Fixer and Misc settings on main scene load.");
+
+        MixingStationExtensions.InitializeStaticRouteListTemplate();
         /*         
         GameObject prefab;
         List<string> strings = ["storage/safe/Safe_Built", "storage/storagerack_large/StorageRack_Large", "storage/storagerack_medium/StorageRack_Medium", "storage/storagerack_small/StorageRack_Small"];
         foreach (string str in strings)
         {
           prefab = (GameObject)Resources.Load(str, typeof(GameObject));
-          if (prefab == null && (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs))
+          if (prefab == null && (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCoreLogs))
             MelonLogger.Error($"OnSceneWasLoaded: Prefab for {str} not found.");
           if (NoLazyWorkers.Handlers.StorageExtensions.SetupConfigPanelTemplate(prefab) != null)
             SetupConfigPanels = true;
@@ -85,16 +120,14 @@ namespace NoLazyWorkers
     {
       SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
-      ConfigurationExtensions.NPCConfig.Clear();
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore)
         MelonLogger.Msg("Cleared ConfigurationExtensions dictionaries on scene unload.");
     }
   }
 
   public static class ConfigurationExtensions
   {
-    public static Dictionary<NPC, ObjectField> NPCSupply = [];
-    public static Dictionary<NPC, EntityConfiguration> NPCConfig = [];
+    public static Dictionary<Guid, ObjectField> NPCSupply = [];
 
     private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
     private static readonly float debounceTime = 0.2f;
@@ -108,26 +141,17 @@ namespace NoLazyWorkers
           MelonLogger.Error("InvokeChanged: EntityConfiguration is null");
           return;
         }
-
-        var method = typeof(EntityConfiguration).GetMethod("InvokeChanged",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-        if (method == null)
-        {
-          MelonLogger.Error("InvokeChanged: Method not found on EntityConfiguration");
-          return;
-        }
-
         float currentTime = Time.time;
         if (lastInvokeTimes.TryGetValue(config, out float lastTime) && currentTime - lastTime < debounceTime)
         {
-          if (DebugConfig.EnableDebugLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
             MelonLogger.Msg($"InvokeChanged debounced for config: {config}");
           return;
         }
         lastInvokeTimes[config] = currentTime;
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugStacktrace)
           MelonLogger.Msg($"InvokeChanged called for config: {config}, StackTrace: {new System.Diagnostics.StackTrace()}");
-        method.Invoke(config, null);
+        config.InvokeChanged();
       }
       catch (Exception e)
       {
@@ -138,47 +162,55 @@ namespace NoLazyWorkers
 
   public static class NoLazyUtilities
   {
-    public static ItemField GetMixerItemForProductSlot(MixingStation station)
+    /* /// <summary>
+    /// Converts a System.Collections.Generic.List<T> to an Il2CppSystem.Collections.Generic.List<T>.
+    /// </summary>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <param name="systemList">The System list to convert.</param>
+    /// <returns>An Il2CppSystem list containing the same elements, or an empty list if the input is null.</returns>
+    public static Il2CppSystem.Collections.Generic.List<T> ConvertList<T>(List<T> systemList)
+        where T : Il2CppSystem.Object
     {
-      // Get the product from the product slot
-      var productInSlot = station.ProductSlot.ItemInstance?.Definition as ProductDefinition;
-      if (productInSlot == null)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot item is not a ProductDefinition for station={station?.ObjectId.ToString() ?? "null"}");
-        return null;
-      }
+      if (systemList == null)
+        return new Il2CppSystem.Collections.Generic.List<T>();
 
-      // Get the routes for the station
-      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station, out var routes) || routes == null || !routes.Any())
+      Il2CppSystem.Collections.Generic.List<T> il2cppList = new(systemList.Count);
+      foreach (var item in systemList)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.ObjectId}");
-        return null;
+        if (item != null)
+          il2cppList.Add(item);
       }
-
-      // Find the first route where the product matches
-      var matchingRoute = routes.FirstOrDefault(route =>
-          route.Product?.SelectedItem != null &&
-          route.Product.SelectedItem == productInSlot);
-
-      if (matchingRoute == null)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No route matches product={productInSlot.Name} for station={station.ObjectId.ToString()}");
-        return null;
-      }
-      // Return the mixerItem from the matching route
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-        MelonLogger.Msg($"GetMixerItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={station.ObjectId.ToString()}");
-      return matchingRoute.MixerItem;
+      return il2cppList;
     }
+
+    /// <summary>
+    /// Converts an Il2CppSystem.Collections.Generic.List<T> to a System.Collections.Generic.List<T>.
+    /// </summary>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <param name="il2cppList">The Il2CppSystem list to convert.</param>
+    /// <returns>A System list containing the same elements, or an empty list if the input is null.</returns>
+    public static List<T> ConvertList<T>(Il2CppSystem.Collections.Generic.List<T> il2cppList)
+        where T : Il2CppSystem.Object
+    {
+      if (il2cppList == null)
+        return [];
+
+      List<T> systemList = new(il2cppList.Count);
+      for (int i = 0; i < il2cppList.Count; i++)
+      {
+        var item = il2cppList[i];
+        if (item != null)
+          systemList.Add(item);
+      }
+      return systemList;
+    } 
+  } */
 
     public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
     {
       if (npc == null || item == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInInventoryAndSupply: NPC or item is null");
         return 0;
       }
@@ -192,35 +224,28 @@ namespace NoLazyWorkers
     {
       if (npc == null || item == null || string.IsNullOrEmpty(item.ID))
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: NPC={npc}, item={item}, or item.ID={item?.ID} is null for {npc?.fullName ?? "null"}");
         return 0;
       }
 
-      if (!ConfigurationExtensions.NPCConfig.TryGetValue(npc, out var config))
+      if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc.GUID, out var supply) || supply?.SelectedObject == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
-          MelonLogger.Warning($"GetAmountInSupplies: NPCConfig not found for {npc.fullName}");
-        return 0;
-      }
-
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc, out var supply) || supply?.SelectedObject == null)
-      {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Supply or SelectedObject is null for {npc.fullName}");
         return 0;
       }
 
       if (supply.SelectedObject is not ITransitEntity supplyT)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
         return 0;
       }
 
       if (!npc.Movement.CanGetTo(supplyT, 1f))
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Cannot reach supply for {npc.fullName}");
         return 0;
       }
@@ -232,7 +257,7 @@ namespace NoLazyWorkers
 
       if (!slots.Any())
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: No valid slots in supply {supplyT?.Name} for {npc.fullName}");
         return 0;
       }
@@ -244,43 +269,61 @@ namespace NoLazyWorkers
         if (slot.ItemInstance.ID.ToLower() == itemIdLower)
         {
           quantity += slot.Quantity;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
             MelonLogger.Msg($"GetAmountInSupplies: Found {itemIdLower} with quantity={slot.Quantity} in slot {slot.GetHashCode()} for {npc.fullName}");
         }
         else
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
             MelonLogger.Msg($"GetAmountInSupplies: Slot {slot.GetHashCode()} contains {slot.ItemInstance.ID} (quantity={slot.Quantity}), not {itemIdLower} for {npc.fullName}");
         }
       }
 
       if (quantity == 0)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Msg($"GetAmountInSupplies: No items of {item.ID} found in supply {supplyT?.Name} for {npc.fullName}");
       }
       else
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Msg($"GetAmountInSupplies: Total quantity of {item.ID} is {quantity} in supply {supplyT?.Name} for {npc.fullName}");
       }
       return quantity;
     }
 
-    public static T GetComponentTemplateFromConfigPanel<T>(EConfigurableType configType, Func<ConfigPanel, T> getUITemplate) where T : Component
+    public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
     {
       try
       {
-        // Get ManagementInterface instance
-        ManagementInterface managementInterface = ManagementInterface.Instance;
-        if (managementInterface == null)
+        // Create a dummy configuration based on the config type
+        GameObject dummyEntity = new($"Dummy{configType}");
+        EntityConfiguration config = null;
+        GameObject configPanelPrefab = null;
+        ConfigurationReplicator replicator = new();
+        switch (configType)
         {
-          MelonLogger.Error("ManagementInterface instance is null");
-          return null;
+          case EConfigurableType.Pot:
+            Pot pot = dummyEntity.AddComponent<Pot>();
+            config = new PotConfiguration(replicator, pot, pot);
+            configPanelPrefab = GetPrefabGameObject("PotConfigPanel");
+            break;
+          case EConfigurableType.Packager:
+            Packager packager = dummyEntity.AddComponent<Packager>();
+            config = new PackagerConfiguration(replicator, packager, packager);
+            configPanelPrefab = GetPrefabGameObject("PackagerConfigPanel");
+            break;
+          case EConfigurableType.MixingStation:
+            MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
+            config = new MixingStationConfiguration(replicator, mixingStation, mixingStation);
+            configPanelPrefab = GetPrefabGameObject("MixingStationPanel");
+            break;
+          // Add other types as needed
+          default:
+            MelonLogger.Error($"Unsupported EConfigurableType: {configType}");
+            UnityEngine.Object.Destroy(dummyEntity);
+            return null;
         }
-
-        // Get ConfigPanel prefab
-        ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(configType);
         if (configPanelPrefab == null)
         {
           MelonLogger.Error($"No ConfigPanel prefab found for {configType}");
@@ -288,7 +331,7 @@ namespace NoLazyWorkers
         }
 
         // Instantiate prefab temporarily
-        GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
+        GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab);
         tempPanelObj.SetActive(false); // Keep inactive to avoid rendering
         ConfigPanel tempPanel = tempPanelObj.GetComponent<ConfigPanel>();
         if (tempPanel == null)
@@ -300,47 +343,19 @@ namespace NoLazyWorkers
 
         // Bind to initialize UI components (mimic game behavior)
         List<EntityConfiguration> configs = [];
-        // Create a dummy configuration based on the config type
-        GameObject dummyEntity = new GameObject($"Dummy{configType}");
-        EntityConfiguration config = null;
-        ConfigurationReplicator replicator = new ConfigurationReplicator();
-        switch (configType)
-        {
-          case EConfigurableType.Pot:
-            Pot pot = dummyEntity.AddComponent<Pot>();
-            config = new PotConfiguration(replicator, pot, pot);
-            break;
-          case EConfigurableType.Packager:
-            Packager packager = dummyEntity.AddComponent<Packager>();
-            config = new PackagerConfiguration(replicator, packager, packager);
-            break;
-          case EConfigurableType.MixingStation:
-            MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
-            config = new MixingStationConfiguration(replicator, mixingStation, mixingStation);
-            break;
-          // Add other types as needed
-          default:
-            MelonLogger.Error($"Unsupported EConfigurableType: {configType}");
-            UnityEngine.Object.Destroy(tempPanelObj);
-            UnityEngine.Object.Destroy(dummyEntity);
-            return null;
-        }
 
         configs.Add(config);
         tempPanel.Bind(configs);
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
 
         // Get the UI template
-        T uiTemplate = getUITemplate(tempPanel);
+        var uiTemplate = tempPanel.transform.Find(componentStr);
         if (uiTemplate == null)
-        {
           MelonLogger.Error($"Failed to retrieve UI template from ConfigPanel for {configType}");
-        }
-        else if (DebugConfig.EnableDebugLogs)
-        {
+        else if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"Successfully retrieved UI template from ConfigPanel for {configType}");
-        }
+
 
         // Clean up
         UnityEngine.Object.Destroy(tempPanelObj);
@@ -354,130 +369,56 @@ namespace NoLazyWorkers
       }
     }
 
-    public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string childPath)
-    {
-      try
-      {
-        ManagementInterface managementInterface = ManagementInterface.Instance;
-        if (managementInterface == null)
-        {
-          MelonLogger.Error("ManagementInterface instance is null");
-          return null;
-        }
-
-        ConfigPanel configPanelPrefab = managementInterface.GetConfigPanelPrefab(configType);
-        if (configPanelPrefab == null)
-        {
-          MelonLogger.Error($"No ConfigPanel prefab found for {configType}");
-          return null;
-        }
-
-        GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab.gameObject);
-        tempPanelObj.SetActive(false);
-        ConfigPanel tempPanel = tempPanelObj.GetComponent<ConfigPanel>();
-        if (tempPanel == null)
-        {
-          MelonLogger.Error($"Instantiated prefab for {configType} lacks ConfigPanel component");
-          UnityEngine.Object.Destroy(tempPanelObj);
-          return null;
-        }
-
-        List<EntityConfiguration> configs = [];
-        GameObject dummyEntity = new GameObject($"Dummy{configType}");
-        EntityConfiguration config = null;
-        ConfigurationReplicator replicator = new ConfigurationReplicator();
-        switch (configType)
-        {
-          case EConfigurableType.Pot:
-            Pot pot = dummyEntity.AddComponent<Pot>();
-            config = new PotConfiguration(replicator, pot, pot);
-            break;
-          case EConfigurableType.Packager:
-            Packager packager = dummyEntity.AddComponent<Packager>();
-            config = new PackagerConfiguration(replicator, packager, packager);
-            break;
-          case EConfigurableType.MixingStation:
-            MixingStation mixingStation = dummyEntity.AddComponent<MixingStation>();
-            config = new MixingStationConfiguration(replicator, mixingStation, mixingStation);
-            break;
-          // Add other types as needed
-          default:
-            MelonLogger.Error($"Unsupported EConfigurableType: {configType}");
-            UnityEngine.Object.Destroy(tempPanelObj);
-            UnityEngine.Object.Destroy(dummyEntity);
-            return null;
-        }
-
-        configs.Add(config);
-        tempPanel.Bind(configs);
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
-        if (childPath != "")
-        {
-          Transform uiTemplate = tempPanel.transform.Find(childPath);
-          if (uiTemplate == null)
-          {
-            MelonLogger.Error($"Failed to find {childPath} in ConfigPanel for {configType}");
-          }
-          else if (DebugConfig.EnableDebugLogs)
-          {
-            MelonLogger.Msg($"Successfully retrieved {childPath} from ConfigPanel for {configType}");
-          }
-
-          UnityEngine.Object.Destroy(tempPanelObj);
-          UnityEngine.Object.Destroy(dummyEntity);
-          return uiTemplate;
-        }
-        UnityEngine.Object.Destroy(tempPanelObj);
-        UnityEngine.Object.Destroy(dummyEntity);
-        return tempPanel.transform;
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"Failed to get UI template {childPath} from ConfigPanel for {configType}: {e}");
-        return null;
-      }
-    }
-
     public static GameObject GetPrefabGameObject(string id)
     {
       try
       {
-        GameObject prefab = GetPrefab(id);
-        if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
+        GameObject prefab = null;
+        GameObject[] allObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+        foreach (GameObject obj in allObjects)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
-          return prefab;
+          if (obj.name.Contains(id))
+          {
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+              MelonLogger.Msg($"Found prefab: {obj.name}");
+            prefab = obj;
+            break;
+          }
         }
-        else if (prefab != null)
+        if (prefab != null)
         {
-          MelonLogger.Warning($"Found prefab with ID: {id}, but it lacks PotConfigPanel component");
+          GameObject instance = UnityEngine.Object.Instantiate(prefab);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+            MelonLogger.Msg($"Instantiated prefab: {instance.name}");
+          return instance;
         }
-
-        MelonLogger.Warning("No PotConfigPanel prefab found in Registry with any tested ID");
-        return null;
+        else
+        {
+          MelonLogger.Error($"Prefab {id} not found in Resources.");
+          return null;
+        }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to find PotConfigPanel prefab: {e}");
+        MelonLogger.Error($"Failed to find prefab: {e}");
         return null;
       }
     }
 
     public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
 
       // Log basic info
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
 
       // Log ItemFieldUI properties
       LogComponentDetails(itemfieldUI, 0);
 
       // Log hierarchy and components
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
       if (itemfieldUI.gameObject != null)
       {
         LogGameObjectDetails(itemfieldUI.gameObject, 0);
@@ -492,11 +433,11 @@ namespace NoLazyWorkers
     {
       if (go == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
         return;
       }
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
 
       // Log components on this GameObject
       foreach (var component in go.GetComponents<Component>())
@@ -515,11 +456,11 @@ namespace NoLazyWorkers
     {
       if (component == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
         return;
       }
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
 
       // Use reflection to log all public fields
       var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -529,7 +470,7 @@ namespace NoLazyWorkers
         {
           var value = field.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
         }
         catch (Exception e)
         {
@@ -548,7 +489,7 @@ namespace NoLazyWorkers
         {
           var value = property.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
         }
         catch (Exception e)
         {
@@ -584,10 +525,10 @@ namespace NoLazyWorkers
       {
         if (option is ItemField itemField)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
           if (itemField.Options != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
           }
           else
           {
@@ -596,7 +537,7 @@ namespace NoLazyWorkers
         }
         else
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
         }
       }
       catch (Exception e)
@@ -614,12 +555,12 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
         if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out var potRoute))
         {
           if (potRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
             potRoute.SetVisualsActive(active: true);
           }
           else
@@ -627,11 +568,11 @@ namespace NoLazyWorkers
             MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
           }
         }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out var mixerRoute))
+        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
         {
           if (mixerRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: true);
           }
           else
@@ -654,12 +595,12 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
         if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out TransitRoute potRoute))
         {
           if (potRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
             potRoute.SetVisualsActive(active: false);
           }
           else
@@ -667,11 +608,11 @@ namespace NoLazyWorkers
             MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
           }
         }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.MixingSourceRoute.TryGetValue(mixerConfig.station, out TransitRoute mixerRoute))
+        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
         {
           if (mixerRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: false);
           }
           else
@@ -749,7 +690,7 @@ namespace NoLazyWorkers
       {
         __instance.onLoadComplete.AddListener(delegate
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
           PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
           //StorageExtensions.RestoreConfigurations();
@@ -771,11 +712,11 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
         if (__result != null)
         {
           LoadedGridItems[mainPath] = __result;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
         }
         else
         {
@@ -794,7 +735,7 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
     {
-      if (DebugConfig.EnableDebugLogs)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
       {
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}");
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}");
@@ -803,24 +744,24 @@ namespace NoLazyWorkers
       }
       if (fieldIndex < 0 || fieldIndex >= __instance.Configuration.Fields.Count)
       {
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping");
         return false;
       }
       var itemField = __instance.Configuration.Fields[fieldIndex] as ItemField;
       if (itemField == null)
       {
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping");
         return false;
       }
       if (string.IsNullOrEmpty(value) && !itemField.CanSelectNone)
       {
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}");
         return false;
       }
-      if (DebugConfig.EnableDebugLogs)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
       return true;
     }
@@ -828,13 +769,13 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
         if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
         {
           if (PotExtensions.PotSupply.TryGetValue(potConfig.Pot, out ObjectField supply))
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugCore)
               MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
           }
           else
@@ -850,21 +791,21 @@ namespace NoLazyWorkers
     }
   }
 
-  [HarmonyPatch(typeof(ItemField), "SetItem", new Type[] { typeof(ItemDefinition), typeof(bool) })]
+  [HarmonyPatch(typeof(ItemField), "SetItem", [typeof(ItemDefinition), typeof(bool)])]
   public class ItemFieldSetItemPatch
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
-      if (DebugConfig.EnableDebugLogs)
+      if (DebugConfig.EnableDebugStacktrace)
         MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
       bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
-        if (DebugConfig.EnableDebugLogs)
+        if (DebugConfig.EnableDebugStacktrace)
           MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
-        return false;
+        /* return false; */
       }
       return true;
     }

@@ -22,7 +22,7 @@ namespace NoLazyWorkers.Botanists
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Processing configs, count: {configs?.Count ?? 0}"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Processing configs, count: {configs?.Count ?? 0}"); }
         if (__instance == null)
         {
           MelonLogger.Error("BotanistConfigPanelBindPatch: __instance is null");
@@ -43,7 +43,7 @@ namespace NoLazyWorkers.Botanists
 
         // Hide SuppliesUI
         __instance.SuppliesUI.gameObject.SetActive(false);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs) { MelonLogger.Msg("BotanistConfigPanelBindPatch: Hid SuppliesUI"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior) { MelonLogger.Msg("BotanistConfigPanelBindPatch: Hid SuppliesUI"); }
 
         // Move PotsUI to SuppliesUI's y-coordinate
         RectTransform suppliesRect = __instance.SuppliesUI.GetComponent<RectTransform>();
@@ -56,7 +56,7 @@ namespace NoLazyWorkers.Botanists
 
         float suppliesY = suppliesRect.anchoredPosition.y;
         potsRect.anchoredPosition = new Vector2(potsRect.anchoredPosition.x, suppliesY);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Moved PotsUI to y={suppliesY}"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Moved PotsUI to y={suppliesY}"); }
       }
       catch (Exception e)
       {
@@ -85,7 +85,7 @@ namespace NoLazyWorkers.Botanists
                 if (PotExtensions.PotSupply.TryGetValue(pot, out var potSupply) && potSupply != null)
                 {
                   __instance.AssignSuppliesEntry.Complete();
-                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+                  if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior)
                   {
                     MelonLogger.Msg($"QuestBotanistsMinPassPatch: Completed AssignSuppliesEntry for botanist {botanist.name}, pot {pot.name}");
                   }
@@ -142,14 +142,13 @@ namespace NoLazyWorkers.Botanists
             continue;
           }
 
-          List<ItemSlot> slots = new List<ItemSlot>();
-          slots.AddRange((potSupply.SelectedObject as ITransitEntity).OutputSlots);
+          List<ItemSlot> slots = [.. (potSupply.SelectedObject as ITransitEntity).OutputSlots];
           foreach (ItemSlot slot in slots)
           {
             if (slot.Quantity > 0 && ItemFilter_Dryable.IsItemDryable(slot.ItemInstance))
             {
               __result = slot.ItemInstance as QualityItemInstance;
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior)
               {
                 MelonLogger.Msg($"BotanistGetDryableInSuppliesPatch: Found dryable {__result?.ID ?? "null"} in pot {pot.name}'s supply");
               }
@@ -234,7 +233,7 @@ namespace NoLazyWorkers.Botanists
         }
 
         botanistConfig.Supplies.SelectedObject = potSupply.SelectedObject;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior)
         {
           MelonLogger.Msg($"PotActionBehaviourStartActionPatch: Set Botanist.Supplies to {potSupply.SelectedObject?.name ?? "null"} for pot {__instance.AssignedPot.name}");
         }

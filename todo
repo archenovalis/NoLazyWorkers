@@ -1,1 +1,5 @@
 debug pot supply saving and loading
+
+
+reduce this by 1 when firing:
+NetworkSingleton<VariableDatabase>.Instance.SetVariableValue("LifetimeEmployeesRecruited", (NetworkSingleton<VariableDatabase>.Instance.GetValue<float>("LifetimeEmployeesRecruited") + 1f).ToString())

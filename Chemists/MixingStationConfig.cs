@@ -7,21 +7,23 @@ using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
-using TMPro;
 using UnityEngine.UI;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Persistence.Loaders;
+using Newtonsoft.Json.Linq;
+using ScheduleOne.Management.UI;
 
 namespace NoLazyWorkers.Chemists
 {
   public static class MixingStationExtensions
   {
-    public static Dictionary<MixingStation, ObjectField> MixingSupply = [];
-    public static Dictionary<MixingStation, MixingStationConfiguration> MixingConfig = [];
-    public static Dictionary<MixingStation, TransitRoute> MixingSourceRoute = [];
-    public static Dictionary<MixingStation, List<MixingRoute>> MixingRoutes = [];
+    public static Dictionary<Guid, ObjectField> Supply = [];
+    public static Dictionary<Guid, MixingStationConfiguration> MixingConfig = [];
+    public static Dictionary<Guid, TransitRoute> SupplyRoute = [];
+    public static Dictionary<Guid, List<MixingRoute>> MixingRoutes = [];
     public static GameObject MixingRouteListTemplate { get; set; }
 
 
@@ -29,40 +31,40 @@ namespace NoLazyWorkers.Chemists
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg($"SourceChanged(MixingStation): Called for MixerConfig: {mixerConfig}, Station: {station?.name ?? "null"}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg($"SourceChanged(MixingStation): Called for MixerConfig: {mixerConfig}, Station: {station?.name ?? "null"}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
         if (mixerConfig == null || station == null)
         {
           MelonLogger.Error($"SourceChanged(MixingStation): MixerConfig or Station is null");
           return;
         }
-        if (!MixingSupply.ContainsKey(station))
+        if (!MixingStationExtensions.Supply.ContainsKey(station.GUID))
         {
-          MixingSupply[station] = Supply; // Register if missing
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"SourceChanged(MixingStation): Registered missing MixerSupply for MixerConfig: {mixerConfig}");
+          MixingStationExtensions.Supply[station.GUID] = Supply; // Register if missing
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Warning($"SourceChanged(MixingStation): Registered missing MixerSupply for MixerConfig: {mixerConfig}");
         }
 
         if (SourceRoute != null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg("SourceChanged(MixingStation): Destroying existing SourceRoute");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg("SourceChanged(MixingStation): Destroying existing SourceRoute");
           SourceRoute.Destroy();
-          MixingSourceRoute[station] = null;
+          SupplyRoute[station.GUID] = null;
         }
 
         if (Supply.SelectedObject != null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg($"SourceChanged(MixingStation): Creating new TransitRoute from {Supply.SelectedObject.name} to MixingStation");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg($"SourceChanged(MixingStation): Creating new TransitRoute from {Supply.SelectedObject.name} to MixingStation");
           SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, station);
-          MixingSourceRoute[station] = SourceRoute;
+          SupplyRoute[station.GUID] = SourceRoute;
           if (station.Configuration.IsSelected)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg("SourceChanged(MixingStation): Station is selected, enabling TransitRoute visuals");
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg("SourceChanged(MixingStation): Station is selected, enabling TransitRoute visuals");
             SourceRoute.SetVisualsActive(true);
           }
         }
         else
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg("SourceChanged(MixingStation): Supply.SelectedObject is null, setting SourceRoute to null");
-          MixingSourceRoute[station] = null;
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg("SourceChanged(MixingStation): Supply.SelectedObject is null, setting SourceRoute to null");
+          SupplyRoute[station.GUID] = null;
         }
       }
       catch (Exception e)
@@ -82,28 +84,28 @@ namespace NoLazyWorkers.Chemists
         }
         MixingStation station = mixerConfig.station;
         // Check if station is registered
-        if (!MixingSupply.ContainsKey(station))
+        if (!MixingStationExtensions.Supply.ContainsKey(station.GUID))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Warning($"SourceChanged(MixingStation): MixerSupply does not contain key for station: {station}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Warning($"SourceChanged(MixingStation): MixerSupply does not contain key for station: {station}");
           return;
         }
-        if (!MixingSourceRoute.ContainsKey(station))
+        if (!SupplyRoute.ContainsKey(station.GUID))
         {
-          MixingSourceRoute[station] = null; // Initialize if missing
+          SupplyRoute[station.GUID] = null; // Initialize if missing
         }
 
-        TransitRoute SourceRoute = MixingSourceRoute[station];
+        TransitRoute SourceRoute = SupplyRoute[station.GUID];
         if (SourceRoute != null)
         {
           SourceRoute.Destroy();
-          MixingSourceRoute[station] = null;
+          SupplyRoute[station.GUID] = null;
         }
 
-        ObjectField Supply = MixingSupply[station];
-        if (Supply.SelectedObject != null)
+        ObjectField supply = Supply[station.GUID];
+        if (supply.SelectedObject != null)
         {
-          SourceRoute = new TransitRoute(Supply.SelectedObject as ITransitEntity, station);
-          MixingSourceRoute[station] = SourceRoute;
+          SourceRoute = new TransitRoute(supply.SelectedObject as ITransitEntity, station);
+          SupplyRoute[station.GUID] = SourceRoute;
           if (station.Configuration.IsSelected)
           {
             SourceRoute.SetVisualsActive(true);
@@ -112,14 +114,22 @@ namespace NoLazyWorkers.Chemists
         }
         else
         {
-          MixingSourceRoute[station] = null;
+          SupplyRoute[station.GUID] = null;
         }
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) MelonLogger.Msg($"SourceChanged(MixingStation): Updated for MixerConfig: {mixerConfig}, Supply: {Supply?.SelectedObject?.name ?? "null"}");
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation) MelonLogger.Msg($"SourceChanged(MixingStation): Updated for MixerConfig: {mixerConfig}, Supply: {supply?.SelectedObject?.name ?? "null"}");
       }
       catch (Exception e)
       {
         MelonLogger.Error($"SourceChanged(MixingStation): Failed for MixerConfig: {mixerConfig}, error: {e}");
       }
+    }
+
+    public static void SupplyOnObjectChangedInvoke(BuildableItem item, MixingStationConfiguration __instance, MixingStation station, ObjectField Supply)
+    {
+      ConfigurationExtensions.InvokeChanged(__instance);
+      SourceChanged(__instance, item);
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+        MelonLogger.Msg($"SupplyOnObjectChangedInvoke: Supply changed for station {station?.GUID.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.GUID.ToString() ?? "null"}");
     }
 
     public static void RestoreConfigurations()
@@ -132,41 +142,80 @@ namespace NoLazyWorkers.Chemists
         {
           if (station.Configuration is MixingStationConfiguration mixerConfig)
           {
-            if (!MixingConfig.ContainsKey(station))
+            if (!MixingConfig.ContainsKey(station.GUID))
             {
-              MixingConfig[station] = mixerConfig;
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-                MelonLogger.Warning($"RestoreConfigurations: Registered missing MixerConfig for station: {station.name}");
+              MixingConfig[station.GUID] = mixerConfig;
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+                MelonLogger.Warning($"RestoreConfigurations: Registered missing MixerConfig for station: {station.GUID}");
             }
-            // No need to restore Supply or MixingRoutes here, as they are loaded directly in MixingStationLoaderPatch
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-              MelonLogger.Msg($"RestoreConfigurations: Registered configuration for station: {station.name}");
+            // Initialize MixingSupply if missing
+            if (!Supply.TryGetValue(station.GUID, out var supply))
+            {
+              supply = new ObjectField(mixerConfig)
+              {
+                TypeRequirements = [],
+                DrawTransitLine = true
+              };
+              Supply[station.GUID] = supply;
+              Supply[station.GUID].onObjectChanged.RemoveAllListeners();
+              Supply[station.GUID].onObjectChanged.AddListener(item => SupplyOnObjectChangedInvoke(item, mixerConfig, station, supply));
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"RestoreConfigurations: Initialized MixingSupply for station: {station.GUID}");
+            }
+
+            // Initialize MixingRoutes if missing
+            if (!MixingRoutes.ContainsKey(station.GUID))
+            {
+              MixingRoutes[station.GUID] = [];
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"RestoreConfigurations: Initialized MixingRoutes for station: {station.GUID}");
+            }
+          }
+          else
+          {
+            if (DebugConfig.EnableDebugLogs)
+              MelonLogger.Msg($"RestoreConfigurations: Skipped station {station.GUID}, no MixingStationConfiguration");
           }
         }
         catch (Exception e)
         {
-          MelonLogger.Error($"RestoreConfigurations: Failed to restore configuration for station: {station?.name ?? "null"}, error: {e}");
+          MelonLogger.Error($"RestoreConfigurations: Failed for station: {station?.GUID.ToString() ?? "null"}, error: {e}");
         }
       }
     }
 
-    public static void InitializeStaticTemplate(RouteListFieldUI routeListTemplate)
+    public static void InitializeStaticRouteListTemplate()
     {
+      var routeListTemplate = NoLazyUtilities.GetTransformTemplateFromConfigPanel(
+            EConfigurableType.Packager,
+            "RouteListFieldUI");
       if (routeListTemplate == null)
       {
-        MelonLogger.Error("MixingStationConfigPanelBindPatch: routeListTemplate is null");
+        MelonLogger.Error("InitializeStaticRouteListTemplate: routeListTemplate is null");
         return;
       }
       try
       {
         if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Initializing MixingRouteListTemplate");
+          MelonLogger.Msg("InitializeStaticRouteListTemplate: Initializing MixingRouteListTemplate");
 
         // Instantiate the template
-        GameObject templateObj = UnityEngine.Object.Instantiate(routeListTemplate.gameObject);
+        var templateObj = UnityEngine.Object.Instantiate(routeListTemplate.gameObject);
         templateObj.AddComponent<CanvasRenderer>();
         templateObj.name = "MixingRouteListTemplate";
         templateObj.SetActive(false);
+        try
+        {
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Msg("InitializeStaticRouteListTemplate: Adding MixingRouteListFieldUI");
+          var routeListFieldUI = templateObj.AddComponent<MixingRouteListFieldUI>();
+        }
+        catch (Exception e)
+        {
+          MelonLogger.Error($"InitializeStaticRouteListTemplate: Failed to add MixingRouteListFieldUI, error: {e}");
+        }
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("InitializeStaticRouteListTemplate: MixingRouteListFieldUI added");
 
         // Replace RouteListFieldUI with MixingRouteListFieldUI
         var defaultScript = templateObj.GetComponent<RouteListFieldUI>();
@@ -175,31 +224,33 @@ namespace NoLazyWorkers.Chemists
         if (templateObj.GetComponent<MixingRouteListFieldUI>() == null)
           templateObj.AddComponent<MixingRouteListFieldUI>();
 
+        // Replace RouteEntryUI with MixingRouteEntryUI for all entries
+        var contentsTransform = templateObj.transform.Find("Contents");
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"InitializeStaticRouteListTemplate: contentsTransform: {contentsTransform?.name}");
+
+        // Prepare newEntry transform
+        var entryTransform = templateObj.transform.Find("Contents/Entry");
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"InitializeStaticRouteListTemplate: entryTransform: {entryTransform?.name}");
+
         // Update AddNew label
         var addNewLabel = templateObj.transform.Find("Contents/AddNew/Label")?.GetComponent<TextMeshProUGUI>();
         if (addNewLabel != null)
           addNewLabel.text = "  Add Recipe";
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg($"InitializeStaticRouteListTemplate: addNewLabel?.text: {addNewLabel?.text}");
 
-        // Get the Entry template from the config panel
-        Transform entryTemplate = NoLazyUtilities.GetTransformTemplateFromConfigPanel(EConfigurableType.Packager, "RouteListFieldUI/Contents/Entry");
-        if (entryTemplate == null)
-        {
-          MelonLogger.Error("MixingStationConfigPanelBindPatch: Failed to retrieve Entry template from Packager config panel");
-          return;
-        }
-
-        // Replace RouteEntryUI with MixingRouteEntryUI for all entries
-        var contents = templateObj.transform.Find("Contents");
         for (int i = 0; i < MixingRouteListFieldUI.MaxRoutes; i++)
         {
-          Transform entry = contents.Find($"Entry ({i})") ?? (i == 0 ? contents.Find("Entry") : null);
+          Transform entry = contentsTransform.Find($"Entry ({i})") ?? (i == 0 ? contentsTransform.Find("Entry") : null);
           if (DebugConfig.EnableDebugLogs)
-            MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Processing Entry ({i})");
+            MelonLogger.Msg($"InitializeStaticRouteListTemplate: Processing Entry ({i})");
 
           if (entry == null)
           {
             // Instantiate new entry from the full template
-            GameObject newEntry = UnityEngine.Object.Instantiate(entryTemplate.gameObject, contents, false);
+            GameObject newEntry = UnityEngine.Object.Instantiate(entryTransform.gameObject, contentsTransform, false);
             newEntry.name = $"Entry ({i})";
             newEntry.AddComponent<CanvasRenderer>();
             entry = newEntry.transform;
@@ -208,15 +259,9 @@ namespace NoLazyWorkers.Chemists
             var productTransform = entry.Find("Source");
             if (productTransform != null)
               productTransform.name = "ProductIMGUI";
-            else
-              MelonLogger.Warning($"MixingStationConfigPanelBindPatch: Source not found in Entry ({i})");
-
             var mixerTransform = entry.Find("Destination");
             if (mixerTransform != null)
               mixerTransform.name = "MixerItemIMGUI";
-            else
-              MelonLogger.Warning($"MixingStationConfigPanelBindPatch: Destination not found in Entry ({i})");
-
             newEntry.transform.SetSiblingIndex(i);
           }
           else
@@ -238,22 +283,22 @@ namespace NoLazyWorkers.Chemists
             entry.gameObject.AddComponent<MixingRouteEntryUI>();
         }
 
-        contents.Find("AddNew").SetAsLastSibling();
+        contentsTransform.Find("AddNew").SetAsLastSibling();
         if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg("MixingStationConfigPanelBindPatch: SetAsLastSibling");
+          MelonLogger.Msg("InitializeStaticRouteListTemplate: SetAsLastSibling");
 
         // Hide unnecessary elements
         templateObj.transform.Find("Title")?.gameObject.SetActive(false);
         templateObj.transform.Find("From")?.gameObject.SetActive(false);
         templateObj.transform.Find("To")?.gameObject.SetActive(false);
 
-        MixingStationExtensions.MixingRouteListTemplate = templateObj;
+        MixingRouteListTemplate = templateObj;
         if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Msg("MixingStationConfigPanelBindPatch: Static MixingRouteListTemplate initialized successfully");
+          MelonLogger.Msg("InitializeStaticRouteListTemplate: Static MixingRouteListTemplate initialized successfully");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"MixingStationConfigPanelBindPatch: Failed to initialize MixingRouteListTemplate, error: {e}");
+        MelonLogger.Error($"InitializeStaticRouteListTemplate: Failed to initialize MixingRouteListTemplate, error: {e}");
       }
     }
   }
@@ -263,42 +308,9 @@ namespace NoLazyWorkers.Chemists
   }
 
   [Serializable]
-  public class ExtendedMixingStationConfigurationData : MixingStationConfigurationData
+  public class MixingRouteDataWrapper : MonoBehaviour
   {
-    public ObjectFieldData Supply;
-    public string MixingRoutes;
-
-    public ExtendedMixingStationConfigurationData(ObjectFieldData destination, NumberFieldData threshold)
-        : base(destination, threshold)
-    {
-      Supply = null;
-      MixingRoutes = "[]";
-    }
-  }
-
-  public class MixingRoute
-  {
-    public ItemField Product { get; set; }
-    public ItemField MixerItem { get; set; }
-
-    public MixingRoute(MixingStationConfiguration config)
-    {
-      Product = new ItemField(config)
-      {
-        CanSelectNone = false,
-      };
-      MixerItem = new ItemField(config)
-      {
-        CanSelectNone = false,
-        Options = [.. NetworkSingleton<ProductManager>.Instance.ValidMixIngredients.Cast<ItemDefinition>()]
-      };
-    }
-
-    public void SetData(MixingRouteData data)
-    {
-      Product.Load(data.Product);
-      MixerItem.Load(data.MixerItem);
-    }
+    public MixingRouteData[] Routes = [];
   }
 
   [Serializable]
@@ -307,128 +319,18 @@ namespace NoLazyWorkers.Chemists
     public ItemFieldData Product;
     public ItemFieldData MixerItem;
 
-    public MixingRouteData(ItemFieldData product, ItemFieldData mixerItem)
+    public MixingRouteData()
+    {
+      {
+        Product = new("");
+        MixerItem = new("");
+      }
+    }
+
+    public void SetData(ItemFieldData product, ItemFieldData mixerItem)
     {
       Product = product;
       MixerItem = mixerItem;
-    }
-  }
-
-  [HarmonyPatch(typeof(MixingStationConfiguration))]
-  public class MixingStationConfigurationPatch
-  {
-    [HarmonyPostfix]
-    [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(MixingStation) })]
-    static void Postfix(MixingStationConfiguration __instance, MixingStation station)
-    {
-      try
-      {
-        __instance.StartThrehold.Configure(1f, 20f, wholeNumbers: true);
-
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"MixingStationConfigurationPatch: Initializing for station: {station?.ObjectId.ToString() ?? "null"}, configHash={__instance.GetHashCode()}");
-
-        ObjectField Supply = new(__instance)
-        {
-          TypeRequirements = [typeof(PlaceableStorageEntity)],
-          DrawTransitLine = true
-        };
-        Supply.onObjectChanged.RemoveAllListeners();
-        Supply.onObjectChanged.AddListener(delegate
-        {
-          ConfigurationExtensions.InvokeChanged(__instance);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-            MelonLogger.Msg($"MixingStationConfigurationPatch: Supply changed for station {station?.ObjectId.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.ObjectId.ToString() ?? "null"}");
-        });
-        Supply.onObjectChanged.AddListener(item => MixingStationExtensions.SourceChanged(__instance, item));
-        MixingStationExtensions.MixingSupply[station] = Supply;
-
-        MixingStationExtensions.MixingConfig[station] = __instance;
-
-        if (!MixingStationExtensions.MixingRoutes.ContainsKey(station))
-        {
-          MixingStationExtensions.MixingRoutes[station] = [];
-        }
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-          MelonLogger.Msg($"MixingStationConfigurationPatch: Registered supply and config for station: {station?.ObjectId.ToString() ?? "null"}, supplyHash={Supply.GetHashCode()}");
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"MixingStationConfigurationPatch: Failed for station: {station?.ObjectId.ToString() ?? "null"}, error: {e}");
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(MixingStationConfiguration), "GetSaveString")]
-  public class MixingStationConfigurationGetSaveStringPatch
-  {
-    static void Postfix(MixingStationConfiguration __instance, ref string __result)
-    {
-      try
-      {
-        // Manually serialize MixingRoutes as a comma-separated string of JSON objects
-        string mixingRoutesJson = "";
-        if (MixingStationExtensions.MixingRoutes.TryGetValue(__instance.station, out var routes) && routes.Any())
-        {
-          List<string> routeJsonList = new List<string>();
-          foreach (var route in routes)
-          {
-            string productItemID = route.Product.GetData()?.ItemID ?? "null";
-            string mixerItemID = route.MixerItem.GetData()?.ItemID ?? "null";
-            string routeJson = $"{{\"Product\":\"{productItemID}\",\"MixerItem\":\"{mixerItemID}\"}}";
-            routeJsonList.Add(routeJson);
-          }
-          mixingRoutesJson = string.Join(",", routeJsonList);
-        }
-
-        // Create the config data
-        ExtendedMixingStationConfigurationData data = new(
-            __instance.Destination.GetData(),
-            __instance.StartThrehold.GetData()
-        )
-        {
-          Supply = MixingStationExtensions.MixingSupply[__instance.station].GetData(),
-          MixingRoutes = mixingRoutesJson
-        };
-
-        __result = JsonUtility.ToJson(data, true);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-        {
-          MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Saved JSON for station={__instance.station.ObjectId}: {__result}");
-          MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Routes JSON={mixingRoutesJson}");
-          if (routes != null)
-          {
-            MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Routes count={routes.Count}");
-            foreach (var route in routes)
-            {
-              MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Route Product.ItemID={route.Product.GetData()?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem.GetData()?.ItemID ?? "null"}");
-            }
-          }
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"MixingStationConfigurationGetSaveStringPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}");
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(MixingStationConfiguration), "ShouldSave")]
-  public class MixingStationConfigurationShouldSavePatch
-  {
-    static void Postfix(MixingStationConfiguration __instance, ref bool __result)
-    {
-      try
-      {
-        ObjectField supply = MixingStationExtensions.MixingSupply[__instance.station];
-        bool hasRoutes = MixingStationExtensions.MixingRoutes.TryGetValue(__instance.station, out var routes) &&
-                        routes.Any(r => r.Product.SelectedItem != null || r.MixerItem.SelectedItem != null);
-        __result |= supply.SelectedObject != null || hasRoutes;
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"MixingStationConfigurationShouldSavePatch failed: {e}");
-      }
     }
   }
 
@@ -440,8 +342,8 @@ namespace NoLazyWorkers.Chemists
     public RectTransform MultiEditBlocker;
     public Button AddButton;
     public static readonly int MaxRoutes = 7;
-    private List<List<MixingRoute>> RoutesLists; // List of route lists for each configuration
-    private List<MixingStationConfiguration> Configs; // Corresponding configurations
+    private List<List<MixingRoute>> RoutesLists;
+    private List<MixingStationConfiguration> Configs;
     private UnityAction OnChanged;
 
     private void Start()
@@ -453,20 +355,9 @@ namespace NoLazyWorkers.Chemists
       }
       else
       {
-        // Retrieve and initialize the template
-        RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
-            EConfigurableType.Packager,
-            panel => panel.GetComponentInChildren<RouteListFieldUI>());
-        if (routeListTemplate == null)
-        {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-            MelonLogger.Error("OnSceneWasLoaded: Failed to retrieve RouteListFieldUI template");
-        }
-        MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-          MelonLogger.Warning("OnSceneWasLoaded: SetupConfigPanelsComplete failed");
-        else if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-          MelonLogger.Warning("OnSceneWasLoaded: SetupConfigPanelsComplete success");
+        MixingStationExtensions.InitializeStaticRouteListTemplate();
+        if (MixingStationExtensions.MixingRouteListTemplate == null)
+          MelonLogger.Warning("MixingRouteListFieldUI: Failed to initialize MixingRouteListTemplate");
       }
 
       FieldLabel = transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
@@ -480,10 +371,10 @@ namespace NoLazyWorkers.Chemists
         MelonLogger.Msg("MixingRouteListFieldUI: Start completed, awaiting Bind");
     }
 
-    public void Bind(List<List<MixingRoute>> routesLists, List<MixingStationConfiguration> configs = null, UnityAction onChangedCallback = null)
+    public void Bind(List<List<MixingRoute>> routesLists, List<MixingStationConfiguration> configs, UnityAction onChangedCallback)
     {
-      RoutesLists = routesLists?.Select(list => list ?? new List<MixingRoute>()).ToList() ?? new List<List<MixingRoute>>();
-      Configs = configs ?? new List<MixingStationConfiguration>();
+      RoutesLists = routesLists?.Select(list => list ?? []).ToList() ?? [];
+      Configs = configs ?? [];
       OnChanged = onChangedCallback;
 
       // Initialize RouteEntries
@@ -494,23 +385,66 @@ namespace NoLazyWorkers.Chemists
         return;
       }
 
-      // Set up onDeleteClicked listeners
+      // Set up listeners
       for (int i = 0; i < RouteEntries.Length; i++)
       {
         int index = i;
         RouteEntries[i].onDeleteClicked.RemoveAllListeners();
         RouteEntries[i].onDeleteClicked.AddListener(() => EntryDeleteClicked(index));
+        RouteEntries[i].onProductClicked.RemoveAllListeners();
+        RouteEntries[i].onProductClicked.AddListener(() => EntryProductClicked(index));
+        RouteEntries[i].onMixerClicked.RemoveAllListeners();
+        RouteEntries[i].onMixerClicked.AddListener(() => EntryMixerClicked(index));
       }
 
-      // Set up change listeners for each MixingRoute
+      // Determine the maximum number of routes
+      int maxRouteCount = RoutesLists.Any() ? RoutesLists.Max(list => list.Count) : 0;
+
+      // Bind RouteEntries
+      for (int i = 0; i < RouteEntries.Length; i++)
+      {
+        if (i < maxRouteCount)
+        {
+          RouteEntries[i].gameObject.SetActive(true);
+          MixingRoute routeToBind = null;
+          MixingStationConfiguration configToBind = null;
+          for (int j = 0; j < RoutesLists.Count; j++)
+          {
+            if (i < RoutesLists[j].Count && RoutesLists[j][i] != null)
+            {
+              routeToBind = RoutesLists[j][i];
+              configToBind = Configs.ElementAtOrDefault(j);
+              break;
+            }
+          }
+
+          if (routeToBind != null && configToBind != null)
+          {
+            RouteEntries[i].Bind(configToBind, routeToBind);
+          }
+          else
+          {
+            RouteEntries[i].gameObject.SetActive(false);
+          }
+        }
+        else
+        {
+          RouteEntries[i].gameObject.SetActive(false);
+        }
+      }
+
+      // Set up change listeners
       foreach (var routes in RoutesLists)
       {
         foreach (var route in routes)
         {
-          route.Product.onItemChanged.RemoveAllListeners();
-          route.MixerItem.onItemChanged.RemoveAllListeners();
-          route.Product.onItemChanged.AddListener(item => Refresh());
-          route.MixerItem.onItemChanged.AddListener(item => Refresh());
+          if (route != null)
+          {
+            route.Product.onItemChanged.RemoveAllListeners();
+            route.MixerItem.onItemChanged.RemoveAllListeners();
+            route.Product.onItemChanged.AddListener(item => RefreshChanged(item, route));
+            route.MixerItem.onItemChanged.AddListener(item => RefreshChanged(item, route));
+          }
         }
       }
 
@@ -519,8 +453,22 @@ namespace NoLazyWorkers.Chemists
       Refresh();
     }
 
-    private void Refresh()
+    private void RefreshChanged(ItemDefinition item, MixingRoute route)
     {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteListFieldUI: RefreshChanged triggered for item={item?.Name ?? "null"}, route={route}");
+      Refresh();
+      OnChanged?.Invoke();
+      foreach (var config in Configs)
+      {
+        ConfigurationExtensions.InvokeChanged(config);
+      }
+    }
+
+    public void Refresh()
+    {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteListFieldUI: Refresh()");
       if (RoutesLists == null || RoutesLists.Count == 0)
       {
         if (DebugConfig.EnableDebugLogs)
@@ -534,27 +482,22 @@ namespace NoLazyWorkers.Chemists
         return;
       }
 
-      // Determine the maximum number of routes across all configurations
-      int maxRouteCount = RoutesLists.Max(list => list.Count);
+      int maxRouteCount = RoutesLists.Any() ? RoutesLists.Max(list => list.Count) : 0;
 
-      // Bind RouteEntries to the corresponding MixingRoute from each configuration
       for (int i = 0; i < RouteEntries.Length; i++)
       {
         if (i < maxRouteCount)
         {
           RouteEntries[i].gameObject.SetActive(true);
-
-          // For multi-selection, bind to the first configuration's route if available
-          // If configs differ, UI will show the first valid route or a placeholder
           MixingRoute routeToBind = null;
           MixingStationConfiguration configToBind = null;
           for (int j = 0; j < RoutesLists.Count; j++)
           {
-            if (i < RoutesLists[j].Count)
+            if (i < RoutesLists[j].Count && RoutesLists[j][i] != null)
             {
               routeToBind = RoutesLists[j][i];
               configToBind = Configs.ElementAtOrDefault(j);
-              break; // Use the first valid route
+              break;
             }
           }
 
@@ -564,7 +507,6 @@ namespace NoLazyWorkers.Chemists
           }
           else
           {
-            // Disable entry if no valid route is available
             RouteEntries[i].gameObject.SetActive(false);
           }
         }
@@ -574,7 +516,6 @@ namespace NoLazyWorkers.Chemists
         }
       }
 
-      // Enable AddButton only if all configurations can add more routes
       if (AddButton != null)
       {
         bool canAdd = RoutesLists.All(list => list.Count < MaxRoutes);
@@ -582,6 +523,8 @@ namespace NoLazyWorkers.Chemists
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"MixingRouteListFieldUI: Refresh(): AddButton active={AddButton.gameObject.activeSelf}");
       }
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteListFieldUI: Refresh() Complete");
     }
 
     private void AddClicked()
@@ -592,11 +535,18 @@ namespace NoLazyWorkers.Chemists
         {
           if (Configs.ElementAtOrDefault(i) != null)
           {
-            RoutesLists[i].Add(new MixingRoute(Configs[i]));
+            MixingRoute route = new(Configs[i]);
+            RoutesLists[i].Add(route);
+            if (DebugConfig.EnableDebugLogs)
+              MelonLogger.Msg($"MixingRouteListFieldUI: Added new route for config {i}");
           }
         }
         Refresh();
         OnChanged?.Invoke();
+        foreach (var config in Configs)
+        {
+          ConfigurationExtensions.InvokeChanged(config);
+        }
       }
     }
 
@@ -615,7 +565,62 @@ namespace NoLazyWorkers.Chemists
       {
         Refresh();
         OnChanged?.Invoke();
+        foreach (var config in Configs)
+        {
+          ConfigurationExtensions.InvokeChanged(config);
+        }
       }
+    }
+
+    private void EntryProductClicked(int index)
+    {
+      if (RoutesLists == null || RoutesLists.Count == 0 || index < 0 || index >= RoutesLists[0].Count)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning($"MixingRouteListFieldUI: EntryProductClicked invalid state: RoutesLists={(RoutesLists == null ? "null" : RoutesLists.Count.ToString())}, index={index}");
+        return;
+      }
+
+      MixingRoute route = RoutesLists[0][index];
+      if (route == null || route.Product == null)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning($"MixingRouteListFieldUI: EntryProductClicked route or route.Product is null at index={index}");
+        return;
+      }
+
+      var options = new List<ItemDefinition>();
+      if (ProductManager.FavouritedProducts != null)
+      {
+        foreach (var item in ProductManager.FavouritedProducts)
+        {
+          if (item != null)
+            options.Add(item);
+        }
+      }
+
+      route.Product.Options = options;
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteListFieldUI: ProductClicked {route.Product.SelectedItem?.Name ?? "null"} | Options count={options.Count}");
+      MixingRouteEntryUI.OpenItemSelectorScreen(route.Product, "Favorites");
+    }
+
+    private void EntryMixerClicked(int index)
+    {
+      if (RoutesLists == null || RoutesLists.Count == 0 || index < 0 || index >= RoutesLists[0].Count)
+      {
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning($"MixingRouteListFieldUI: EntryMixerClicked invalid state: RoutesLists={(RoutesLists == null ? "null" : RoutesLists.Count.ToString())}, index={index}");
+        return;
+      }
+
+      MixingRoute route = RoutesLists[0][index];
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Warning($"MixingRouteEntryUI: EntryMixerClicked {route.MixerItem.SelectedItem?.name} | {route.MixerItem.Options.Count}");
+      MixingRouteEntryUI.OpenItemSelectorScreen(route.MixerItem, "Mixers");
+
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Warning($"MixingRouteEntryUI: EntryMixerClicked RoutesLists == null");
     }
   }
 
@@ -625,7 +630,9 @@ namespace NoLazyWorkers.Chemists
     public TextMeshProUGUI MixerLabel;
     public Button ProductButton;
     public Button MixerButton;
-    public UnityEvent onDeleteClicked = new UnityEvent();
+    public UnityEvent onDeleteClicked = new();
+    public UnityEvent onProductClicked = new();
+    public UnityEvent onMixerClicked = new();
     public MixingRoute Route;
     public MixingStationConfiguration Config;
 
@@ -636,107 +643,317 @@ namespace NoLazyWorkers.Chemists
       ProductButton = transform.Find("ProductIMGUI")?.GetComponent<Button>();
       MixerButton = transform.Find("MixerItemIMGUI")?.GetComponent<Button>();
       transform.Find("Remove")?.GetComponent<Button>()?.onClick.AddListener(DeleteClicked);
+      ProductButton.onClick.AddListener(ProductClicked);
+      MixerButton.onClick.AddListener(MixerClicked);
+    }
+
+    private void OnProductItemChanged(ItemDefinition item)
+    {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteEntryUI: OnProductItemChanged item={item?.Name ?? "null"}");
+      ProductLabel.text = item?.Name ?? "Product";
+      ConfigurationExtensions.InvokeChanged(Config);
+    }
+
+    private void OnMixerItemChanged(ItemDefinition item)
+    {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteEntryUI: OnMixerItemChanged item={item?.Name ?? "null"}");
+      MixerLabel.text = item?.Name ?? "Mixer";
+      ConfigurationExtensions.InvokeChanged(Config);
     }
 
     public void Bind(MixingStationConfiguration config, MixingRoute route)
     {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteEntryUI: Binding Route={(route != null ? "valid" : "null")}, Config={(config != null ? "valid" : "null")}");
+
       Config = config;
       Route = route;
-      ProductLabel.text = Route.Product?.SelectedItem?.Name ?? "Product";
-      MixerLabel.text = Route.MixerItem?.SelectedItem?.Name ?? "Mixer";
 
-      ProductButton?.onClick.RemoveAllListeners();
-      MixerButton?.onClick.RemoveAllListeners();
-      ProductButton?.onClick.AddListener(ProductClicked);
-      MixerButton?.onClick.AddListener(MixerClicked);
+      if (route == null || config == null)
+      {
+        MelonLogger.Warning("MixingRouteEntryUI: Bind called with null route or config");
+        ProductLabel.text = "Product";
+        MixerLabel.text = "Mixer";
+        return;
+      }
 
-      Route.Product.onItemChanged.RemoveAllListeners();
-      Route.MixerItem.onItemChanged.RemoveAllListeners();
-      Route.Product.onItemChanged.AddListener(item =>
-      {
-        ProductLabel.text = item?.Name ?? "Product";
-        ConfigurationExtensions.InvokeChanged(Config);
-      });
-      Route.MixerItem.onItemChanged.AddListener(item =>
-      {
-        MixerLabel.text = item?.Name ?? "Mixer";
-        ConfigurationExtensions.InvokeChanged(Config);
-      });
+      ProductLabel.text = route.Product?.SelectedItem?.Name ?? "Product";
+      MixerLabel.text = route.MixerItem?.SelectedItem?.Name ?? "Mixer";
+
+      route.Product.onItemChanged.RemoveAllListeners();
+      route.MixerItem.onItemChanged.RemoveAllListeners();
+      route.Product.onItemChanged.AddListener(OnProductItemChanged);
+      route.MixerItem.onItemChanged.AddListener(OnMixerItemChanged);
+      ProductButton.onClick.AddListener(ProductClicked);
+      MixerButton.onClick.AddListener(MixerClicked);
 
       if (DebugConfig.EnableDebugLogs)
-        MelonLogger.Msg($"MixingRouteEntryUI: Bound Route={Route}, Config={Config}");
+        MelonLogger.Msg($"MixingRouteEntryUI: Bound Route Product={route.Product?.SelectedItem?.Name ?? "null"}, Mixer={route.MixerItem?.SelectedItem?.Name ?? "null"}");
     }
 
-    public void ProductClicked()
-    {
-      if (Route == null || Config == null)
-      {
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Warning("MixingRouteEntryUI: ProductClicked ignored due to null Route or Config");
-        return;
-      }
-      Route.Product.Options = [.. ProductManager.FavouritedProducts.Cast<ItemDefinition>()];
-      OpenItemSelectorScreen(Route.Product, "Favorites", ProductLabel);
-    }
+    public void ProductClicked() { onProductClicked.Invoke(); }
 
-    public void MixerClicked()
-    {
-      if (Route == null || Config == null)
-      {
-        if (DebugConfig.EnableDebugLogs)
-          MelonLogger.Warning("MixingRouteEntryUI: MixerClicked ignored due to null Route or Config");
-        return;
-      }
-      OpenItemSelectorScreen(Route.MixerItem, "Mixers", MixerLabel);
-    }
+    public void MixerClicked() { onMixerClicked.Invoke(); }
 
     public void DeleteClicked() { onDeleteClicked.Invoke(); }
 
-    private void OpenItemSelectorScreen(ItemField itemField, string fieldName, TextMeshProUGUI label)
+    public static void OpenItemSelectorScreen(ItemField itemField, string fieldName)
     {
       if (DebugConfig.EnableDebugLogs)
-        MelonLogger.Msg("MixingRouteEntryUI: OpenItemSelectorScreen");
+        MelonLogger.Msg($"MixingRouteEntryUI: OpenItemSelectorScreen for {fieldName}");
+
+      if (itemField == null)
+      {
+        MelonLogger.Warning("MixingRouteEntryUI: OpenItemSelectorScreen called with null itemField");
+        return;
+      }
 
       List<ItemSelector.Option> list = [];
       ItemSelector.Option selectedOption = null;
 
       if (itemField.CanSelectNone)
       {
-        list.Add(new ItemSelector.Option("None", null));
+        ItemSelector.Option none = new("None", null);
+        list.Add(none);
         if (itemField.SelectedItem == null)
           selectedOption = list[0];
       }
       else
       {
-        ItemSelector.Option none = new ItemSelector.Option("None", null);
+        ItemSelector.Option none = new("None", null);
         if (list.IndexOf(none) != -1)
         {
           list.Remove(none);
         }
       }
 
-      foreach (var option in itemField.Options)
+      var options = itemField.Options ?? [];
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRouteEntryUI: OpenItemSelectorScreen, Options count={options.Count}");
+
+      foreach (var option in options)
       {
+        if (option == null)
+        {
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Warning("MixingRouteEntryUI: Skipping null option in Options");
+          continue;
+        }
         var opt = new ItemSelector.Option(option.Name, option);
         list.Add(opt);
         if (itemField.SelectedItem == option)
           selectedOption = opt;
       }
 
-      Singleton<ManagementInterface>.Instance.ItemSelectorScreen.Initialize(fieldName, list, selectedOption, (selected) =>
+      Singleton<ManagementInterface>.Instance.ItemSelectorScreen.Initialize(fieldName, list, selectedOption, new Action<ItemSelector.Option>(selected =>
       {
         if (DebugConfig.EnableDebugLogs)
           MelonLogger.Msg($"MixingRouteEntryUI: ItemSelectorScreen selected {selected?.Item?.Name ?? "null"} for {fieldName}");
         itemField.SelectedItem = selected.Item;
-        label.text = selected.Item.name;
-      });
+        // Explicitly invoke onItemChanged to ensure listeners are triggered
+        itemField.onItemChanged?.Invoke(selected.Item);
+      }));
       Singleton<ManagementInterface>.Instance.ItemSelectorScreen.Open();
+    }
+  }
+
+  public class MixingRoute
+  {
+    public ItemField Product { get; set; }
+    public ItemField MixerItem { get; set; }
+
+    public MixingRoute(MixingStationConfiguration config)
+    {
+      Product = new ItemField(config)
+      {
+        CanSelectNone = false,
+        Options = []
+      };
+      var productOptions = new List<ItemDefinition>();
+      if (ProductManager.FavouritedProducts != null)
+      {
+        foreach (var item in ProductManager.FavouritedProducts)
+        {
+          if (item != null)
+            productOptions.Add(item);
+        }
+      }
+      Product.Options = productOptions;
+
+      MixerItem = new ItemField(config)
+      {
+        CanSelectNone = false,
+        Options = []
+      };
+      var mixerOptions = new List<ItemDefinition>();
+      var validMixIngredients = NetworkSingleton<ProductManager>.Instance?.ValidMixIngredients;
+      if (validMixIngredients != null)
+      {
+        foreach (var item in validMixIngredients)
+        {
+          if (item != null)
+            mixerOptions.Add(item);
+        }
+      }
+      MixerItem.Options = mixerOptions;
+
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRoute: Initialized with Product Options={productOptions.Count}, Mixer Options={mixerOptions.Count}");
+    }
+
+    public void SetData(MixingRouteData data)
+    {
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRoute: SetData: {data.Product?.ItemID} | {data.MixerItem?.ItemID}");
+      if (data.Product != null)
+        Product.Load(data.Product);
+      if (data.MixerItem != null)
+        MixerItem.Load(data.MixerItem);
+      if (DebugConfig.EnableDebugLogs)
+        MelonLogger.Msg($"MixingRoute: SetData: Loaded {Product.SelectedItem} | {MixerItem.SelectedItem}");
+    }
+  }
+
+  [HarmonyPatch(typeof(MixingStationConfiguration))]
+  public class MixingStationConfigurationPatch
+  {
+    [HarmonyPostfix]
+    [HarmonyPatch(MethodType.Constructor, [typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(MixingStation)])]
+    static void Postfix(MixingStationConfiguration __instance, MixingStation station)
+    {
+      try
+      {
+        __instance.StartThrehold.MaxValue = 20f;
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+          MelonLogger.Msg($"MixingStationConfigurationPatch: Initializing for station: {station?.GUID.ToString() ?? "null"}, configHash={__instance.GetHashCode()}");
+
+        if (!MixingStationExtensions.Supply.ContainsKey(station.GUID) || !MixingStationExtensions.Supply.TryGetValue(station.GUID, out var supply))
+        {
+          supply = new(__instance)
+          {
+            TypeRequirements = [],
+            DrawTransitLine = true
+          };
+          supply.onObjectChanged.RemoveAllListeners();
+          supply.onObjectChanged.AddListener(item => MixingStationExtensions.SupplyOnObjectChangedInvoke(item, __instance, station, supply));
+          supply.onObjectChanged.AddListener(item => MixingStationExtensions.SourceChanged(__instance, item));
+          MixingStationExtensions.Supply[station.GUID] = supply;
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg("MixingStationConfigurationPatch: Initialized Supply");
+        }
+        if (!MixingStationExtensions.MixingConfig.ContainsKey(station.GUID) || MixingStationExtensions.MixingConfig[station.GUID] == null)
+        {
+          MixingStationExtensions.MixingConfig[station.GUID] = __instance;
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg("MixingStationConfigurationPatch: Initialized MixingConfig");
+        }
+        if (!MixingStationExtensions.MixingRoutes.ContainsKey(station.GUID) || MixingStationExtensions.MixingRoutes[station.GUID] == null)
+        {
+          MixingStationExtensions.MixingRoutes[station.GUID] = [];
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg("MixingStationConfigurationPatch: Initialized MixingRoutes");
+        }
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+          MelonLogger.Msg($"MixingStationConfigurationPatch: Registered supply and config {__instance.GetHashCode()}, station: {station?.GUID}, supply={supply.SelectedObject?.GUID}");
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"MixingStationConfigurationPatch: Failed for station: {station?.GUID.ToString() ?? "null"}, error: {e}");
+      }
+    }
+  }
+
+  [HarmonyPatch(typeof(MixingStationConfiguration), "GetSaveString")]
+  public class MixingStationConfigurationGetSaveStringPatch
+  {
+    static void Postfix(MixingStationConfiguration __instance, ref string __result)
+    {
+      try
+      {
+        JObject supplyObject = null;
+        if ((!__instance.station || !MixingStationExtensions.Supply.ContainsKey(__instance.station.GUID)) && DebugConfig.EnableDebugLogs)
+          MelonLogger.Warning($"MixingStationConfigurationGetSaveStringPatch: No MixingSupply entry for config {__instance.GetHashCode()} station {__instance.station.GUID}");
+        else
+        {
+          supplyObject = new JObject
+          {
+            ["ObjectGUID"] = MixingStationExtensions.Supply[__instance.station.GUID].SelectedObject.GUID.ToString()
+          };
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Warning($"MixingStationConfigurationGetSaveStringPatch: supplyData: {supplyObject["ObjectGUID"]}");
+        }
+        // Manually serialize MixingRoutes as a comma-separated string of JSON objects
+        JArray mixingRoutesArray = [];
+        if (MixingStationExtensions.MixingRoutes.TryGetValue(__instance.station.GUID, out var routes) && routes.Any())
+        {
+          foreach (var route in routes)
+          {
+            string productItemID = route.Product.GetData()?.ItemID ?? "null";
+            string mixerItemID = route.MixerItem.GetData()?.ItemID ?? "null";
+
+            var routeObject = new JObject
+            {
+              ["Product"] = productItemID,
+              ["MixerItem"] = mixerItemID
+            };
+            mixingRoutesArray.Add(routeObject);
+          }
+        }
+
+        // Create the config data
+        MixingStationConfigurationData data = new(
+            __instance.Destination.GetData(),
+            __instance.StartThrehold.GetData()
+        );
+
+        // Serialize config data to JSON
+        string configJson = JsonUtility.ToJson(data, true);
+
+        // Combine config data with additional fields using Newtonsoft.Json
+        JObject jsonObject = JObject.Parse(configJson);
+        if (mixingRoutesArray.Count > 0)
+          jsonObject["MixingRoutes"] = mixingRoutesArray;
+        if (supplyObject != null)
+          jsonObject["Supply"] = supplyObject;
+
+        __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+        {
+          MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Saved JSON for station={__instance.station.GUID}: {__result}");
+          MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Routes JSON={mixingRoutesArray}");
+          if (routes != null)
+          {
+            MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Routes count={routes.Count}");
+            foreach (var route in routes)
+            {
+              MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Route Product.ItemID={route.Product.GetData()?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem.GetData()?.ItemID ?? "null"}");
+            }
+          }
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"MixingStationConfigurationGetSaveStringPatch: Failed for station GUID={__instance.station?.GUID.ToString() ?? "null"}, error: {e}");
+      }
     }
   }
 
   [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
   public class MixingStationConfigPanelBindPatch
   {
+    private static void RouteListInvokeChanged(MixingStationConfiguration config)
+    {
+      ConfigurationExtensions.InvokeChanged(config);
+    }
+    private static Component GetRouteListComponent(ConfigPanel panel)
+    {
+      return panel.GetComponentInChildren<RouteListFieldUI>();
+    }
     static void Postfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
     {
       try
@@ -751,71 +968,74 @@ namespace NoLazyWorkers.Chemists
         }
 
         // Clean up existing UI elements
-        foreach (Transform child in __instance.transform)
+        int childCount = __instance.transform.childCount;
+        for (int i = 0; i < childCount; i++)
         {
+          Transform child = __instance.transform.GetChild(i);
           if (child.name == "SupplyUI" || child.name == "RouteListFieldUI")
             UnityEngine.Object.Destroy(child.gameObject);
         }
 
         if (MixingStationExtensions.MixingRouteListTemplate == null)
         {
-          RouteListFieldUI routeListTemplate = NoLazyUtilities.GetComponentTemplateFromConfigPanel(
-              EConfigurableType.Packager,
-              panel => panel.GetComponentInChildren<RouteListFieldUI>());
-          if (routeListTemplate == null)
-          {
-            MelonLogger.Error("MixingStationConfigPanelBindPatch: Failed to retrieve RouteListFieldUI template");
-            return;
-          }
-          MixingStationExtensions.InitializeStaticTemplate(routeListTemplate);
+          MixingStationExtensions.InitializeStaticRouteListTemplate();
         }
 
         // Instantiate UI objects
         GameObject supplyUIObj = UnityEngine.Object.Instantiate(__instance.DestinationUI.gameObject, __instance.transform, false);
-        supplyUIObj.name = $"SupplyUI";
+        supplyUIObj.name = "SupplyUI";
         ObjectFieldUI supplyUI = supplyUIObj.GetComponent<ObjectFieldUI>();
         GameObject routeListUIObj = UnityEngine.Object.Instantiate(MixingStationExtensions.MixingRouteListTemplate, __instance.transform, false);
-        routeListUIObj.name = $"RouteListFieldUI";
+        routeListUIObj.name = "RouteListFieldUI";
         routeListUIObj.SetActive(true);
         var customRouteListUI = routeListUIObj.GetComponent<MixingRouteListFieldUI>();
 
-        List<ObjectField> supplyList = new();
-        List<List<MixingRoute>> routesLists = new();
-        List<MixingStationConfiguration> configList = new();
+        List<ObjectField> supplyList = [];
+        List<List<MixingRoute>> routesLists = [];
+        List<MixingStationConfiguration> configList = [];
 
         // Bind all selected stations
-        foreach (var config in configs.OfType<MixingStationConfiguration>())
+        foreach (var varConfig in configs)
         {
-          // Supply UI setup
-          foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Msg($"MixingStationConfigPanelBindPatch: foreach configs {varConfig.GetType().FullName} | {varConfig.GetType().FullName} ");
+
+          if (varConfig is MixingStationConfiguration config)
           {
-            if (child.gameObject.name == "Title") child.text = "Supplies";
-            else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
-          }
-          if (MixingStationExtensions.MixingSupply.TryGetValue(config.station, out ObjectField supply))
-          {
-            if (DebugConfig.EnableDebugLogs)
-              MelonLogger.Msg($"PotConfigPanelBindPatch: Before Bind, pot: {config.station.GUID}, SelectedObject: {supply.SelectedObject?.name ?? "null"}");
+            config.StartThrehold.MaxValue = 20f;
+            // Supply UI setup
+            foreach (TextMeshProUGUI child in supplyUIObj.GetComponentsInChildren<TextMeshProUGUI>())
+            {
+              if (child.gameObject.name == "Title") child.text = "Supplies";
+              else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
+            }
+            if (MixingStationExtensions.Supply.TryGetValue(config.station.GUID, out ObjectField supply))
+            {
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Msg($"MixingStationConfigPanelBindPatch: Before Bind, station: {config.station.GUID}, SelectedObject: {supply.SelectedObject?.name ?? "null"}");
+            }
+            else
+            {
+              supply = new ObjectField(config);
+              MixingStationExtensions.Supply[config.station.GUID] = supply;
+              if (DebugConfig.EnableDebugLogs)
+                MelonLogger.Warning($"MixingStationConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {config.station.GUID}");
+            }
             supplyList.Add(supply);
-          }
-          else
-          {
-            MelonLogger.Warning($"PotConfigPanelBindPatch: No supply found for PotConfiguration, pot: {config.station.GUID}");
-          }
+            // Destination UI update
+            foreach (TextMeshProUGUI child in __instance.DestinationUI.GetComponentsInChildren<TextMeshProUGUI>())
+            {
+              if (child.gameObject.name == "Title") child.text = "Destination";
+              else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
+            }
 
-          // Destination UI update
-          foreach (TextMeshProUGUI child in __instance.DestinationUI.GetComponentsInChildren<TextMeshProUGUI>())
-          {
-            if (child.gameObject.name == "Title") child.text = "Destination";
-            else if (child.gameObject.name == "Description") child.gameObject.SetActive(false);
+            // Collect routes and configurations
+            if (!MixingStationExtensions.MixingRoutes.ContainsKey(config.station.GUID))
+              MixingStationExtensions.MixingRoutes[config.station.GUID] = [];
+            var routes = MixingStationExtensions.MixingRoutes[config.station.GUID];
+            routesLists.Add(routes);
+            configList.Add(config);
           }
-
-          // Collect routes and configurations
-          if (!MixingStationExtensions.MixingRoutes.ContainsKey(config.station))
-            MixingStationExtensions.MixingRoutes[config.station] = [];
-          var routes = MixingStationExtensions.MixingRoutes[config.station];
-          routesLists.Add(routes);
-          configList.Add(config);
         }
 
         // Bind UI components
@@ -837,187 +1057,136 @@ namespace NoLazyWorkers.Chemists
     }
   }
 
-
   [HarmonyPatch(typeof(MixingStationLoader), "Load")]
   public class MixingStationLoaderPatch
   {
-    [Serializable]
-    private class SerializableRouteData
+    private static void MixingSupplySourceChanged(MixingStationConfiguration config, MixingStation station, BuildableItem item)
     {
-      public string Product;
-      public string MixerItem;
+      MixingStationExtensions.SourceChanged(config, item);
+      ConfigurationExtensions.InvokeChanged(config);
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+        MelonLogger.Msg($"MixingStationLoaderPatch: Supply changed for station {station.GUID}, newSupply={MixingStationExtensions.Supply[station.GUID].SelectedObject?.GUID.ToString() ?? "null"}");
     }
 
+    [HarmonyPostfix]
     static void Postfix(string mainPath)
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
           MelonLogger.Msg($"MixingStationLoaderPatch: Processing Postfix for mainPath: {mainPath}");
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) || gridItem == null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
             MelonLogger.Warning($"MixingStationLoaderPatch: No GridItem found for mainPath: {mainPath}");
           return;
         }
         if (gridItem is not MixingStation station)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
             MelonLogger.Warning($"MixingStationLoaderPatch: GridItem is not a MixingStation for mainPath: {mainPath}, type: {gridItem.GetType().Name}");
           return;
         }
         string configPath = Path.Combine(mainPath, "Configuration.json");
         if (!File.Exists(configPath))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
             MelonLogger.Warning($"MixingStationLoaderPatch: No Configuration.json found at: {configPath}");
           return;
         }
         if (!new Loader().TryLoadFile(mainPath, "Configuration", out string text))
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
             MelonLogger.Warning($"MixingStationLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}");
           return;
         }
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
           MelonLogger.Msg($"MixingStationLoaderPatch: Loaded JSON: {text}");
-        ExtendedMixingStationConfigurationData configData = JsonUtility.FromJson<ExtendedMixingStationConfigurationData>(text);
-        if (configData == null)
-        {
-          MelonLogger.Error($"MixingStationLoaderPatch: Failed to deserialize Configuration.json for mainPath: {mainPath}");
-          return;
-        }
-        // Parse MixingRoutes
-        List<MixingRouteData> mixingRoutes = [];
-        if (!string.IsNullOrEmpty(configData.MixingRoutes))
-        {
-          try
-          {
-            // Split the MixingRoutes string into individual JSON objects
-            // Use a simple split, accounting for commas outside of quotes
-            List<string> routeJsonList = new List<string>();
-            int braceLevel = 0;
-            int startIndex = 0;
-            for (int i = 0; i < configData.MixingRoutes.Length; i++)
-            {
-              char c = configData.MixingRoutes[i];
-              if (c == '{') braceLevel++;
-              else if (c == '}') braceLevel--;
-              else if (c == ',' && braceLevel == 0)
-              {
-                routeJsonList.Add(configData.MixingRoutes.Substring(startIndex, i - startIndex));
-                startIndex = i + 1;
-              }
-            }
-            if (startIndex < configData.MixingRoutes.Length)
-            {
-              routeJsonList.Add(configData.MixingRoutes.Substring(startIndex));
-            }
 
-            foreach (string routeJson in routeJsonList)
-            {
-              if (!string.IsNullOrWhiteSpace(routeJson))
-              {
-                SerializableRouteData routeData = JsonUtility.FromJson<SerializableRouteData>(routeJson);
-                if (routeData != null)
-                {
-                  mixingRoutes.Add(new MixingRouteData(
-                      routeData.Product != null ? new ItemFieldData(routeData.Product == "null" ? null : routeData.Product) : null,
-                      routeData.MixerItem != null ? new ItemFieldData(routeData.MixerItem == "null" ? null : routeData.MixerItem) : null
-                  ));
-                }
-              }
-            }
-          }
-          catch (Exception e)
-          {
-            MelonLogger.Error($"MixingStationLoaderPatch: Failed to parse MixingRoutes JSON for station={station.ObjectId}, error: {e}");
-          }
-        }
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
+        // Parse JSON using Newtonsoft.Json
+        JObject jsonObject = JObject.Parse(text);
+        JToken mixingRoutesJToken = jsonObject["MixingRoutes"];
+        JToken supplyJToken = jsonObject["Supply"];
+        jsonObject.Remove("MixingRoutes");
+        jsonObject.Remove("Supply");
+        string modifiedJson = jsonObject.ToString();
+
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
         {
-          MelonLogger.Msg($"MixingStationLoaderPatch: Deserialized configData for station={station.ObjectId}");
-          MelonLogger.Msg($"MixingStationLoaderPatch: Supply={configData.Supply?.ToString() ?? "null"}");
-          MelonLogger.Msg($"MixingStationLoaderPatch: MixingRoutes count={mixingRoutes.Count}");
-          foreach (var route in mixingRoutes)
-          {
-            MelonLogger.Msg($"MixingStationLoaderPatch: Route Product.ItemID={route.Product?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem?.ItemID ?? "null"}");
-          }
+          MelonLogger.Msg($"MixingStationLoaderPatch: Stripped JSON: {modifiedJson}");
+          MelonLogger.Msg($"MixingStationLoaderPatch: Extracted mixingRoutesJToken: {mixingRoutesJToken}");
+          MelonLogger.Msg($"MixingStationLoaderPatch: Extracted supplyJToken: {supplyJToken}");
         }
-        MixingStationConfiguration config = MixingStationExtensions.MixingConfig.TryGetValue(station, out var cfg)
-            ? cfg
-            : station.Configuration as MixingStationConfiguration;
+
+        MixingStationConfiguration config = station.Configuration as MixingStationConfiguration;
         if (config == null)
         {
-          MelonLogger.Error($"MixingStationLoaderPatch: No valid MixingStationConfiguration for station: {station.ObjectId}");
+          MelonLogger.Error($"MixingStationLoaderPatch: No valid MixingStationConfiguration for station: {station.GUID}");
           return;
         }
-        if (!MixingStationExtensions.MixingConfig.ContainsKey(station))
+        if (!MixingStationExtensions.MixingConfig.ContainsKey(station.GUID))
         {
-          MixingStationExtensions.MixingConfig[station] = config;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-            MelonLogger.Msg($"MixingStationLoaderPatch: Registered MixingConfig for station: {station.ObjectId}");
+          MixingStationExtensions.MixingConfig[station.GUID] = config;
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg($"MixingStationLoaderPatch: Registered MixingConfig for station: {station.GUID}");
         }
-        if (configData.Supply != null)
+        if (supplyJToken != null)
         {
-          if (!MixingStationExtensions.MixingSupply.ContainsKey(station))
+          if (!MixingStationExtensions.Supply.ContainsKey(station.GUID))
           {
-            MixingStationExtensions.MixingSupply[station] = new ObjectField(config)
+            MixingStationExtensions.Supply[station.GUID] = new ObjectField(config)
             {
-              TypeRequirements = [typeof(PlaceableStorageEntity)],
+              TypeRequirements = [],
               DrawTransitLine = true
             };
-            MixingStationExtensions.MixingSupply[station].onObjectChanged.RemoveAllListeners();
-            MixingStationExtensions.MixingSupply[station].onObjectChanged.AddListener(delegate
-            {
-              ConfigurationExtensions.InvokeChanged(config);
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-                MelonLogger.Msg($"MixingStationLoaderPatch: Supply changed for station {station.ObjectId}, newSupply={MixingStationExtensions.MixingSupply[station].SelectedObject?.ObjectId.ToString() ?? "null"}");
-            });
-            MixingStationExtensions.MixingSupply[station].onObjectChanged.AddListener(item => MixingStationExtensions.SourceChanged(config, item));
+            MixingStationExtensions.Supply[station.GUID].onObjectChanged.RemoveAllListeners();
+            MixingStationExtensions.Supply[station.GUID].onObjectChanged.AddListener(item => MixingSupplySourceChanged(config, station, item));
           }
-          MixingStationExtensions.MixingSupply[station].Load(configData.Supply);
-          MixingStationExtensions.SourceChanged(config, MixingStationExtensions.MixingSupply[station].SelectedObject);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-            MelonLogger.Msg($"MixingStationLoaderPatch: Loaded Supply for station: {station.ObjectId}");
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
+            MelonLogger.Msg($"MixingStationLoaderPatch: supplyJToken[ObjectGUID].ToString(): {supplyJToken["ObjectGUID"].ToString()}");
+          MixingStationExtensions.Supply[station.GUID].Load(new(supplyJToken["ObjectGUID"].ToString()));
+          MixingStationExtensions.SourceChanged(config, MixingStationExtensions.Supply[station.GUID].SelectedObject);
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg($"MixingStationLoaderPatch: Loaded Supply for station: {station.GUID}");
         }
         else
         {
           MelonLogger.Warning($"MixingStationLoaderPatch: Supply data is null in config for mainPath: {mainPath}");
         }
-        if (mixingRoutes.Count > 0)
+
+        List<MixingRoute> routes = [];
+        if (mixingRoutesJToken is JArray array && array.Count > 0)
         {
-          List<MixingRoute> routes = [];
-          foreach (var routeData in mixingRoutes)
+          for (int i = 0; i < array.Count; i++)
           {
-            if (routeData.Product != null && routeData.MixerItem != null)
+            var route = new MixingRoute(config);
+            MixingRouteData data = new();
+            var routeData = mixingRoutesJToken[i];
+            if (routeData["Product"] != null)
             {
-              var route = new MixingRoute(config);
-              if (routeData.Product.ItemID == "null") route.Product.SelectedItem = null;
-              else route.Product.Load(routeData.Product);
-              if (routeData.MixerItem.ItemID == "null") route.MixerItem.SelectedItem = null;
-              else route.MixerItem.Load(routeData.MixerItem);
-              routes.Add(route);
-              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingLogs)
-                MelonLogger.Msg($"MixingStationLoaderPatch: Loaded route Product={route.Product.SelectedItem?.Name ?? "null"}, MixerItem={route.MixerItem.SelectedItem?.Name ?? "null"} for station={station.ObjectId}");
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+                MelonLogger.Msg($"MixingStationLoaderPatch: Loading Product={routeData["Product"].ToString()}");
+              if (string.IsNullOrEmpty((string)routeData["Product"])) data.Product = null;
+              else data.Product = new(routeData["Product"].ToString());
             }
-            else
+            if (routeData["MixerItem"] != null)
             {
-              MelonLogger.Warning($"MixingStationLoaderPatch: Skipping route with null Product or MixerItem for station={station.ObjectId}");
+              if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+                MelonLogger.Msg($"MixingStationLoaderPatch: Loading Mixer={routeData["MixerItem"].ToString()}");
+              if (string.IsNullOrEmpty((string)routeData["MixerItem"])) data.MixerItem = null;
+              else data.MixerItem = new(routeData["MixerItem"].ToString());
             }
+            route.SetData(data);
+            routes.Add(route);
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+              MelonLogger.Msg($"MixingStationLoaderPatch: Loaded route Product={route.Product.SelectedItem?.Name ?? "null"}, MixerItem={route.MixerItem.SelectedItem?.Name ?? "null"} for station={station.GUID}");
           }
-          MixingStationExtensions.MixingRoutes[station] = routes;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-            MelonLogger.Msg($"MixingStationLoaderPatch: Loaded {routes.Count} MixingRoutes for station={station.ObjectId}");
-        }
-        else
-        {
-          MixingStationExtensions.MixingRoutes[station] = [];
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
-            MelonLogger.Msg($"MixingStationLoaderPatch: No MixingRoutes found in config for station: {station.ObjectId}");
+          MixingStationExtensions.MixingRoutes[station.GUID] = routes;
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
+            MelonLogger.Msg($"MixingStationLoaderPatch: Loaded {routes.Count} MixingRoutes for station={station.GUID}");
         }
         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
           MelonLogger.Msg($"MixingStationLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems");
       }
       catch (Exception e)
@@ -1027,7 +1196,6 @@ namespace NoLazyWorkers.Chemists
     }
   }
 
-
   [HarmonyPatch(typeof(MixingStationConfiguration), "Destroy")]
   public class MixingStationConfigurationDestroyPatch
   {
@@ -1035,16 +1203,27 @@ namespace NoLazyWorkers.Chemists
     {
       try
       {
-        MixingStationExtensions.MixingSupply.Remove(__instance.station);
-        MixingStationExtensions.MixingRoutes.Remove(__instance.station);
-        foreach (var pair in MixingStationExtensions.MixingConfig.Where(p => p.Value == __instance).ToList())
+        // Only remove if the station GameObject is actually being destroyed
+        if (__instance.station == null || __instance.station.gameObject == null)
         {
-          MixingStationExtensions.MixingConfig.Remove(pair.Key);
+          MixingStationExtensions.Supply.Remove(__instance.station.GUID);
+          MixingStationExtensions.MixingRoutes.Remove(__instance.station.GUID);
+          foreach (var pair in MixingStationExtensions.MixingConfig.Where(p => p.Value == __instance).ToList())
+          {
+            MixingStationExtensions.MixingConfig.Remove(pair.Key);
+          }
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Msg($"MixingStationConfigurationDestroyPatch: Removed station {__instance.station?.GUID} from dictionaries");
+        }
+        else
+        {
+          if (DebugConfig.EnableDebugLogs)
+            MelonLogger.Msg($"MixingStationConfigurationDestroyPatch: Skipped removal for station {__instance.station?.GUID}, station still exists");
         }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"MixingStationConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}");
+        MelonLogger.Error($"MixingStationConfigurationDestroyPatch: Failed for station GUID={__instance.station?.GUID.ToString() ?? "null"}, error: {e}");
       }
     }
   }
