@@ -169,10 +169,10 @@ namespace NoLazyWorkers_IL2CPP.Settings
                 $"DailyWage = {Chemist.DailyWage}",
                 $"WalkSpeed = {Chemist.WalkSpeed}",
                 $"MaxHealth = {Chemist.MaxHealth}",
-                $"MixingPerIngredientTime = {Chemist.MixingPerIngredientTime}",
-                $"PlaceIngredientsTime = {Chemist.PlaceIngredientsTime}",
-                $"StirTime = {Chemist.StirTime}",
-                $"BurnerTime = {Chemist.BurnerTime}",
+                $"#MixingPerIngredientTime = {Chemist.MixingPerIngredientTime} #not implemented yet",
+                $"#PlaceIngredientsTime = {Chemist.PlaceIngredientsTime} #not implemented yet",
+                $"#StirTime = {Chemist.StirTime} #not implemented yet",
+                $"#BurnerTime = {Chemist.BurnerTime} #not implemented yet",
                 "",
                 "#cleaner",
                 $"SigningFee = {Cleaner.SigningFee}",
@@ -188,13 +188,13 @@ namespace NoLazyWorkers_IL2CPP.Settings
                 $"PackagingSpeedMultiplier = {Packager.PackagingSpeedMultiplier}",
                 "",
                 "#fixer",
-                $"AdditionalSigningFee1 = {Fixer.AdditionalSigningFee1}",
-                $"AdditionalSigningFee2 = {Fixer.AdditionalSigningFee2}",
-                $"MaxAdditionalFee = {Fixer.MaxAdditionalFee}",
-                $"AdditionalFeeThreshold = {Fixer.AdditionalFeeThreshold}",
+                $"#AdditionalSigningFee1 = {Fixer.AdditionalSigningFee1} #not implemented yet",
+                $"#AdditionalSigningFee2 = {Fixer.AdditionalSigningFee2} #not implemented yet",
+                $"#MaxAdditionalFee = {Fixer.MaxAdditionalFee} #not implemented yet",
+                $"#AdditionalFeeThreshold = {Fixer.AdditionalFeeThreshold} #not implemented yet",
                 "",
                 "#misc",
-                $"StoreDeliveryFee = {Misc.StoreDeliveryFee}"
+                $"#StoreDeliveryFee = {Misc.StoreDeliveryFee} #not implemented yet"
             };
       File.WriteAllLines(filePath, lines);
     }

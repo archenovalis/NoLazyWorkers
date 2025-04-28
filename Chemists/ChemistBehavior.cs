@@ -629,23 +629,6 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       }
     }
 
-    private static IEnumerator MonitorMixOperation(StartMixingStationBehaviour __instance, StateData state)
-    {
-      return new MonitorMixOperationCoroutine(__instance, state);
-    }
-
-    private class MonitorMixOperationCoroutine : IEnumerator
-    {
-      private readonly StartMixingStationBehaviour _instance;
-      private readonly StateData _state;
-
-      public MonitorMixOperationCoroutine(StartMixingStationBehaviour instance, StateData state) : base(instance.Pointer)
-      {
-        _instance = instance;
-        _state = state;
-      }
-    }
-
     private static bool IsAtSupplies(StartMixingStationBehaviour __instance)
     {
       Chemist chemist = __instance.chemist;
