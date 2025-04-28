@@ -1,6 +1,7 @@
 using HarmonyLib;
 using MelonLoader;
 using ScheduleOne.Employees;
+using ScheduleOne.Growing;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
@@ -82,7 +83,7 @@ namespace NoLazyWorkers.Botanists
             {
               foreach (Pot pot in botanistConfig.AssignedPots)
               {
-                if (PotExtensions.PotSupply.TryGetValue(pot, out var potSupply) && potSupply != null)
+                if (PotExtensions.Supply.TryGetValue(pot.GUID, out var potSupply) && potSupply != null)
                 {
                   __instance.AssignSuppliesEntry.Complete();
                   if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior)
@@ -132,7 +133,7 @@ namespace NoLazyWorkers.Botanists
 
         foreach (Pot pot in botanistConfig.AssignedPots)
         {
-          if (!PotExtensions.PotSupply.TryGetValue(pot, out var potSupply) || potSupply.SelectedObject == null)
+          if (!PotExtensions.Supply.TryGetValue(pot.GUID, out var potSupply) || potSupply.SelectedObject == null)
           {
             continue;
           }
@@ -169,78 +170,22 @@ namespace NoLazyWorkers.Botanists
     }
   }
 
-  [HarmonyPatch(typeof(PotActionBehaviour), "CanGetToSupplies")]
-  public static class PotActionBehaviourCanGetToSuppliesPatch
+  [HarmonyPatch(typeof(PotActionBehaviour))]
+  public static class PotActionBehaviourPatch
   {
     [HarmonyPrefix]
-    public static bool Prefix(PotActionBehaviour __instance, ref bool __result)
+    [HarmonyPatch("Initialize")]
+    public static bool InitializePrefix(PotActionBehaviour __instance, Pot pot, PotActionBehaviour.EActionType actionType)
     {
-      try
+      if (PotExtensions.Supply.TryGetValue(pot.GUID, out var supply))
       {
-        if (__instance.AssignedPot == null)
-        {
-          MelonLogger.Warning("PotActionBehaviourCanGetToSuppliesPatch: AssignedPot is null");
-          __result = false;
-          return false;
-        }
-
-        Botanist botanist = __instance.Npc as Botanist;
-        if (botanist == null)
-        {
-          MelonLogger.Warning("PotActionBehaviourCanGetToSuppliesPatch: Botanist is null");
-          __result = false;
-          return false;
-        }
-
-        __result = botanist.Movement.CanGetTo(__instance.AssignedPot);
+        __instance.botanist.configuration.Supplies.SelectedObject = supply.SelectedObject;
+        return true;
+      }
+      else
+      {
+        __instance.Disable();
         return false;
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"PotActionBehaviourCanGetToSuppliesPatch: Failed, error: {e}");
-        __result = false;
-        return false;
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(PotActionBehaviour), "StartAction")]
-  public static class PotActionBehaviourStartActionPatch
-  {
-    [HarmonyPrefix]
-    public static void Prefix(PotActionBehaviour __instance)
-    {
-      try
-      {
-        if (__instance.AssignedPot == null)
-        {
-          MelonLogger.Warning("PotActionBehaviourStartActionPatch: AssignedPot is null");
-          return;
-        }
-
-        Botanist botanist = __instance.Npc as Botanist;
-        if (botanist == null || !(botanist.Configuration is BotanistConfiguration botanistConfig))
-        {
-          MelonLogger.Warning("PotActionBehaviourStartActionPatch: Botanist or BotanistConfiguration is null");
-          return;
-        }
-
-        if (!PotExtensions.PotSupply.TryGetValue(__instance.AssignedPot, out var potSupply) || potSupply.SelectedObject == null)
-        {
-          MelonLogger.Warning($"PotActionBehaviourStartActionPatch: Pot supply not found or null for pot {__instance.AssignedPot.name}");
-          botanistConfig.Supplies.SelectedObject = null;
-          return;
-        }
-
-        botanistConfig.Supplies.SelectedObject = potSupply.SelectedObject;
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior)
-        {
-          MelonLogger.Msg($"PotActionBehaviourStartActionPatch: Set Botanist.Supplies to {potSupply.SelectedObject?.name ?? "null"} for pot {__instance.AssignedPot.name}");
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"PotActionBehaviourStartActionPatch: Failed, error: {e}");
       }
     }
   }
