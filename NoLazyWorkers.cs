@@ -21,52 +21,87 @@ using UnityEngine.Events;
 using UnityEngine.UI;
 
 using NoLazyWorkers_IL2CPP.Chemists;
+using MelonLoader.Utils;
 //using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.3", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.4", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
 {
   public static class DebugConfig
   {
-    public static bool EnableDebugLogs = false; // true enables Msg and Warning logs
-    public static bool EnableDebugCoreLogs = false; // true enables Core-only Msg and Warning Logs
-    public static bool EnableDebugPotLogs = false; // true enables Pot-only Msg and Warning Logs
-    public static bool EnableDebugMixingLogs = false; // true enables Mixing-only Msg and Warning Logs
-    public static bool EnableDebugBehaviorLogs = false; // true enables Behavior-only Msg and Warning Logs
-    public static bool EnableDebugStacktrace = false; // true enables Msg and Warning logs
+    public static bool EnableDebugLogs = false; // enables all but stacktrace logs
+    public static bool EnableDebugCore = false;
+    public static bool EnableDebugSettings = false;
+    public static bool EnableDebugPot = false;
+    public static bool EnableDebugMixingStation = false;
+    public static bool EnableDebugBehavior = false;
+    public static bool EnableDebugStacktrace = false;
   }
 
   public static class BuildInfo
   {
     public const string Name = "NoLazyWorkers_IL2CPP";
-    public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
+    public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Added Employee-related configurable settings.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.0.3";
+    public const string Version = "1.0.4";
     public const string DownloadLink = null;
   }
 
   public class NoLazyWorkersMod : MelonMod
   {
+    public static NoLazyWorkersMod Instance { get; private set; }
+    public Settings.Default Config { get; private set; }
+    private bool oneShotSettingsApplied = false;
     private static bool SetupConfigPanelsComplete;
     public override void OnInitializeMelon()
     {
       try
       {
         HarmonyInstance.PatchAll();
-        MelonLogger.Msg("NoLazyWorkers_IL2CPP loaded!");
+        MelonLogger.Msg("NoLazyWorkers_Standard loaded!");
         MelonLogger.Warning("Please ignore the initial yellow errors and the three red error spam.");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to initialize NoLazyWorkers_IL2CPP: {e}");
+        MelonLogger.Error($"Failed to initialize NoLazyWorkers_Standard: {e}");
       }
+
+      Instance = this;
+      string configPath = Path.Combine(MelonEnvironment.UserDataDirectory, "NoLazyWorkers.cfg");
+
+      if (File.Exists(configPath))
+      {
+        Config = Settings.Default.LoadFromFile(configPath);
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("Config loaded.");
+      }
+      else
+      {
+        Config = new Settings.Default();
+        Config.SaveToFile(configPath);
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("Default config created.");
+      }
+
+      // Register scene load callback
+      MelonEvents.OnSceneWasLoaded.Subscribe(OnSceneWasLoaded);
     }
 
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
+      // Replace "MainScene" with the actual name of your game's main scene
+      if (sceneName == "Main" && !oneShotSettingsApplied)
+      {
+        var configure = new Settings.Configure();
+        //configure.ApplyFixerSettings(); // read-only values
+        configure.ApplyMiscSettings();
+        oneShotSettingsApplied = true;
+        if (DebugConfig.EnableDebugLogs)
+          MelonLogger.Msg("Applied Fixer and Misc settings on main scene load.");
+      }
       if (!SetupConfigPanelsComplete)
       {
         /*         
@@ -88,7 +123,7 @@ namespace NoLazyWorkers_IL2CPP
     {
       SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
         MelonLogger.Msg("Cleared ConfigurationExtensions dictionaries on scene unload.");
     }
   }
@@ -177,7 +212,7 @@ namespace NoLazyWorkers_IL2CPP
     {
       if (npc == null || item == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInInventoryAndSupply: NPC or item is null");
         return 0;
       }
@@ -191,28 +226,28 @@ namespace NoLazyWorkers_IL2CPP
     {
       if (npc == null || item == null || string.IsNullOrEmpty(item.ID))
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: NPC={npc}, item={item}, or item.ID={item?.ID} is null for {npc?.fullName ?? "null"}");
         return 0;
       }
 
       if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc.GUID, out var supply) || supply?.SelectedObject == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Supply or SelectedObject is null for {npc.fullName}");
         return 0;
       }
 
       if (supply.SelectedObject.Cast<ITransitEntity>() is not ITransitEntity supplyT)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
         return 0;
       }
 
       if (!npc.Movement.CanGetTo(supplyT, 1f))
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Cannot reach supply for {npc.fullName}");
         return 0;
       }
@@ -245,7 +280,7 @@ namespace NoLazyWorkers_IL2CPP
 
       if (slots.Count == 0)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: No valid slots in supply {supplyT?.Name} for {npc.fullName}");
         return 0;
       }
@@ -257,24 +292,24 @@ namespace NoLazyWorkers_IL2CPP
         if (slot.ItemInstance.ID.ToLower() == itemIdLower)
         {
           quantity += slot.Quantity;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
             MelonLogger.Msg($"GetAmountInSupplies: Found {itemIdLower} with quantity={slot.Quantity} in slot {slot.GetHashCode()} for {npc.fullName}");
         }
         else
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
             MelonLogger.Msg($"GetAmountInSupplies: Slot {slot.GetHashCode()} contains {slot.ItemInstance.ID} (quantity={slot.Quantity}), not {itemIdLower} for {npc.fullName}");
         }
       }
 
       if (quantity == 0)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Msg($"GetAmountInSupplies: No items of {item.ID} found in supply {supplyT?.Name} for {npc.fullName}");
       }
       else
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehaviorLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBehavior)
           MelonLogger.Msg($"GetAmountInSupplies: Total quantity of {item.ID} is {quantity} in supply {supplyT?.Name} for {npc.fullName}");
       }
       return quantity;
@@ -372,7 +407,7 @@ namespace NoLazyWorkers_IL2CPP
         GameObject prefab = GetPrefab(id);
         if (prefab != null && prefab.GetComponent<PotConfigPanel>() != null)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"Found PotConfigPanel prefab with ID: {id}"); }
           return prefab;
         }
         else if (prefab != null)
@@ -392,18 +427,18 @@ namespace NoLazyWorkers_IL2CPP
 
     public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
 
       // Log basic info
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
 
       // Log ItemFieldUI properties
       LogComponentDetails(itemfieldUI, 0);
 
       // Log hierarchy and components
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
       if (itemfieldUI.gameObject != null)
       {
         LogGameObjectDetails(itemfieldUI.gameObject, 0);
@@ -418,11 +453,11 @@ namespace NoLazyWorkers_IL2CPP
     {
       if (go == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
         return;
       }
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
 
       // Log components on this GameObject
       foreach (var component in go.GetComponents<Component>())
@@ -441,11 +476,11 @@ namespace NoLazyWorkers_IL2CPP
     {
       if (component == null)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
         return;
       }
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
+      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
 
       // Use reflection to log all public fields
       var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -455,7 +490,7 @@ namespace NoLazyWorkers_IL2CPP
         {
           var value = field.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
         }
         catch (Exception e)
         {
@@ -474,7 +509,7 @@ namespace NoLazyWorkers_IL2CPP
         {
           var value = property.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
         }
         catch (Exception e)
         {
@@ -510,10 +545,10 @@ namespace NoLazyWorkers_IL2CPP
       {
         if (option is ItemField itemField)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
           if (itemField.Options != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
           }
           else
           {
@@ -522,7 +557,7 @@ namespace NoLazyWorkers_IL2CPP
         }
         else
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
         }
       }
       catch (Exception e)
@@ -540,7 +575,7 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
         /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out var potRoute))
         {
           if (potRoute != null)
@@ -558,7 +593,7 @@ namespace NoLazyWorkers_IL2CPP
         {
           if (mixerRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: true);
           }
           else
@@ -581,7 +616,7 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
         /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out TransitRoute potRoute))
         {
           if (potRoute != null)
@@ -599,7 +634,7 @@ namespace NoLazyWorkers_IL2CPP
         {
           if (mixerRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: false);
           }
           else
@@ -677,7 +712,7 @@ namespace NoLazyWorkers_IL2CPP
       {
         __instance.onLoadComplete.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(() =>
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
           //PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
         }));
@@ -698,11 +733,11 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
         if (__result != null)
         {
           LoadedGridItems[mainPath] = __result;
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
+          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
         }
         else
         {
@@ -755,7 +790,7 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
         if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
         {
