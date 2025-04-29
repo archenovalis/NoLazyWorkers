@@ -25,7 +25,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (station == null)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot item is not a ProductDefinition for station={station?.ObjectId.ToString() ?? "null"}");
+          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot item is not a ProductDefinition for station={station?.GUID}");
         return null;
       }
 
@@ -34,7 +34,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       if (productInSlot == null)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugMixingStation)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot {station.ProductSlot.ItemInstance?.Definition} item is not a ProductDefinition for station={station?.ObjectId.ToString() ?? "null"}");
+          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot {station.ProductSlot.ItemInstance?.Definition} item is not a ProductDefinition for station={station?.GUID}");
         return null;
       }
 
@@ -1006,9 +1006,8 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           ItemSlot outputSlot = station.OutputSlot;
           if (outputSlot.Quantity > 0)
           {
-            ProductDefinition outputProduct = outputSlot.ItemInstance?.Definition.TryCast<ProductDefinition>();
+            ProductDefinition outputProduct = outputSlot.ItemInstance.Definition.TryCast<ProductDefinition>();
             MixingRoute matchingRoute = null;
-
             if (!MixingStationExtensions.MixingRoutes.ContainsKey(station.GUID))
               return false;
             // Find the first route where the product matches
@@ -1023,7 +1022,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
             if (matchingRoute != null)
             {
               // Create a route for the matching product
-              TransitRoute route = new(station.Cast<ITransitEntity>(), station.Cast<ITransitEntity>());
+              TransitRoute route = new(station.TryCast<ITransitEntity>(), station.TryCast<ITransitEntity>());
               if (__instance.MoveItemBehaviour.IsTransitRouteValid(route, station.OutputSlot.ItemInstance.ID))
               {
                 __instance.MoveItemBehaviour.Initialize(route, station.OutputSlot.ItemInstance);

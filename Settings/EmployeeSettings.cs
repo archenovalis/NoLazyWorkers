@@ -333,16 +333,16 @@ namespace NoLazyWorkers_IL2CPP.Settings
           switch (employee.Type)
           {
             case EEmployeeType.Botanist:
-              ApplyBotanistSettings(employee.Cast<Botanist>());
+              ApplyBotanistSettings(employee.TryCast<Botanist>());
               break;
             case EEmployeeType.Chemist:
-              ApplyChemistSettings(employee.Cast<Chemist>());
+              ApplyChemistSettings(employee.TryCast<Chemist>());
               break;
             case EEmployeeType.Cleaner:
-              ApplyCleanerSettings(employee.Cast<Cleaner>());
+              ApplyCleanerSettings(employee.TryCast<Cleaner>());
               break;
             case EEmployeeType.Handler:
-              ApplyPackagerSettings(employee.Cast<Packager>());
+              ApplyPackagerSettings(employee.TryCast<Packager>());
               break;
             default:
               MelonLogger.Warning($"Settings: ConfigureRoutine: Unknown employee type {employee.Type} for {employee.fullName}");

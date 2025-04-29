@@ -21,9 +21,9 @@ using UnityEngine.Events;
 using UnityEngine.UI;
 
 using NoLazyWorkers_IL2CPP.Chemists;
-//using NoLazyWorkers_IL2CPP.Botanists;
+using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.7", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.1.5", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
@@ -46,17 +46,13 @@ namespace NoLazyWorkers_IL2CPP
     public const string Name = "NoLazyWorkers_IL2CPP";
     public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Added Employee-related configurable settings.";
     public const string Author = "Archie";
-    public const string Company = null;
-    public const string Version = "1.0.7";
-    public const string DownloadLink = null;
+    public const string Version = "1.1.5";
   }
 
   public class NoLazyWorkersMod : MelonMod
   {
     public static NoLazyWorkersMod Instance { get; private set; }
     public Settings.Default Config { get; private set; }
-    private bool oneShotSettingsApplied = false;
-    private bool SetupConfigPanelsComplete = false;
 
     public override void OnInitializeMelon()
     {
@@ -96,11 +92,10 @@ namespace NoLazyWorkers_IL2CPP
 
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
-      if (sceneName == "Main" && !oneShotSettingsApplied)
+      if (sceneName == "Main")
       {
         var configure = new Settings.Configure();
         MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
-        oneShotSettingsApplied = true;
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
           MelonLogger.Msg("Started one-shot settings coroutine on main scene load.");
 
@@ -110,9 +105,8 @@ namespace NoLazyWorkers_IL2CPP
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
-      SetupConfigPanelsComplete = false;
       ConfigurationExtensions.NPCSupply.Clear();
-      Settings.SettingsExtensions.Configured.Clear(); // Clear configured NPCs on scene unload
+      Settings.SettingsExtensions.Configured.Clear();
       if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
         MelonLogger.Msg("Cleared ConfigurationExtensions and SettingsExtensions on scene unload.");
     }
@@ -228,7 +222,7 @@ namespace NoLazyWorkers_IL2CPP
         return 0;
       }
 
-      if (supply.SelectedObject.Cast<ITransitEntity>() is not ITransitEntity supplyT)
+      if (supply.SelectedObject.TryCast<ITransitEntity>() is not ITransitEntity supplyT)
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore || DebugConfig.EnableDebugChemistBehavior || DebugConfig.EnableDebugBotanistBehavior)
           MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
@@ -568,30 +562,29 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType().Name} selected"); }
-        /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out var potRoute))
+        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior || DebugConfig.EnableDebugChemistBehavior) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType()?.Name} selected"); }
+        if (__instance is PotConfiguration potConfig && PotExtensions.SupplyRoute.TryGetValue(potConfig.Pot.GUID, out var potRoute))
         {
           if (potRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior || DebugConfig.EnableDebugChemistBehavior) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
             potRoute.SetVisualsActive(active: true);
           }
           else
           {
-            MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior || DebugConfig.EnableDebugChemistBehavior) MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
           }
         }
-        else  */
-        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
+        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
         {
           if (mixerRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior || DebugConfig.EnableDebugChemistBehavior) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: true);
           }
           else
           {
-            MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugBotanistBehavior || DebugConfig.EnableDebugChemistBehavior) MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
           }
         }
       }
@@ -610,11 +603,11 @@ namespace NoLazyWorkers_IL2CPP
       try
       {
         if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
-        /* if (__instance is PotConfiguration potConfig && PotExtensions.PotSourceRoute.TryGetValue(potConfig.Pot, out TransitRoute potRoute))
+        if (__instance is PotConfiguration potConfig && PotExtensions.SupplyRoute.TryGetValue(potConfig.Pot.GUID, out TransitRoute potRoute))
         {
           if (potRoute != null)
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
             potRoute.SetVisualsActive(active: false);
           }
           else
@@ -622,8 +615,7 @@ namespace NoLazyWorkers_IL2CPP
             MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
           }
         }
-        else  */
-        if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
+        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
         {
           if (mixerRoute != null)
           {
@@ -706,7 +698,7 @@ namespace NoLazyWorkers_IL2CPP
         __instance.onLoadComplete.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(() =>
         {
           if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
-          //PotExtensions.RestoreConfigurations();
+          PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
           //StorageExtensions.RestoreConfigurations();
         }));
@@ -788,15 +780,15 @@ namespace NoLazyWorkers_IL2CPP
           MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
         if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
         {
-          /* if (PotExtensions.PotSupply.TryGetValue(potConfig.Pot, out ObjectField supply))
+          if (PotExtensions.Supply.TryGetValue(potConfig.Pot.GUID, out ObjectField supply))
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCoreLogs)
+            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugCore)
               MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
           }
           else
           {
             MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
-          } */
+          }
         }
       }
       catch (Exception e)
