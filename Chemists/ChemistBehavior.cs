@@ -1008,6 +1008,9 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           {
             ProductDefinition outputProduct = outputSlot.ItemInstance?.Definition.TryCast<ProductDefinition>();
             MixingRoute matchingRoute = null;
+
+            if (!MixingStationExtensions.MixingRoutes.ContainsKey(station.GUID))
+              return false;
             // Find the first route where the product matches
             foreach (var route in MixingStationExtensions.MixingRoutes[station.GUID])
             {
@@ -1051,7 +1054,6 @@ namespace NoLazyWorkers_IL2CPP.Chemists
       catch (Exception e)
       {
         MelonLogger.Error($"ChemistGetMixStationsReadyToMovePatch: Failed for chemist: {__instance?.name ?? "null"}, error: {e}");
-        __result = new();
         return false;
       }
     }

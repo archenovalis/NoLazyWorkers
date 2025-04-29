@@ -12,7 +12,6 @@ using Il2CppScheduleOne.ObjectScripts;
 using Il2CppScheduleOne.Persistence;
 using Il2CppScheduleOne.Persistence.Loaders;
 using Il2CppScheduleOne.Product;
-using static Il2CppScheduleOne.Registry;
 using Il2CppInterop.Runtime;
 using Il2CppScheduleOne.UI.Management;
 using System.Collections;
@@ -24,7 +23,7 @@ using UnityEngine.UI;
 using NoLazyWorkers_IL2CPP.Chemists;
 //using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.5", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.0.7", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
@@ -48,7 +47,7 @@ namespace NoLazyWorkers_IL2CPP
     public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Added Employee-related configurable settings.";
     public const string Author = "Archie";
     public const string Company = null;
-    public const string Version = "1.0.5";
+    public const string Version = "1.0.7";
     public const string DownloadLink = null;
   }
 
