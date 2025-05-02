@@ -107,6 +107,8 @@ namespace NoLazyWorkers.Chemists
           if (station.Configuration is MixingStationConfiguration mixerConfig)
           {
             Guid guid = station.GUID;
+            if (DebugLogs.All || DebugLogs.MixingStation)
+              MelonLogger.Warning($"RestoreConfigurations: Started for station: {guid}");
             if (!MixingConfig.ContainsKey(guid))
             {
               MixingConfig[guid] = mixerConfig;
@@ -306,7 +308,7 @@ namespace NoLazyWorkers.Chemists
     public MixingRouteEntryUI[] RouteEntries;
     public RectTransform MultiEditBlocker;
     public Button AddButton;
-    public static readonly int MaxRoutes = 7;
+    public static readonly int MaxRoutes = 8;
     private List<List<MixingRoute>> RoutesLists;
     private List<MixingStationConfiguration> Configs;
     private UnityAction OnChanged;
@@ -899,7 +901,7 @@ namespace NoLazyWorkers.Chemists
             MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Routes count={routes.Count}");
             foreach (var route in routes)
             {
-              MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Route Product.ItemID={route.Product.GetData()?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem.GetData()?.ItemID ?? "null"}");
+              MelonLogger.Msg($"MixingStationConfigurationGetSaveStringPatch: Route Product.ItemID={route.Product?.GetData()?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem?.GetData()?.ItemID ?? "null"}");
             }
           }
         }
@@ -1120,6 +1122,7 @@ namespace NoLazyWorkers.Chemists
           }
           if (DebugLogs.All || DebugLogs.MixingStation)
             MelonLogger.Msg($"MixingStationLoaderPatch: supplyJToken[ObjectGUID].ToString(): {supplyJToken["ObjectGUID"].ToString()}");
+          MixingStationExtensions.Supply[guid].Load(new(supplyJToken["ObjectGUID"].ToString()));
           if (MixingStationExtensions.Supply[guid].SelectedObject != null)
             MixingStationExtensions.SourceChanged(config, MixingStationExtensions.Supply[guid].SelectedObject);
           else

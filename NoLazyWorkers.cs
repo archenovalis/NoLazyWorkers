@@ -23,7 +23,7 @@ using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Handlers;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.6", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.7", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
@@ -45,9 +45,9 @@ namespace NoLazyWorkers
   public static class BuildInfo
   {
     public const string Name = "NoLazyWorkers";
-    public const string Description = "Botanist supply is moved to each pot and added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output.";
+    public const string Description = "Botanist's supply is moved to each pot and a supply is added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Multiple employee-related configurable settings.";
     public const string Author = "Archie";
-    public const string Version = "1.1.6";
+    public const string Version = "1.1.7";
   }
 
   public class NoLazyWorkersMod : MelonMod
@@ -98,7 +98,7 @@ namespace NoLazyWorkers
           MelonLogger.Msg("Applied Fixer and Misc settings on main scene load.");
 
         MixingStationExtensions.InitializeStaticRouteListTemplate();
-        //StorageExtensions.InitializeStaticStorageConfigPanelTemplate();
+        //StorageExtensions.InitializeStorage();
       }
     }
 
