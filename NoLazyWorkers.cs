@@ -23,7 +23,7 @@ using UnityEngine.UI;
 using NoLazyWorkers_IL2CPP.Chemists;
 using NoLazyWorkers_IL2CPP.Botanists;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.1.6", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.1.7", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
@@ -45,9 +45,9 @@ namespace NoLazyWorkers_IL2CPP
   public static class BuildInfo
   {
     public const string Name = "NoLazyWorkers_IL2CPP";
-    public const string Description = "Supply is added to mixing stations. Chemists get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Added Employee-related configurable settings.";
+    public const string Description = "Botanist's supply is moved to each pot and a supply is added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Multiple employee-related configurable settings.";
     public const string Author = "Archie";
-    public const string Version = "1.1.6";
+    public const string Version = "1.1.7";
   }
 
   public class NoLazyWorkersMod : MelonMod

@@ -317,7 +317,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
     public MixingRouteEntryUI[] RouteEntries;
     public RectTransform MultiEditBlocker;
     public Button AddButton;
-    public static readonly int MaxRoutes = 7;
+    public static readonly int MaxRoutes = 8;
     private List<List<MixingRoute>> RoutesLists;
     private List<MixingStationConfiguration> Configs;
     private UnityAction OnChanged;

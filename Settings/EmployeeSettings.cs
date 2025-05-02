@@ -297,8 +297,8 @@ namespace NoLazyWorkers_IL2CPP.Settings
         bool isObjectIdValid = false;
         try
         {
-          objectId = employee.ObjectId; // Attempt to access ObjectId
-          isObjectIdValid = objectId > 0; // Assume positive ObjectId is valid
+          objectId = employee.ObjectId;
+          isObjectIdValid = objectId != 0;
         }
         catch (Exception ex)
         {
