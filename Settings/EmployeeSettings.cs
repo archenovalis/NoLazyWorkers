@@ -82,7 +82,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public static Default LoadFromFile(string filePath)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: LoadFromFile");
       var settings = new Default();
       string currentSection = "";
@@ -132,20 +132,20 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     private static void SetProperty(object target, string key, string value)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: SetProperty");
       var property = target.GetType().GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
       if (property == null || property.PropertyType != typeof(string))
         return;
 
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: SetProperty {property} | {target}");
       property.SetValue(target, value);
     }
 
     public void SaveToFile(string filePath)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: SaveToFile");
       var lines = new List<string>
             {
@@ -201,7 +201,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public Default()
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: Default");
       Botanist = new BotanistSettings
       {
@@ -265,7 +265,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public Configure()
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: Configure");
       config = NoLazyWorkersMod.Instance.Config;
     }
@@ -277,8 +277,6 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error("Settings: StartCoroutine: Employee is null");
         return;
       }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
-        MelonLogger.Msg($"Settings: StartCoroutine for {employee.fullName} | {employee.ObjectId} | {employee.GUID}");
       MelonCoroutines.Start(ConfigureRoutine(employee));
     }
 
@@ -304,14 +302,14 @@ namespace NoLazyWorkers_IL2CPP.Settings
         }
         catch (Exception ex)
         {
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          if (DebugLogs.All || DebugLogs.Settings)
             MelonLogger.Msg($"Settings: ConfigureRoutine: Error accessing ObjectId for {employee.fullName} on attempt {attempts + 1}: {ex.Message}");
         }
 
         string guid = employee.GUID.ToString();
         bool isGuidValid = !string.IsNullOrEmpty(guid) && guid != "00000000-0000-0000-0000-000000000000";
 
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        if (DebugLogs.All || DebugLogs.Settings)
           MelonLogger.Msg($"Settings: ConfigureRoutine: Waiting for valid ObjectId and GUID for {employee.fullName} | Attempt {attempts + 1} | ObjectId: {(isObjectIdValid ? objectId.ToString() : "Invalid")} | GUID: {guid}");
 
         if (isObjectIdValid && isGuidValid)
@@ -319,14 +317,14 @@ namespace NoLazyWorkers_IL2CPP.Settings
           // Check if ObjectId is already configured
           if (SettingsExtensions.Configured.Contains(employee.GUID))
           {
-            if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+            if (DebugLogs.All || DebugLogs.Settings)
               MelonLogger.Msg($"Settings: ConfigureRoutine: Skipping already configured employee {employee.fullName} | ObjectId: {objectId} | GUID: {guid}");
             yield break;
           }
 
           // Add ObjectId to configured list
           SettingsExtensions.Configured.Add(employee.GUID);
-          if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+          if (DebugLogs.All || DebugLogs.Settings)
             MelonLogger.Msg($"Settings: ConfigureRoutine: Added ObjectId {objectId} for {employee.fullName} | GUID: {guid}");
 
           // Apply settings based on employee type
@@ -363,7 +361,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error("Settings: ApplyBotanistSettings: Botanist is null");
         return;
       }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: ApplyBotanistSettings {botanist.fullName} | {botanist.ObjectId} | {botanist.GUID}");
       if (int.TryParse(config.Botanist.SigningFee, out int signingFee))
         botanist.SigningFee = signingFee;
@@ -426,7 +424,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error("Settings: ApplyChemistSettings: Chemist is null");
         return;
       }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: ApplyChemistSettings {chemist.fullName} | {chemist.ObjectId} | {chemist.GUID}");
       if (int.TryParse(config.Chemist.SigningFee, out int signingFee))
         chemist.SigningFee = signingFee;
@@ -470,7 +468,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error("Settings: ApplyCleanerSettings: Cleaner is null");
         return;
       }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: ApplyCleanerSettings {cleaner.fullName} | {cleaner.ObjectId} | {cleaner.GUID}");
       if (int.TryParse(config.Cleaner.SigningFee, out int signingFee))
         cleaner.SigningFee = signingFee;
@@ -497,7 +495,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
         MelonLogger.Error("Settings: ApplyPackagerSettings: Packager is null");
         return;
       }
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg($"Settings: ApplyPackagerSettings {packager.fullName} | {packager.ObjectId} | {packager.GUID}");
       if (int.TryParse(config.Packager.SigningFee, out int signingFee))
         packager.SigningFee = signingFee;
@@ -543,7 +541,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public void ApplyMiscSettings()
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: ApplyMiscSettings");
       if (float.TryParse(config.Misc.StoreDeliveryFee, out float storeDeliveryFee))
       {
@@ -559,7 +557,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
     public IEnumerator ApplyOneShotSettingsRoutine()
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: ApplyOneShotSettingsRoutine started");
       bool settingsApplied = false;
       float elapsedTime = 0f;
@@ -568,7 +566,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
       while (elapsedTime < maxTime && !settingsApplied)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        if (DebugLogs.All || DebugLogs.Settings)
           MelonLogger.Msg($"Settings: ApplyOneShotSettingsRoutine attempt at {elapsedTime} seconds");
         //ApplyFixerSettings();
         ApplyMiscSettings();
@@ -579,7 +577,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
 
       if (settingsApplied)
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        if (DebugLogs.All || DebugLogs.Settings)
           MelonLogger.Msg("Settings: ApplyOneShotSettingsRoutine completed successfully");
       }
       else
@@ -596,7 +594,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
     [HarmonyPatch(typeof(Chemist), "NetworkInitialize___Early")]
     public static void ChemistNetworkInitializePostfix(Chemist __instance)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: ChemistNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
@@ -605,7 +603,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
     [HarmonyPatch(typeof(Packager), "NetworkInitialize___Early")]
     public static void PackagerNetworkInitializePostfix(Packager __instance)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: PackagerNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
@@ -614,7 +612,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
     [HarmonyPatch(typeof(Botanist), "NetworkInitialize___Early")]
     public static void BotanistNetworkInitializePostfix(Botanist __instance)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: BotanistNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
@@ -623,7 +621,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
     [HarmonyPatch(typeof(Cleaner), "NetworkInitialize___Early")]
     public static void CleanerNetworkInitializePostfix(Cleaner __instance)
     {
-      if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+      if (DebugLogs.All || DebugLogs.Settings)
         MelonLogger.Msg("Settings: CleanerNetworkInitializePostfix");
       ConfigureEmployee(__instance);
     }
@@ -638,7 +636,7 @@ namespace NoLazyWorkers_IL2CPP.Settings
       // Check if already configured
       if (SettingsExtensions.Configured.Contains(employee.GUID))
       {
-        if (DebugConfig.EnableDebugLogs || DebugConfig.EnableDebugSettings)
+        if (DebugLogs.All || DebugLogs.Settings)
           MelonLogger.Msg($"Settings: ConfigureEmployee: Skipping already configured employee {employee.fullName} | ObjectId: {employee.ObjectId} | GUID: {employee.GUID}");
         return;
       }
