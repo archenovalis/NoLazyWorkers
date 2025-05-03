@@ -70,7 +70,6 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
     public static ItemInstance GetItemInSupply(this Chemist chemist, MixingStation station, string id)
     {
-      MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
       ObjectField supply = MixingStationExtensions.Supply[station.GUID];
 
       List<ItemSlot> list = [];
@@ -108,11 +107,12 @@ namespace NoLazyWorkers_IL2CPP.Chemists
         {
           if (!station.GetComponent<IUsable>().IsInUse && station.CurrentMixOperation == null)
           {
-            if (!MixingStationExtensions.MixingConfig.TryGetValue(station.GUID, out var config))
+            if (!MixingStationExtensions.Config.TryGetValue(station.GUID, out var config))
             {
               if (DebugLogs.All || DebugLogs.Chemist)
                 MelonLogger.Warning($"ChemistPatch.GetMixingStationsReadyToStart: MixerConfig missing for station {station?.GUID}");
-              continue;
+              config = station.Configuration.TryCast<MixingStationConfiguration>();
+              MixingStationExtensions.Config[station.GUID] = config;
             }
 
             ItemField mixerItem = ChemistExtensions.GetMixerItemForProductSlot(station);
@@ -321,7 +321,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
           state = states[__instance];
         }
 
-        MixingStationConfiguration config = MixingStationExtensions.MixingConfig[station.GUID];
+        MixingStationConfiguration config = MixingStationExtensions.Config[station.GUID];
         ObjectField mixerSupply = MixingStationExtensions.Supply[station.GUID];
         if (config == null || mixerSupply == null)
         {
