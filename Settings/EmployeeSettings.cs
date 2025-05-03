@@ -297,8 +297,8 @@ namespace NoLazyWorkers.Settings
         bool isObjectIdValid = false;
         try
         {
-          objectId = employee.ObjectId; // Attempt to access ObjectId
-          isObjectIdValid = objectId > 0; // Assume positive ObjectId is valid
+          objectId = employee.ObjectId;
+          isObjectIdValid = objectId != 0;
         }
         catch (Exception ex)
         {
@@ -331,16 +331,16 @@ namespace NoLazyWorkers.Settings
           switch (employee.Type)
           {
             case EEmployeeType.Botanist:
-              ApplyBotanistSettings((Botanist)employee);
+              ApplyBotanistSettings(employee as Botanist);
               break;
             case EEmployeeType.Chemist:
-              ApplyChemistSettings((Chemist)employee);
+              ApplyChemistSettings(employee as Chemist);
               break;
             case EEmployeeType.Cleaner:
-              ApplyCleanerSettings((Cleaner)employee);
+              ApplyCleanerSettings(employee as Cleaner);
               break;
             case EEmployeeType.Handler:
-              ApplyPackagerSettings((Packager)employee);
+              ApplyPackagerSettings(employee as Packager);
               break;
             default:
               MelonLogger.Warning($"Settings: ConfigureRoutine: Unknown employee type {employee.Type} for {employee.fullName}");

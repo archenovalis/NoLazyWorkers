@@ -16,7 +16,7 @@ namespace NoLazyWorkers.Botanists
   public static class PotExtensions
   {
     public static Dictionary<Guid, ObjectField> Supply = [];
-    public static Dictionary<Guid, PotConfiguration> PotConfig = [];
+    public static Dictionary<Guid, PotConfiguration> Config = [];
     public static Dictionary<Guid, TransitRoute> SupplyRoute = [];
     public static Dictionary<Guid, ObjectFieldData> FailedSupply = [];
 
@@ -92,9 +92,9 @@ namespace NoLazyWorkers.Botanists
           if (pot.Configuration is PotConfiguration potConfig)
           {
             Guid guid = pot.GUID;
-            if (!PotConfig.ContainsKey(guid))
+            if (!Config.ContainsKey(guid))
             {
-              PotConfig[guid] = potConfig;
+              Config[guid] = potConfig;
               if (DebugLogs.All || DebugLogs.Pot)
                 MelonLogger.Warning($"RestoreConfigurations: Registered missing PotConfig for pot: {pot.name}");
             }
@@ -143,7 +143,7 @@ namespace NoLazyWorkers.Botanists
             {
               if (DebugLogs.All || DebugLogs.Pot)
                 MelonLogger.Msg($"RestoreConfigurations: Reload succeeded, SelectedObject: {supply.SelectedObject.name} for pot: {guid}");
-              if (PotConfig.TryGetValue(guid, out var config))
+              if (Config.TryGetValue(guid, out var config))
               {
                 SourceChanged(config, supply.SelectedObject);
               }
@@ -199,9 +199,9 @@ namespace NoLazyWorkers.Botanists
         {
           PotExtensions.Supply[guid] = supply;
         }
-        if (!PotExtensions.PotConfig.ContainsKey(guid))
+        if (!PotExtensions.Config.ContainsKey(guid))
         {
-          PotExtensions.PotConfig[guid] = __instance;
+          PotExtensions.Config[guid] = __instance;
         }
         if (DebugLogs.All || DebugLogs.Pot)
           MelonLogger.Msg($"PotConfigurationPatch: Registered supply and config for pot: {pot?.name ?? "null"}");
@@ -276,9 +276,9 @@ namespace NoLazyWorkers.Botanists
           Guid guid = __instance.Pot.GUID;
           PotExtensions.Supply.Remove(guid);
           PotExtensions.SupplyRoute.Remove(guid);
-          foreach (var pair in PotExtensions.PotConfig.Where(p => p.Value == __instance).ToList())
+          foreach (var pair in PotExtensions.Config.Where(p => p.Value == __instance).ToList())
           {
-            PotExtensions.PotConfig.Remove(pair.Key);
+            PotExtensions.Config.Remove(pair.Key);
           }
           if (DebugLogs.All || DebugLogs.Pot)
             MelonLogger.Msg($"PotConfigurationDestroyPatch: Cleaned up for pot: {guid.ToString() ?? "null"}");
@@ -408,9 +408,9 @@ namespace NoLazyWorkers.Botanists
           MelonLogger.Error($"PotLoaderPatch: No valid PotConfiguration for pot: {guid}");
           return;
         }
-        if (!PotExtensions.PotConfig.ContainsKey(guid))
+        if (!PotExtensions.Config.ContainsKey(guid))
         {
-          PotExtensions.PotConfig[guid] = config;
+          PotExtensions.Config[guid] = config;
           if (DebugLogs.All || DebugLogs.Pot)
             MelonLogger.Msg($"PotLoaderPatch: Registered PotConfig for pot: {guid}");
         }
