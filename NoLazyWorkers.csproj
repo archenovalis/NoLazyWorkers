@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFramework>net48</TargetFramework>
+		<TargetFramework>net481</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>disable</Nullable>
 		<RootNamespace>NoLazyWorkers</RootNamespace>
@@ -70,7 +70,7 @@
 		<Reference Include="FishNet.Demos">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\FishNet.Demos.dll</HintPath>
 		</Reference>
-		<Reference Include="FishNet.Runtime">
+		<Reference Include="FishNet.Runtime" Publicize="true">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\FishNet.Runtime.dll</HintPath>
 		</Reference>
 		<Reference Include="GameKit.Dependencies">

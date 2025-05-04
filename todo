@@ -1,5 +1,16 @@
-debug pot supply saving and loading
+# handlers
 
+move items from any shelf to assigned shelf
+move items from loading dock to assigned/any shelf
+move product from any/assigned shelf to stations/rack
+package product and move to assigned/any shelf
 
-reduce this by 1 when firing:
-NetworkSingleton<VariableDatabase>.Instance.SetVariableValue("LifetimeEmployeesRecruited", (NetworkSingleton<VariableDatabase>.Instance.GetValue<float>("LifetimeEmployeesRecruited") + 1f).ToString())
+- if packaging station is assigned jars and less than 5 unpackaged product are in the station, then handler will get baggies and package them into baggies
+move packaged product to assigned/any shelf
+
+# botanists
+
+get pot supplies from any/assigned shelf
+deliver harvest to assigned/any shelf
+start the dry process
+deliver dried product to destination

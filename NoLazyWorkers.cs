@@ -35,8 +35,8 @@ namespace NoLazyWorkers
     public static bool Settings = false;
     public static bool Pot = false;
     public static bool MixingStation = false;
-    public static bool Storage = false;
-    public static bool Chemist = false;
+    public static bool Storage = true;
+    public static bool Chemist = true;
     public static bool Botanist = false;
     public static bool Packager = false;
     public static bool Stacktrace = false;
@@ -98,7 +98,7 @@ namespace NoLazyWorkers
           MelonLogger.Msg("Applied Fixer and Misc settings on main scene load.");
 
         MixingStationExtensions.InitializeStaticRouteListTemplate();
-        //StorageExtensions.InitializeStorageModule();
+        StorageExtensions.InitializeStorageModule();
       }
     }
 
@@ -149,18 +149,18 @@ namespace NoLazyWorkers
   public static class NoLazyUtilities
   {
     /* /// <summary>
-    /// Converts a System.Collections.Generic.List<T> to an Il2CppSystem.Collections.Generic.List<T>.
+    /// Converts a Collections.Generic.List<T> to an Il2CppCollections.Generic.List<T>.
     /// </summary>
-    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppObject.</typeparam>
     /// <param name="systemList">The System list to convert.</param>
     /// <returns>An Il2CppSystem list containing the same elements, or an empty list if the input is null.</returns>
-    public static Il2CppSystem.Collections.Generic.List<T> ConvertList<T>(List<T> systemList)
-        where T : Il2CppSystem.Object
+    public static Il2CppCollections.Generic.List<T> ConvertList<T>(List<T> systemList)
+        where T : Il2CppObject
     {
       if (systemList == null)
-        return new Il2CppSystem.Collections.Generic.List<T>();
+        return new Il2CppCollections.Generic.List<T>();
 
-      Il2CppSystem.Collections.Generic.List<T> il2cppList = new(systemList.Count);
+      Il2CppCollections.Generic.List<T> il2cppList = new(systemList.Count);
       foreach (var item in systemList)
       {
         if (item != null)
@@ -170,13 +170,13 @@ namespace NoLazyWorkers
     }
 
     /// <summary>
-    /// Converts an Il2CppSystem.Collections.Generic.List<T> to a System.Collections.Generic.List<T>.
+    /// Converts an Il2CppCollections.Generic.List<T> to a Collections.Generic.List<T>.
     /// </summary>
-    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppSystem.Object.</typeparam>
+    /// <typeparam name="T">The type of elements in the list, must inherit from Il2CppObject.</typeparam>
     /// <param name="il2cppList">The Il2CppSystem list to convert.</param>
     /// <returns>A System list containing the same elements, or an empty list if the input is null.</returns>
-    public static List<T> ConvertList<T>(Il2CppSystem.Collections.Generic.List<T> il2cppList)
-        where T : Il2CppSystem.Object
+    public static List<T> ConvertList<T>(Il2CppCollections.Generic.List<T> il2cppList)
+        where T : Il2CppObject
     {
       if (il2cppList == null)
         return [];
@@ -210,12 +210,12 @@ namespace NoLazyWorkers
         }
       }
 
-      public void RunCoroutineWithResult<T>(IEnumerator coroutine, System.Action<T> callback)
+      public void RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
       {
         StartCoroutine(RunCoroutineInternal(coroutine, callback));
       }
 
-      private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, System.Action<T> callback)
+      private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, Action<T> callback)
       {
         while (true)
         {
@@ -226,7 +226,7 @@ namespace NoLazyWorkers
               yield break;
             current = coroutine.Current;
           }
-          catch (System.Exception e)
+          catch (Exception e)
           {
             MelonLogger.Error($"CoroutineRunner: Exception in coroutine: {e.Message}, stack: {e.StackTrace}");
             callback?.Invoke(default);
@@ -243,7 +243,7 @@ namespace NoLazyWorkers
       }
     }
 
-    public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
+    public static int GetAmountInInventoryAndSupply(NPC npc, ItemInstance item)
     {
       if (npc == null || item == null)
       {
@@ -253,7 +253,7 @@ namespace NoLazyWorkers
       }
 
       int inventoryCount = npc.Inventory?._GetItemAmount(item.ID) ?? 0;
-      int supplyCount = GetAmountInSupply(npc, item.GetDefaultInstance());
+      int supplyCount = GetAmountInSupply(npc, item);
       return inventoryCount + supplyCount;
     }
 
@@ -490,6 +490,17 @@ namespace NoLazyWorkers
       }
     }
 
+    public static string DebugTransformHierarchy(Transform transform, int indent = 0)
+    {
+      string indentStr = new string(' ', indent * 2);
+      string result = $"{indentStr}{transform.name} (Active: {transform.gameObject.activeSelf}, Layer: {LayerMask.LayerToName(transform.gameObject.layer)})\n";
+      foreach (Transform child in transform)
+      {
+        result += DebugTransformHierarchy(child, indent + 1);
+      }
+      return result;
+    }
+
     static void LogComponentDetails(Component component, int indentLevel)
     {
       if (component == null)
@@ -582,88 +593,6 @@ namespace NoLazyWorkers
       catch (Exception e)
       {
         MelonLogger.Error($"ItemSetterScreenOpenPatch: Prefix failed, error: {e}");
-      }
-    }
-  }
-
-  // todo: are select and deselect necessary?
-  [HarmonyPatch(typeof(EntityConfiguration), "Selected")]
-  public class EntityConfigurationSelectedPatch
-  {
-    static void Postfix(EntityConfiguration __instance)
-    {
-      try
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Pot || DebugLogs.Botanist || DebugLogs.Chemist || DebugLogs.MixingStation)
-          MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType()?.Name} selected");
-        if (__instance is PotConfiguration potConfig && PotExtensions.SupplyRoute.TryGetValue(potConfig.Pot.GUID, out var potRoute))
-        {
-          if (potRoute != null)
-          {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Pot || DebugLogs.Botanist)
-              MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute");
-            potRoute.SetVisualsActive(active: true);
-          }
-          else if (DebugLogs.All || DebugLogs.Core || DebugLogs.Botanist || DebugLogs.Pot)
-            MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
-        }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
-        {
-          if (mixerRoute != null)
-          {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.MixingStation || DebugLogs.Chemist)
-              MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute");
-            mixerRoute.SetVisualsActive(active: true);
-          }
-          else if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.MixingStation)
-            MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"EntityConfigurationSelectedPatch: Failed for {__instance?.GetType().Name}, error: {e}");
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(EntityConfiguration), "Deselected")]
-  public class EntityConfigurationDeselectedPatch
-  {
-    static void Postfix(EntityConfiguration __instance)
-    {
-      try
-      {
-        if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"EntityConfigurationDeselectedPatch: {__instance.GetType().Name} deselected"); }
-        if (__instance is PotConfiguration potConfig && PotExtensions.SupplyRoute.TryGetValue(potConfig.Pot.GUID, out TransitRoute potRoute))
-        {
-          if (potRoute != null)
-          {
-            if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for Pot SourceRoute"); }
-            potRoute.SetVisualsActive(active: false);
-          }
-          else
-          {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-              MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
-          }
-        }
-        else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
-        {
-          if (mixerRoute != null)
-          {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
-            mixerRoute.SetVisualsActive(active: false);
-          }
-          else
-          {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-              MelonLogger.Warning("EntityConfigurationDeselectedPatch: MixingStation SourceRoute is null");
-          }
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"EntityConfigurationDeselectedPatch: Failed for {__instance?.GetType().Name}, error: {e}");
       }
     }
   }
@@ -776,7 +705,7 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
     {
-      if (DebugLogs.All || DebugLogs.Core)
+      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
       {
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}");
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}");
@@ -785,24 +714,24 @@ namespace NoLazyWorkers
       }
       if (fieldIndex < 0 || fieldIndex >= __instance.Configuration.Fields.Count)
       {
-        if (DebugLogs.All || DebugLogs.Core)
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping");
         return false;
       }
       var itemField = __instance.Configuration.Fields[fieldIndex] as ItemField;
       if (itemField == null)
       {
-        if (DebugLogs.All || DebugLogs.Core)
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping");
         return false;
       }
       if (string.IsNullOrEmpty(value) && !itemField.CanSelectNone)
       {
-        if (DebugLogs.All || DebugLogs.Core)
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}");
         return false;
       }
-      if (DebugLogs.All || DebugLogs.Core)
+      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
         MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
       return true;
     }
@@ -838,14 +767,14 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
-      if (DebugLogs.Stacktrace)
+      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
         MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
       bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
-        if (DebugLogs.Stacktrace)
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
           MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
         /* return false; */
       }
