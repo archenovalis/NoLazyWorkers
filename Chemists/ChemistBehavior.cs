@@ -1,6 +1,6 @@
+using Il2CppFishNet;
 using HarmonyLib;
 using MelonLoader;
-using Il2CppFishNet;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.Employees;
 using Il2CppScheduleOne.EntityFramework;
@@ -105,7 +105,7 @@ namespace NoLazyWorkers_IL2CPP.Chemists
 
         foreach (MixingStation station in __instance.configuration.MixStations)
         {
-          if (!station.GetComponent<IUsable>().IsInUse && station.CurrentMixOperation == null)
+          if (!station.TryCast<IUsable>().IsInUse && station.CurrentMixOperation == null)
           {
             if (!MixingStationExtensions.Config.TryGetValue(station.GUID, out var config))
             {

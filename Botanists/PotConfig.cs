@@ -1,7 +1,7 @@
 using HarmonyLib;
 using MelonLoader;
-using Il2CppInterop.Runtime;
 using Il2CppNewtonsoft.Json.Linq;
+using Il2CppPathfinding.Poly2Tri;
 using Il2CppScheduleOne.EntityFramework;
 using Il2CppScheduleOne.Management;
 using Il2CppScheduleOne.ObjectScripts;
@@ -12,6 +12,7 @@ using Il2CppTMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using Object = UnityEngine.Object;
+using Il2CppInterop.Runtime;
 using Guid = Il2CppSystem.Guid;
 
 namespace NoLazyWorkers_IL2CPP.Botanists
@@ -32,10 +33,16 @@ namespace NoLazyWorkers_IL2CPP.Botanists
           MelonLogger.Error("SourceChanged(Pot): PotConfiguration is null");
           return;
         }
-        Guid guid = potConfig.Pot.GUID;
+        Pot pot = potConfig.Pot;
+        if (pot == null)
+        {
+          if (DebugLogs.All || DebugLogs.Pot)
+            MelonLogger.Warning("SourceChanged(pot): pot is null");
+          return;
+        }
+        Guid guid = pot.GUID;
         if (DebugLogs.All || DebugLogs.Pot)
           MelonLogger.Msg($"SourceChanged(Pot): Called for PotConfig: {guid.ToString() ?? "null"}, Item: {item?.name ?? "null"}");
-        Pot pot = potConfig.Pot;
         if (!Supply.ContainsKey(guid))
         {
           if (DebugLogs.All || DebugLogs.Pot)
@@ -44,7 +51,7 @@ namespace NoLazyWorkers_IL2CPP.Botanists
         }
         if (!SupplyRoute.ContainsKey(guid))
         {
-          SupplyRoute[guid] = null;
+          SupplyRoute[guid] = null; // initialize
         }
 
         if (SupplyRoute[guid] is TransitRoute supplyRoute)
@@ -68,8 +75,6 @@ namespace NoLazyWorkers_IL2CPP.Botanists
           }
           if (DebugLogs.All || DebugLogs.Pot)
             MelonLogger.Msg($"SourceChanged(Pot): Created new TransitRoute for pot: {guid}, Supply: {item.name}");
-          if (Supply[guid].SelectedObject != item)
-            Supply[guid].SelectedObject = item;
         }
         else
         {
@@ -85,6 +90,14 @@ namespace NoLazyWorkers_IL2CPP.Botanists
       }
     }
 
+    public static void SupplyOnObjectChangedInvoke(BuildableItem item, PotConfiguration __instance, Pot pot, ObjectField Supply)
+    {
+      ConfigurationExtensions.InvokeChanged(__instance);
+      SourceChanged(__instance, item);
+      if (DebugLogs.All || DebugLogs.Pot)
+        MelonLogger.Msg($"SupplyOnObjectChangedInvoke: Supply changed for pot {pot?.GUID.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.GUID.ToString() ?? "null"}");
+    }
+
     public static void RestoreConfigurations()
     {
       Pot[] pots = Object.FindObjectsOfType<Pot>();
@@ -95,14 +108,27 @@ namespace NoLazyWorkers_IL2CPP.Botanists
           if (pot.Configuration is PotConfiguration potConfig)
           {
             Guid guid = pot.GUID;
-            if (!Config.ContainsKey(guid))
-            {
-              Config[guid] = potConfig;
-              if (DebugLogs.All || DebugLogs.Pot)
-                MelonLogger.Warning($"RestoreConfigurations: Registered missing PotConfig for pot: {pot.name}");
-            }
             if (DebugLogs.All || DebugLogs.Pot)
-              MelonLogger.Msg($"RestoreConfigurations: Registered configuration for pot: {pot.name}");
+              MelonLogger.Warning($"RestoreConfigurations: Started for pot: {guid}");
+
+            Config[guid] = potConfig;
+            if (DebugLogs.All || DebugLogs.Pot)
+              MelonLogger.Warning($"RestoreConfigurations: Registered missing PotConfig for pot: {pot.name}");
+
+            // Initialize Supply if missing
+            if (!Supply.TryGetValue(guid, out var supply))
+            {
+              supply = new ObjectField(potConfig)
+              {
+                TypeRequirements = new(),
+                DrawTransitLine = true
+              };
+              Supply[guid] = supply;
+              Supply[guid].onObjectChanged.RemoveAllListeners();
+              Supply[guid].onObjectChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<BuildableItem>>((BuildableItem item) => SupplyOnObjectChangedInvoke(item, potConfig, pot, supply)));
+              if (DebugLogs.All || DebugLogs.MixingStation)
+                MelonLogger.Msg($"RestoreConfigurations: Initialized Supply for pot: {guid}");
+            }
           }
         }
         catch (Exception e)
@@ -127,7 +153,8 @@ namespace NoLazyWorkers_IL2CPP.Botanists
           {
             if (!Supply.TryGetValue(guid, out ObjectField supply) || supply == null)
             {
-              MelonLogger.Warning($"RestoreConfigurations: Skipping reload for pot: {guid.ToString() ?? "null"}, supply not found");
+              if (DebugLogs.All || DebugLogs.Pot)
+                MelonLogger.Warning($"RestoreConfigurations: Skipping reload for pot: {guid.ToString() ?? "null"}, supply not found");
               FailedSupply.Remove(guid);
               continue;
             }
@@ -136,11 +163,11 @@ namespace NoLazyWorkers_IL2CPP.Botanists
               MelonLogger.Msg($"RestoreConfigurations: Reloading Supply for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}");
 
             supply.Load(supplyData);
-            FailedSupply.Remove(guid);
 
             if (supply.SelectedObject == null)
             {
-              MelonLogger.Warning($"RestoreConfigurations: Reload failed to set SelectedObject for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}");
+              if (DebugLogs.All || DebugLogs.Pot)
+                MelonLogger.Warning($"RestoreConfigurations: Reload failed to set SelectedObject for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}");
             }
             else
             {
@@ -151,6 +178,7 @@ namespace NoLazyWorkers_IL2CPP.Botanists
                 SourceChanged(config, supply.SelectedObject);
               }
             }
+            FailedSupply.Remove(guid);
           }
           catch (Exception e)
           {
@@ -184,20 +212,8 @@ namespace NoLazyWorkers_IL2CPP.Botanists
           DrawTransitLine = true
         };
         supply.onObjectChanged.RemoveAllListeners();
-        supply.onObjectChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<BuildableItem>>((BuildableItem item) =>
-        {
-          try
-          {
-            if (DebugLogs.All || DebugLogs.Pot)
-              MelonLogger.Msg($"PotConfigurationPatch: supply.onObjectChanged Pot: {guid} Supply: {supply.SelectedObject?.GUID.ToString() ?? "null"} Item: {item?.GUID.ToString() ?? "null"}");
-            ConfigurationExtensions.InvokeChanged(__instance);
-            PotExtensions.SourceChanged(__instance, item);
-          }
-          catch (Exception e)
-          {
-            MelonLogger.Error($"PotConfigurationPatch: onObjectChanged failed for pot: {pot?.name ?? "null"}, error: {e}");
-          }
-        }));
+        supply.onObjectChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<BuildableItem>>((BuildableItem item) => PotExtensions.SupplyOnObjectChangedInvoke(item, __instance, pot, supply)));
+
         if (!PotExtensions.Supply.ContainsKey(guid))
         {
           PotExtensions.Supply[guid] = supply;
@@ -224,46 +240,38 @@ namespace NoLazyWorkers_IL2CPP.Botanists
         if (__instance == null || __instance.Pot == null)
           return;
         Guid guid = __instance.Pot.GUID;
-        JObject supplyObject = null;
-        if ((!PotExtensions.Supply.ContainsKey(guid)) && DebugLogs.All)
-          MelonLogger.Warning($"MixingpotConfigurationGetSaveStringPatch: No MixingSupply entry for config {__instance.GetHashCode()} pot {guid}");
-        else
+        if (PotExtensions.Supply.TryGetValue(guid, out var supply) && supply != null && supply.SelectedObject != null)
         {
+          // Create the config data
+          PotConfigurationData data = new(
+            __instance.Seed.GetData(),
+            __instance.Additive1.GetData(),
+            __instance.Additive2.GetData(),
+            __instance.Additive3.GetData(),
+            __instance.Destination.GetData()
+          );
+          // Serialize config data to JSON
+          string configJson = JsonUtility.ToJson(data, true);
+          JObject jsonObject = JObject.Parse(configJson);
+
+          JObject supplyObject = null;
           supplyObject = new JObject
           {
-            ["ObjectGUID"] = PotExtensions.Supply[guid].SelectedObject.GUID.ToString()
+            ["ObjectGUID"] = supply.SelectedObject.GUID.ToString()
           };
-          if (DebugLogs.All || DebugLogs.Pot)
-            MelonLogger.Warning($"MixingpotConfigurationGetSaveStringPatch: supplyData: {supplyObject["ObjectGUID"]}");
-        }
-
-        // Create the config data
-        PotConfigurationData data = new(
-          __instance.Seed.GetData(),
-          __instance.Additive1.GetData(),
-          __instance.Additive2.GetData(),
-          __instance.Additive3.GetData(),
-          __instance.Destination.GetData()
-        );
-
-        // Serialize config data to JSON
-        string configJson = JsonUtility.ToJson(data, true);
-
-        // Combine config data with additional fields using Newtonsoft.Json
-        JObject jsonObject = JObject.Parse(configJson);
-        if (supplyObject != null)
           jsonObject["Supply"] = supplyObject;
-
-        __result = jsonObject.ToString(Il2CppNewtonsoft.Json.Formatting.Indented);
-
-        if (DebugLogs.All || DebugLogs.Pot)
-        {
-          MelonLogger.Msg($"PotConfigurationGetSaveStringPatch: Saved JSON for station={guid}: {__result}");
+          if (DebugLogs.All || DebugLogs.Pot)
+            MelonLogger.Warning($"PotConfiguration GetSaveStringPatch: supplyData: {supplyObject["ObjectGUID"]}");
+          __result = jsonObject.ToString(Il2CppNewtonsoft.Json.Formatting.Indented);
+          if (DebugLogs.All || DebugLogs.Pot)
+            MelonLogger.Msg($"PotConfiguration GetSaveStringPatch: Saved JSON for station={guid}: {__result}");
         }
+        else if (DebugLogs.All || DebugLogs.Pot)
+          MelonLogger.Warning($"PotConfiguration GetSaveStringPatch: No Supply for pot {guid}");
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"PotConfigurationGetSaveStringPatch failed: {e}");
+        MelonLogger.Error($"PotConfiguration GetSaveStringPatch failed: {e}");
       }
     }
 
@@ -398,14 +406,12 @@ namespace NoLazyWorkers_IL2CPP.Botanists
 
         JObject jsonObject = JObject.Parse(text);
         JToken supplyJToken = jsonObject["Supply"];
-        jsonObject.Remove("Supply");
-        string modifiedJson = jsonObject.ToString();
 
         if (DebugLogs.All || DebugLogs.Pot)
         {
-          MelonLogger.Msg($"PotLoaderPatch: Stripped JSON: {modifiedJson}");
           MelonLogger.Msg($"PotLoaderPatch: Extracted supplyJToken: {supplyJToken}");
         }
+
         Guid guid = pot.GUID;
         PotConfiguration config = pot.Configuration?.TryCast<PotConfiguration>();
         if (config == null)

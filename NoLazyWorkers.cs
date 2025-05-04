@@ -1,7 +1,7 @@
 ﻿using HarmonyLib;
 using MelonLoader;
-using Il2CppScheduleOne.Employees;
 using MelonLoader.Utils;
+using Il2CppScheduleOne.Employees;
 using Il2CppScheduleOne.EntityFramework;
 using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.Management;
@@ -12,18 +12,20 @@ using Il2CppScheduleOne.ObjectScripts;
 using Il2CppScheduleOne.Persistence;
 using Il2CppScheduleOne.Persistence.Loaders;
 using Il2CppScheduleOne.Product;
-using Il2CppInterop.Runtime;
 using Il2CppScheduleOne.UI.Management;
-using System.Collections;
-using System.Reflection;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
+using System.Collections;
+using System.Reflection;
+
+using Il2CppInterop.Runtime;
 
 using NoLazyWorkers_IL2CPP.Chemists;
 using NoLazyWorkers_IL2CPP.Botanists;
+using NoLazyWorkers_IL2CPP.Handlers;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.1.8", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers_IL2CPP.NoLazyWorkersMod), "NoLazyWorkers_IL2CPP", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers_IL2CPP
@@ -47,7 +49,7 @@ namespace NoLazyWorkers_IL2CPP
     public const string Name = "NoLazyWorkers_IL2CPP";
     public const string Description = "Botanist's supply is moved to each pot and a supply is added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Multiple employee-related configurable settings.";
     public const string Author = "Archie";
-    public const string Version = "1.1.8";
+    public const string Version = "1.1.9";
   }
 
   public class NoLazyWorkersMod : MelonMod
@@ -193,6 +195,57 @@ namespace NoLazyWorkers_IL2CPP
       }
       return systemList;
     }
+
+    /* public class CoroutineRunner : MonoBehaviour
+    {
+      private static CoroutineRunner _instance;
+
+      public static CoroutineRunner Instance
+      {
+        get
+        {
+          if (_instance == null)
+          {
+            var go = new GameObject("CoroutineRunner");
+            _instance = go.AddComponent<CoroutineRunner>();
+            DontDestroyOnLoad(go);
+          }
+          return _instance;
+        }
+      }
+
+      public void RunCoroutineWithResult<T>(IEnumerator coroutine, System.Action<T> callback)
+      {
+        StartCoroutine(RunCoroutineInternal(coroutine, callback));
+      }
+
+      private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, System.Action<T> callback)
+      {
+        while (true)
+        {
+          object current;
+          try
+          {
+            if (!coroutine.MoveNext())
+              yield break;
+            current = coroutine.Current;
+          }
+          catch (System.Exception e)
+          {
+            MelonLogger.Error($"CoroutineRunner: Exception in coroutine: {e.Message}, stack: {e.StackTrace}");
+            callback?.Invoke(default);
+            yield break;
+          }
+
+          if (current is T result)
+          {
+            callback?.Invoke(result);
+            yield break;
+          }
+          yield return current;
+        }
+      }
+    } */
 
     public static int GetAmountInInventoryAndSupply(NPC npc, ItemDefinition item)
     {
@@ -434,7 +487,8 @@ namespace NoLazyWorkers_IL2CPP
       }
       else
       {
-        MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
+        if (DebugLogs.All || DebugLogs.Core)
+          MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
       }
     }
 
@@ -483,7 +537,7 @@ namespace NoLazyWorkers_IL2CPP
         }
         catch (Exception e)
         {
-          MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
+          MelonLogger.Error(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
         }
       }
 
@@ -502,7 +556,7 @@ namespace NoLazyWorkers_IL2CPP
         }
         catch (Exception e)
         {
-          MelonLogger.Warning(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
+          MelonLogger.Error(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
         }
       }
     }
@@ -541,7 +595,8 @@ namespace NoLazyWorkers_IL2CPP
           }
           else
           {
-            MelonLogger.Warning("ItemSetterScreenOpenPatch: ItemField Options is null");
+            if (DebugLogs.All || DebugLogs.Core)
+              MelonLogger.Warning("ItemSetterScreenOpenPatch: ItemField Options is null");
           }
         }
         else
@@ -564,30 +619,29 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Botanist || DebugLogs.Chemist) { MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType()?.Name} selected"); }
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Pot || DebugLogs.Botanist || DebugLogs.Chemist || DebugLogs.MixingStation)
+          MelonLogger.Msg($"EntityConfigurationSelectedPatch: {__instance.GetType()?.Name} selected");
         if (__instance is PotConfiguration potConfig && PotExtensions.SupplyRoute.TryGetValue(potConfig.Pot.GUID, out var potRoute))
         {
           if (potRoute != null)
           {
-            if (DebugLogs.All || DebugLogs.Botanist || DebugLogs.Chemist) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute"); }
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Pot || DebugLogs.Botanist)
+              MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for Pot SourceRoute");
             potRoute.SetVisualsActive(active: true);
           }
-          else
-          {
-            if (DebugLogs.All || DebugLogs.Botanist || DebugLogs.Chemist) MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
-          }
+          else if (DebugLogs.All || DebugLogs.Core || DebugLogs.Botanist || DebugLogs.Pot)
+            MelonLogger.Warning("EntityConfigurationSelectedPatch: Pot SourceRoute is null");
         }
         else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out var mixerRoute))
         {
           if (mixerRoute != null)
           {
-            if (DebugLogs.All || DebugLogs.Botanist || DebugLogs.Chemist) { MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute"); }
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.MixingStation || DebugLogs.Chemist)
+              MelonLogger.Msg("EntityConfigurationSelectedPatch: Enabling visuals for MixingStation SourceRoute");
             mixerRoute.SetVisualsActive(active: true);
           }
-          else
-          {
-            if (DebugLogs.All || DebugLogs.Botanist || DebugLogs.Chemist) MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
-          }
+          else if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.MixingStation)
+            MelonLogger.Warning("EntityConfigurationSelectedPatch: MixingStation SourceRoute is null");
         }
       }
       catch (Exception e)
@@ -614,19 +668,21 @@ namespace NoLazyWorkers_IL2CPP
           }
           else
           {
-            MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+              MelonLogger.Warning("EntityConfigurationDeselectedPatch: Pot SourceRoute is null");
           }
         }
         else if (__instance is MixingStationConfiguration mixerConfig && MixingStationExtensions.SupplyRoute.TryGetValue(mixerConfig.station.GUID, out TransitRoute mixerRoute))
         {
           if (mixerRoute != null)
           {
-            if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist) { MelonLogger.Msg("EntityConfigurationDeselectedPatch: Disabling visuals for MixingStation SourceRoute"); }
             mixerRoute.SetVisualsActive(active: false);
           }
           else
           {
-            MelonLogger.Warning("EntityConfigurationDeselectedPatch: MixingStation SourceRoute is null");
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+              MelonLogger.Warning("EntityConfigurationDeselectedPatch: MixingStation SourceRoute is null");
           }
         }
       }
@@ -729,7 +785,8 @@ namespace NoLazyWorkers_IL2CPP
         }
         else
         {
-          MelonLogger.Warning($"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}");
+          if (DebugLogs.All || DebugLogs.Core)
+            MelonLogger.Warning($"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}");
         }
       }
       catch (Exception e)
@@ -778,18 +835,19 @@ namespace NoLazyWorkers_IL2CPP
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Core)
+        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
           MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
         if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
         {
           if (PotExtensions.Supply.TryGetValue(potConfig.Pot.GUID, out ObjectField supply))
           {
-            if (DebugLogs.All || DebugLogs.Core)
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
               MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
           }
           else
           {
-            MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
+            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+              MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
           }
         }
       }
