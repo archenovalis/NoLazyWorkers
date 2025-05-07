@@ -1,7 +1,6 @@
 using HarmonyLib;
 using MelonLoader;
 using Newtonsoft.Json.Linq;
-using Pathfinding.Poly2Tri;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Management;
 using ScheduleOne.ObjectScripts;

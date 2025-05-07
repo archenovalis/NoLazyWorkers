@@ -51,7 +51,7 @@ namespace NoLazyWorkers.Chemists
         if (!Supply.ContainsKey(guid))
         {
           if (DebugLogs.All || DebugLogs.MixingStation)
-            MelonLogger.Warning($"SourceChanged(station): MixerSupply does not contain key for station: {station}");
+            MelonLogger.Warning($"SourceChanged(station): MixerSupply does not contain key for station: {guid}");
           return;
         }
         if (!SupplyRoute.ContainsKey(guid))
