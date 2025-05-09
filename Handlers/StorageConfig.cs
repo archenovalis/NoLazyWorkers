@@ -27,10 +27,9 @@ using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.Product;
 using static NoLazyWorkers.Handlers.StorageExtensions;
 using FishNet.Managing;
-using FishNet;
 using FishNet.Managing.Object;
-using FishNet.Transporting;
-using FishNet.Serializing;
+using ScheduleOne.Product.Packaging;
+using ScheduleOne.Persistence;
 
 namespace NoLazyWorkers.Handlers
 {
@@ -129,8 +128,8 @@ namespace NoLazyWorkers.Handlers
             // Start the delayed check coroutine after successful initialization
             if (DebugLogs.All || DebugLogs.Storage)
               MelonLogger.Msg($"WaitForProxyInitialization: Starting 10-second delayed check for GUID: {guid}");
-            bool initialized = false;
-            CoroutineRunner.Instance.RunCoroutineWithResult<bool>(DelayedInitializationCheck(guid, storage, proxy), success => initialized = success);
+            //bool initialized = false;
+            //CoroutineRunner.Instance.RunCoroutineWithResult<bool>(DelayedInitializationCheck(guid, storage, proxy), success => initialized = success);
 
             yield return true;
             yield break;
@@ -142,7 +141,7 @@ namespace NoLazyWorkers.Handlers
       yield return false;
     }
 
-    private static IEnumerator DelayedInitializationCheck(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
+    /* private static IEnumerator DelayedInitializationCheck(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
     {
       yield return new WaitForSeconds(10f);
 
@@ -190,7 +189,7 @@ namespace NoLazyWorkers.Handlers
       {
         MelonLogger.Error($"DelayedInitializationCheck: Failed for GUID: {guid}, error: {e.Message}\nStackTrace: {e.StackTrace}");
       }
-    }
+    } */
 
     private static void CacheCrossSprite()
     {
@@ -733,7 +732,7 @@ namespace NoLazyWorkers.Handlers
         {
           StorageMode newMode;
           ItemDefinition selectedItem = selected.Item;
-          ItemDefinition selectedPackaging = selected is StorageItemOption storageOption ? storageOption.PackagingDefinition : null;
+          PackagingDefinition selectedPackaging = (selected is StorageItemOption storageOption ? storageOption.PackagingDefinition : null) as PackagingDefinition;
 
           if (selected.Title == "None")
             newMode = StorageMode.None;
@@ -773,7 +772,7 @@ namespace NoLazyWorkers.Handlers
     public PlaceableStorageEntity Storage { get; private set; }
     public StorageConfigurableProxy Proxy { get; private set; }
     public StorageMode Mode { get; set; }
-    public ItemDefinition PackagingDefinition { get; set; }
+    public PackagingDefinition PackagingDefinition { get; set; }
 
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
@@ -814,19 +813,30 @@ namespace NoLazyWorkers.Handlers
         if (jsonObject["StorageMode"] != null)
           Mode = (StorageMode)Enum.Parse(typeof(StorageMode), jsonObject["StorageMode"].ToString());
 
-        var registry = Registry.Instance;
         if (jsonObject["StorageItem"] != null)
         {
-          StorageItem.Load(new ItemFieldData(jsonObject["StorageItem"].ToString()));
-          if (StorageItem.SelectedItem == null && (DebugLogs.All || DebugLogs.Storage))
-            MelonLogger.Warning($"StorageConfiguration.Load: Failed to load StorageItem for ID {jsonObject["StorageItem"]} for GUID: {Storage.GUID}");
-        }
-
-        if (jsonObject["PackagingID"] != null)
-        {
-          PackagingDefinition = registry?._GetItem(jsonObject["PackagingID"].ToString(), true);
-          if (PackagingDefinition == null && (DebugLogs.All || DebugLogs.Storage))
-            MelonLogger.Warning($"StorageConfiguration.Load: Failed to load PackagingDefinition for ID {jsonObject["PackagingID"]} for GUID: {Storage.GUID}");
+          string itemInstanceJson = jsonObject["StorageItem"].ToString();
+          ItemInstance itemInstance = ItemDeserializer.LoadItem(itemInstanceJson);
+          if (itemInstance != null)
+          {
+            StorageItem.SelectedItem = itemInstance.Definition;
+            if (itemInstance is ProductItemInstance productInstance && productInstance.AppliedPackaging != null)
+            {
+              PackagingDefinition = productInstance.AppliedPackaging;
+              if (DebugLogs.All || DebugLogs.Storage)
+                MelonLogger.Msg($"StorageConfiguration.Load: Loaded ProductItemInstance with Item={StorageItem.SelectedItem?.Name}, Packaging={PackagingDefinition?.Name} for GUID: {Storage.GUID}");
+            }
+            else
+            {
+              PackagingDefinition = null;
+              if (DebugLogs.All || DebugLogs.Storage)
+                MelonLogger.Msg($"StorageConfiguration.Load: Loaded ItemInstance with Item={StorageItem.SelectedItem?.Name} for GUID: {Storage.GUID}");
+            }
+          }
+          else
+          {
+            MelonLogger.Warning($"StorageConfiguration.Load: Failed to deserialize StorageItemInstance for GUID: {Storage.GUID}, JSON: {itemInstanceJson}");
+          }
         }
 
         if (DebugLogs.All || DebugLogs.Storage)
@@ -838,7 +848,7 @@ namespace NoLazyWorkers.Handlers
       }
     }
 
-    public void SetModeAndItem(StorageMode mode, ItemDefinition item, ItemDefinition packaging)
+    public void SetModeAndItem(StorageMode mode, ItemDefinition item, PackagingDefinition packaging)
     {
       Mode = mode;
       StorageItem.SelectedItem = mode == StorageMode.Specific ? item : null;
@@ -881,7 +891,6 @@ namespace NoLazyWorkers.Handlers
           MelonLogger.Error("PlaceableStorageEntityPatch.GetSaveString: Instance is null or GUID is empty");
           return;
         }
-
         if (!Config.TryGetValue(__instance.GUID, out var config) || config == null)
         {
           if (DebugLogs.All || DebugLogs.Storage)
@@ -892,15 +901,21 @@ namespace NoLazyWorkers.Handlers
         // Parse the original result (if any) or create a new JObject
         JObject jsonObject = string.IsNullOrEmpty(__result) ? [] : JObject.Parse(__result);
 
-        // Add StorageConfiguration data
+        // Save StorageMode
         jsonObject["StorageMode"] = config.Mode.ToString();
+
+        // Save StorageItem as ItemInstance JSON
         if (config.StorageItem.SelectedItem != null)
-          jsonObject["StorageItem"] = config.StorageItem.SelectedItem.ID;
-        if (config.PackagingDefinition != null)
-          jsonObject["PackagingID"] = config.PackagingDefinition?.ID;
+        {
+          ItemInstance itemInstance = config.StorageItem.SelectedItem.GetDefaultInstance();
+          if (config.PackagingDefinition != null)
+            (itemInstance as ProductItemInstance).SetPackaging(config.PackagingDefinition);
+          jsonObject["StorageItem"] = itemInstance.GetItemData().GetJson(true);
+          if (DebugLogs.All || DebugLogs.Storage)
+            MelonLogger.Msg($"GetSaveStringPostfix: Saved StorageItem for GUID={__instance.GUID}: {jsonObject["StorageItemInstance"]}");
+        }
 
         __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
-
         if (DebugLogs.All || DebugLogs.Storage)
           MelonLogger.Msg($"PlaceableStorageEntityPatch.GetSaveString: Saved JSON for GUID={__instance.GUID}: {__result}");
       }
@@ -1066,6 +1081,8 @@ namespace NoLazyWorkers.Handlers
         try
         {
           configuration.Load(data);
+          if (WorldspaceUI != null)
+            ((StorageUIElement)WorldspaceUI).RefreshUI();
           if (DebugLogs.All || DebugLogs.Storage)
             MelonLogger.Msg($"LoadConfigurationWhenReady: Loaded configuration for GUID: {Storage.GUID}");
         }
@@ -1073,6 +1090,7 @@ namespace NoLazyWorkers.Handlers
         {
           MelonLogger.Error($"LoadConfigurationWhenReady: Failed to load configuration for GUID: {Storage.GUID}, error: {e.Message}");
         }
+        PendingConfigData.Remove(Storage.GUID);
       }
     }
 
@@ -1221,9 +1239,12 @@ namespace NoLazyWorkers.Handlers
         Icon = iconImg;
       else if (DebugLogs.All || DebugLogs.Storage)
         MelonLogger.Warning($"StorageUIElement.Initialize: No Icon Image found for GUID: {proxy.Storage.GUID}");
-      proxy.configuration.Mode = StorageMode.None;
-      Icon.sprite = GetCrossSprite();
-      Icon.color = Color.red;
+      if (proxy.configuration.Mode == default)
+      {
+        proxy.configuration.Mode = StorageMode.None;
+        Icon.sprite = GetCrossSprite();
+        Icon.color = Color.red;
+      }
       if (DebugLogs.All || DebugLogs.Storage)
         MelonLogger.Warning($"StorageUIElement.Initialize: Sprite: {Icon.sprite?.name}");
       Proxy = proxy;
@@ -1368,114 +1389,4 @@ namespace NoLazyWorkers.Handlers
       return true;
     }
   }
-
-  /* [HarmonyPatch(typeof(ConfigurationReplicator))]
-  public class ConfigurationReplicatorPatch
-  {
-    [HarmonyPrefix]
-    [HarmonyPatch("RpcWriter___Server_SendItemField_2801973956")] // full override
-    static bool RpcWriter___Server_SendItemField_2801973956Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
-    {
-      try
-      {
-        // Log method invocation
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix RpcWriter___Server_SendItemField_2801973956: Called with fieldIndex={fieldIndex}, value={(value != null ? value : "null")}");
-
-        // Log ConfigurationReplicator instance
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix ConfigurationReplicator: instance={(object)__instance != null}, name={__instance?.gameObject?.name ?? "null"}");
-
-        // Log NetworkObject
-        var networkObject = __instance.NetworkObject;
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix NetworkObject: exists on __instance={(object)networkObject != null}, IsSpawned={networkObject?.IsSpawned ?? false}, ObjectId={networkObject?.ObjectId ?? -1}");
-
-        var networkObjectObj = __instance.gameObject.GetComponent<NetworkObject>();
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix networkObjectObj: exists on gameobject={(object)networkObjectObj != null}, IsSpawned={networkObjectObj?.IsSpawned ?? false}, ObjectId={networkObjectObj?.ObjectId ?? -1}");
-
-        // Log NetworkBehaviour state
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix IsClientInitialized={__instance?.IsClientInitialized ?? false}");
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix IsServerInitialized ={__instance?.IsServerInitialized ?? false}");
-
-        // Log NetworkManager
-        var networkManager = __instance?.NetworkManager;
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix NetworkManager: exists={(object)networkManager != null}");
-        if (networkManager == null)
-        {
-          var instanceFinderNetworkManager = InstanceFinder.NetworkManager;
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix InstanceFinder.NetworkManager: exists={(object)instanceFinderNetworkManager != null}");
-        }
-
-        // Log StorageConfigurableProxy context (if applicable)
-        var proxy = __instance?.gameObject?.GetComponent<StorageConfigurableProxy>();
-        if (proxy != null)
-        {
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix StorageConfigurableProxy: GUID={proxy.Storage?.GUID ?? Guid.Empty}, ConfigReplicator={(object)proxy.configReplicator != null}, Configuration={(object)proxy.configuration != null}");
-        }
-
-        // Log stack trace for context
-        MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix StackTrace: {Environment.StackTrace}");
-        // Proceed to original method
-        if (!__instance.IsClientInitialized)
-        {
-
-          if ((object)networkManager == null)
-          {
-            networkManager = InstanceFinder.NetworkManager;
-          }
-
-          if ((object)networkManager != null)
-          {
-            networkManager.LogWarning("Cannot complete action because client is not active. This may also occur if the object is not yet initialized, has deinitialized, or if it does not contain a NetworkObject component.");
-          }
-          else
-          {
-            Debug.LogWarning("Cannot complete action because client is not active. This may also occur if the object is not yet initialized, has deinitialized, or if it does not contain a NetworkObject component.");
-          }
-        }
-        else
-        {
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix channel {Channel.Reliable}");
-          Channel channel = Channel.Reliable;
-          PooledWriter writer = WriterPool.GetWriter();
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix writer {writer} then fieldIndex {fieldIndex}");
-          writer.WriteInt32(fieldIndex);
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix WriteInt32 then WriteString {value}");
-          writer.WriteString(value);
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix WriteString then SendServerRpc {writer} | {channel} | {DataOrderType.Default}");
-          __instance.SendServerRpc(0u, writer, channel, DataOrderType.Default);
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix SendServerRpc");
-          writer.Store();
-          MelonLogger.Msg($"RpcWriter___Server_SendItemField_2801973956Prefix Store");
-        }
-        return false;
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"RpcWriter___Server_SendItemField_2801973956Prefix Harmony Prefix for RpcWriter___Server_SendItemField_2801973956 failed: {e.Message}\nStackTrace: {e.StackTrace}");
-        return true; // Let original method run to catch the actual exception
-      }
-    }
-  } */
-  /* 
-    [HarmonyPatch(typeof(NetworkBehaviour))]
-    public class NetworkBehaviourPatch
-    {
-      [HarmonyPrefix]
-      [HarmonyPatch("SendServerRpc")] // full override
-      static bool SendServerRpcPrefix(NetworkBehaviour __instance, uint hash, PooledWriter methodWriter, Channel channel, DataOrderType orderType)
-      {
-        MelonLogger.Msg($"SendServerRpcPrefix IsSpawnedWithWarning: {__instance.IsSpawnedWithWarning()}");
-        if (__instance.IsSpawnedWithWarning())
-        {
-          MelonLogger.Msg($"SendServerRpcPrefix __instance._transportManagerCache: {__instance._transportManagerCache} .CheckSetReliableChannel({methodWriter.Length + 10}, ref {channel})");
-          __instance._transportManagerCache.CheckSetReliableChannel(methodWriter.Length + 10, ref channel);
-          MelonLogger.Msg($"SendServerRpcPrefix CreateRpc");
-          PooledWriter pooledWriter = __instance.CreateRpc(hash, methodWriter, PacketId.ServerRpc, channel);
-          MelonLogger.Msg($"SendServerRpcPrefix SendToServer");
-          __instance._networkObjectCache.NetworkManager.TransportManager.SendToServer((byte)channel, pooledWriter.GetArraySegment(), splitLargeMessages: true, orderType);
-          MelonLogger.Msg($"SendServerRpcPrefix StoreLength");
-          pooledWriter.StoreLength();
-        }
-        return false;
-      }
-    } */
 }

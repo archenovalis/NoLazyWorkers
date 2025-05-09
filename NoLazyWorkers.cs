@@ -34,7 +34,7 @@ namespace NoLazyWorkers
     public static bool Core = false;
     public static bool Settings = false;
     public static bool Pot = false;
-    public static bool MixingStation = false;
+    public static bool MixingStation = true;
     public static bool Storage = true;
     public static bool Chemist = true;
     public static bool Botanist = false;
