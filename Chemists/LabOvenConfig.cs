@@ -7,27 +7,27 @@ using static NoLazyWorkers.Chemists.ChemistExtensions;
 
 namespace NoLazyWorkers.Chemists
 {
-  public static class ChemistryStationExtensions
+  public static class LabOvenExtensions
   {
-    public class ChemistryStationAdapter : IStationAdapter
+    public class LabOvenAdapter : IStationAdapter
     {
-      private readonly ChemistryStation _station;
+      private readonly LabOven _station;
 
-      public ChemistryStationAdapter(ChemistryStation station)
+      public LabOvenAdapter(LabOven station)
       {
         _station = station;
       }
 
       public string Name => _station.Name;
-      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      Vector3 IStationAdapter.GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
       public bool IsInUse => _station.isOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
-      public bool HasActiveOperation => _station.CurrentCookOperation != null;
+      public bool HasActiveOperation => _station.CurrentOperation != null;
 
       Guid IStationAdapter.GUID => _station.GUID;
 
-      public ItemSlot InsertSlot => _station.IngredientSlots?[0]; //TODO: use filter
+      public ItemSlot InsertSlot => null;
 
-      public List<ItemSlot> ProductSlots => [_station.IngredientSlots[1]]; //TODO: use filter
+      public List<ItemSlot> ProductSlots => [_station.IngredientSlot];
 
       ItemSlot IStationAdapter.OutputSlot => _station.OutputSlot;
 
@@ -37,25 +37,17 @@ namespace NoLazyWorkers.Chemists
 
       public int MaxProductQuantity => throw new NotImplementedException();
 
-      public int GetInputQuantity() => _station.IngredientSlots?.Sum(slot => slot?.Quantity ?? 0) ?? 0;
+      public int GetInputQuantity() => _station.IngredientSlot?.Quantity ?? 0;
       public ItemField GetInputItemForProduct()
       {
-        // ChemistryStation uses IngredientSlots; return first valid item
-        var item = _station.IngredientSlots?.FirstOrDefault(slot => slot?.ItemInstance != null)?.ItemInstance?.Definition;
-        return item != null ? new ItemField(_station.stationConfiguration) { SelectedItem = item } : null;
+        var item = _station.IngredientSlot?.ItemInstance?.Definition;
+        return item != null ? new ItemField(_station.ovenConfiguration) { SelectedItem = item } : null;
       }
-
-      Vector3 IStationAdapter.GetAccessPoint()
-      {
-        throw new NotImplementedException();
-      }
-
       public void StartOperation(ScheduleOne.NPCs.Behaviour.Behaviour behaviour)
       {
-
-        if (behaviour is StartChemistryStationBehaviour mixingBehaviour)
+        if (behaviour is StartLabOvenBehaviour labOvenBehaviour)
         {
-          mixingBehaviour.StartCook();
+          labOvenBehaviour.StartCook();
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}", isStation: true);
         }

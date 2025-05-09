@@ -1,0 +1,382 @@
+using HarmonyLib;
+using MelonLoader;
+using ScheduleOne.Employees;
+using ScheduleOne.ItemFramework;
+using ScheduleOne.Management;
+using ScheduleOne.ObjectScripts;
+using Registry = ScheduleOne.Registry;
+
+using static NoLazyWorkers.Handlers.StorageUtilities;
+using FishNet;
+using static NoLazyWorkers.Chemists.ChemistBehaviour;
+using ScheduleOne.NPCs.Behaviour;
+using System.Collections;
+using UnityEngine;
+using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+
+namespace NoLazyWorkers.Chemists
+{
+  public class CauldronBehaviour : ChemistBehaviour
+  {
+    public override void PrepareToFetchItems(Behaviour behaviour, StateData state)
+    {
+      Chemist chemist = (Chemist)behaviour.Npc;
+      if (!(behaviour is StartCauldronBehaviour cauldronBehaviour))
+      {
+        MelonLogger.Warning($"CauldronBehaviour.PrepareToFetchItems: Behaviour is not StartCauldronBehaviour for {chemist.fullName}");
+        Disable(behaviour);
+        return;
+      }
+
+      Cauldron cauldron = cauldronBehaviour.Station;
+      if (cauldron == null)
+      {
+        MelonLogger.Warning($"CauldronBehaviour.PrepareToFetchItems: Cauldron is null for {chemist.fullName}");
+        Disable(behaviour);
+        return;
+      }
+
+      int gasolineNeeded = cauldron.LiquidSlot.Quantity < 1 ? 1 : 0;
+      int gasolineInInventory = chemist.Inventory._GetItemAmount("gasoline");
+      state.IsFetchingPrimary = gasolineNeeded > gasolineInInventory;
+      state.QuantityNeeded = gasolineNeeded - gasolineInInventory;
+      state.QuantityWanted = state.QuantityNeeded; // For cauldron, needed and wanted are the same
+
+      int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
+      int cocaLeafInInventory = chemist.Inventory._GetItemAmount("cocaleaf");
+      state.IsFetchingSecondary = cocaLeafNeeded > cocaLeafInInventory;
+      if (state.IsFetchingSecondary && !state.IsFetchingPrimary)
+      {
+        state.QuantityNeeded = cocaLeafNeeded - cocaLeafInInventory;
+        state.QuantityWanted = state.QuantityNeeded;
+      }
+
+      if (DebugLogs.All || DebugLogs.Chemist)
+        MelonLogger.Msg($"CauldronBehaviour.PrepareToFetchItems: gasolineNeeded={gasolineNeeded}, gasolineInInventory={gasolineInInventory}, cocaLeafNeeded={cocaLeafNeeded}, cocaLeafInInventory={cocaLeafInInventory}, fetchPrimary={state.IsFetchingPrimary}, fetchSecondary={state.IsFetchingSecondary}");
+
+      if (!state.IsFetchingPrimary && !state.IsFetchingSecondary)
+      {
+        HandleInventorySufficient(behaviour, state, 0);
+        return;
+      }
+
+      state.TargetItem = state.IsFetchingPrimary ? Registry.Instance._GetItem("gasoline").GetDefaultInstance() : Registry.Instance._GetItem("cocaleaf").GetDefaultInstance();
+      if (state.TargetItem == null)
+      {
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Warning($"CauldronBehaviour.PrepareToFetchItems: Target item not found for {chemist.fullName}, type={behaviour.GetType().Name}");
+        Disable(behaviour);
+        return;
+      }
+
+      var (shelf, shelfQty) = FindShelfWithItem(chemist, state.TargetItem, state.QuantityNeeded);
+      if (shelf == null)
+      {
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Warning($"CauldronBehaviour.PrepareToFetchItems: No shelf found for {state.TargetItem.ID} for {chemist.fullName}");
+        Disable(behaviour);
+        return;
+      }
+
+      ConfigurationExtensions.NPCSupply[chemist.GUID] = new ObjectField(null) { SelectedObject = shelf };
+      state.LastSupply = shelf;
+
+      if (IsAtSupplies(behaviour))
+      {
+        state.CurrentState = EState.GrabbingSupplies;
+        GrabItem(behaviour, state);
+      }
+      else
+      {
+        state.CurrentState = EState.WalkingToSupplies;
+        WalkToSupplies(behaviour, state);
+      }
+    }
+
+    protected override IEnumerator GrabRoutine(Behaviour behaviour, StateData state)
+    {
+      Chemist chemist = (Chemist)behaviour.Npc;
+      yield return new WaitForSeconds(0.2f);
+      try
+      {
+        if (chemist.Avatar?.Anim != null)
+        {
+          chemist.Avatar.Anim.ResetTrigger("GrabItem");
+          chemist.Avatar.Anim.SetTrigger("GrabItem");
+          if (DebugLogs.All || DebugLogs.Chemist)
+            MelonLogger.Msg($"CauldronBehaviour.GrabRoutine: Triggered GrabItem animation for {chemist?.fullName}, type={behaviour.GetType().Name}");
+        }
+        else
+        {
+          if (DebugLogs.All || DebugLogs.Chemist)
+            MelonLogger.Warning($"CauldronBehaviour.GrabRoutine: Animator missing for {chemist?.fullName}, skipping animation, type={behaviour.GetType().Name}");
+        }
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"CauldronBehaviour.GrabRoutine: Failed for {chemist?.fullName}, type={behaviour.GetType().Name}, error: {e}");
+        Disable(behaviour);
+      }
+      yield return new WaitForSeconds(0.2f);
+
+      state.GrabRoutine = null;
+
+      if (state.IsFetchingPrimary)
+        state.IsFetchingPrimary = false;
+      else if (state.IsFetchingSecondary)
+        state.IsFetchingSecondary = false;
+
+      if (state.IsFetchingPrimary || state.IsFetchingSecondary)
+      {
+        PrepareToFetchItems(behaviour, state);
+        yield break;
+      }
+
+      state.CurrentState = EState.WalkingToStation;
+      behaviour.SetDestination(GetStationAccessPoint(behaviour), true);
+      if (DebugLogs.All || DebugLogs.Chemist)
+        MelonLogger.Msg($"CauldronBehaviour.GrabRoutine: Grab complete, walking to station for {chemist?.fullName}, type={behaviour.GetType().Name}");
+    }
+
+    public override int InsertItemsFromInventory(Behaviour behaviour, StateData state)
+    {
+      Chemist chemist = (Chemist)behaviour.Npc;
+      if (!(behaviour is StartCauldronBehaviour cauldronBehaviour))
+      {
+        MelonLogger.Warning($"CauldronBehaviour.InsertItemsFromInventory: Behaviour is not StartCauldronBehaviour for {chemist.fullName}");
+        return 0;
+      }
+
+      Cauldron cauldron = cauldronBehaviour.Station;
+      int inserted = 0;
+
+      if (cauldron.LiquidSlot.Quantity < 1)
+      {
+        int gasolineInInventory = chemist.Inventory._GetItemAmount("gasoline");
+        if (gasolineInInventory >= 1)
+        {
+          ItemInstance gasoline = Registry.Instance._GetItem("gasoline").GetDefaultInstance(1);
+          cauldron.LiquidSlot.InsertItem(gasoline.GetCopy(1));
+          RemoveItem(chemist, 1, state, gasoline.ID);
+          inserted += 1;
+          if (DebugLogs.All || DebugLogs.Chemist)
+            MelonLogger.Msg($"CauldronBehaviour.InsertItemsFromInventory: Inserted 1 gasoline into LiquidSlot for {chemist?.fullName}");
+        }
+        else
+        {
+          if (DebugLogs.All || DebugLogs.Chemist)
+            MelonLogger.Warning($"CauldronBehaviour.InsertItemsFromInventory: Insufficient gasoline in inventory for {chemist?.fullName}");
+          return 0;
+        }
+      }
+
+      int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
+      int cocaLeafInInventory = chemist.Inventory._GetItemAmount("cocaleaf");
+      if (cocaLeafInInventory >= cocaLeafNeeded)
+      {
+        ItemInstance cocaLeaf = Registry.Instance._GetItem("cocaleaf").GetDefaultInstance(cocaLeafNeeded);
+        foreach (var slot in cauldron.IngredientSlots)
+        {
+          int space = slot.GetCapacityForItem(cocaLeaf) - slot.Quantity;
+          if (space > 0)
+          {
+            int amountToInsert = Mathf.Min(space, cocaLeafNeeded);
+            slot.InsertItem(cocaLeaf.GetCopy(amountToInsert));
+            cocaLeafNeeded -= amountToInsert;
+            inserted += amountToInsert;
+            if (DebugLogs.All || DebugLogs.Chemist)
+              MelonLogger.Msg($"CauldronBehaviour.InsertItemsFromInventory: Inserted {amountToInsert} coca leaves into IngredientSlot for {chemist?.fullName}");
+          }
+          if (cocaLeafNeeded <= 0)
+            break;
+        }
+        RemoveItem(chemist, Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity), state, "cocaleaf");
+      }
+      else
+      {
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Warning($"CauldronBehaviour.InsertItemsFromInventory: Insufficient coca leaves in inventory for {chemist?.fullName}");
+        return 0;
+      }
+
+      return inserted;
+    }
+
+    protected override ITransitEntity GetStation(Behaviour behaviour)
+    {
+      return (behaviour as StartCauldronBehaviour)?.Station;
+    }
+  }
+
+  [HarmonyPatch(typeof(Chemist))]
+  public class CauldronChemistPatch
+  {
+    private static readonly CauldronBehaviour cauldronBehaviour = new CauldronBehaviour();
+
+    [HarmonyPatch("GetCauldronsReadyToStart")]
+    [HarmonyPrefix]
+    static bool GetCauldronsReadyToStartPrefix(Chemist __instance, ref List<Cauldron> __result)
+    {
+      try
+      {
+        List<Cauldron> list = [];
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToStart: Checking cauldrons for {__instance?.fullName ?? "null"}, total cauldrons={__instance.configuration.Cauldrons.Count}");
+
+        foreach (Cauldron cauldron in __instance.configuration.Cauldrons)
+        {
+          if (!((IUsable)cauldron).IsInUse && cauldron.RemainingCookTime <= 0 && cauldron.GetState() == Cauldron.EState.Ready)
+          {
+            list.Add(cauldron);
+            if (DebugLogs.All || DebugLogs.Chemist)
+              MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToStart: Cauldron {cauldron.GUID} is ready to start (state=Ready)");
+            continue;
+          }
+
+          int gasolineNeeded = cauldron.LiquidSlot.Quantity < 1 ? 1 : 0;
+          int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
+          if (CanSourceIngredients(__instance, gasolineNeeded, cocaLeafNeeded))
+          {
+            list.Add(cauldron);
+            if (DebugLogs.All || DebugLogs.Chemist)
+              MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToStart: Cauldron {cauldron.GUID} can be restocked, gasolineNeeded={gasolineNeeded}, cocaLeafNeeded={cocaLeafNeeded}");
+          }
+        }
+
+        __result = list;
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToStart: Found {list.Count} cauldrons for {__instance?.fullName ?? "null"}");
+        return false;
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"ChemistPatch.GetCauldronsReadyToStart: Failed for chemist: {__instance?.fullName ?? "null"}, error: {e}");
+        __result = [];
+        return false;
+      }
+    }
+
+    [HarmonyPatch("StartCauldron")]
+    [HarmonyPrefix]
+    static bool StartCauldronPrefix(Chemist __instance, Cauldron cauldron)
+    {
+      if (!InstanceFinder.IsServer)
+        return false;
+
+      try
+      {
+        if (__instance == null || cauldron == null)
+        {
+          MelonLogger.Warning($"ChemistPatch.StartCauldron: Chemist or cauldron is null");
+          return false;
+        }
+
+        var behaviour = __instance.StartCauldronBehaviour;
+        if (behaviour == null)
+        {
+          MelonLogger.Warning($"ChemistPatch.StartCauldron: StartCauldronBehaviour is null for {__instance.fullName}");
+          return false;
+        }
+
+        if (!ChemistBehaviour.states.TryGetValue(behaviour, out var state))
+        {
+          state = new ChemistBehaviour.StateData { CurrentState = ChemistBehaviour.EState.Idle };
+          ChemistBehaviour.states[behaviour] = state;
+        }
+
+        if (state.CurrentState != ChemistBehaviour.EState.Idle)
+          return false;
+
+        int gasolineNeeded = cauldron.LiquidSlot.Quantity < 1 ? 1 : 0;
+        int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
+
+        // Initialize state for fetching
+        state.TargetItem = gasolineNeeded > 0 ? Registry.Instance._GetItem("gasoline").GetDefaultInstance() :
+                           cocaLeafNeeded > 0 ? Registry.Instance._GetItem("cocaleaf").GetDefaultInstance() : null;
+        state.QuantityNeeded = gasolineNeeded > 0 ? gasolineNeeded : cocaLeafNeeded;
+        state.QuantityWanted = state.QuantityNeeded; // For cauldron, needed and wanted are the same
+        state.IsFetchingPrimary = gasolineNeeded > 0;
+        state.IsFetchingSecondary = !state.IsFetchingPrimary && cocaLeafNeeded > 0;
+
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Msg($"ChemistPatch.StartCauldron: Initializing for {__instance.fullName}, cauldron={cauldron.GUID}, gasolineNeeded={gasolineNeeded}, cocaLeafNeeded={cocaLeafNeeded}, targetItem={state.TargetItem?.ID ?? "null"}, needed={state.QuantityNeeded}, wanted={state.QuantityWanted}, fetchPrimary={state.IsFetchingPrimary}, fetchSecondary={state.IsFetchingSecondary}");
+
+        if (state.TargetItem == null)
+        {
+          // Cauldron is ready to cook (no items needed)
+          int inserted = cauldronBehaviour.InsertItemsFromInventory(behaviour, state);
+          if (inserted > 0 || (gasolineNeeded == 0 && cocaLeafNeeded == 0))
+          {
+            state.CurrentState = ChemistBehaviour.EState.StartingOperation;
+            state.CookPending = true;
+            behaviour.StartWork();
+            if (DebugLogs.All || DebugLogs.Chemist)
+              MelonLogger.Msg($"ChemistPatch.StartCauldron: Starting cook for {__instance.fullName}, cauldron={cauldron.GUID}, inserted={inserted}");
+          }
+          else
+          {
+            MelonLogger.Warning($"ChemistPatch.StartCauldron: No items inserted and ingredients missing for {__instance.fullName}, cauldron={cauldron.GUID}");
+            cauldronBehaviour.Disable(behaviour);
+          }
+          return false;
+        }
+
+        cauldronBehaviour.PrepareToFetchItems(behaviour, state);
+        return false;
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"ChemistPatch.StartCauldron: Failed for chemist: {__instance?.fullName ?? "null"}, cauldron: {cauldron?.GUID}, error: {e}");
+        cauldronBehaviour.Disable(__instance.StartCauldronBehaviour);
+        return false;
+      }
+    }
+
+    [HarmonyPatch("GetCauldronsReadyToMove")]
+    [HarmonyPrefix]
+    static bool GetCauldronsReadyToMovePrefix(Chemist __instance, ref List<Cauldron> __result)
+    {
+      try
+      {
+        List<Cauldron> list = [];
+        foreach (Cauldron cauldron in __instance.configuration.Cauldrons)
+        {
+          ItemSlot outputSlot = cauldron.OutputSlot;
+          if (outputSlot.Quantity > 0 && FindShelfForDelivery(__instance, outputSlot.ItemInstance) != null)
+          {
+            list.Add(cauldron);
+            if (DebugLogs.All || DebugLogs.Chemist)
+              MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToMove: Cauldron {cauldron.GUID} has output {outputSlot.ItemInstance.ID} with quantity {outputSlot.Quantity}");
+          }
+        }
+
+        __result = list;
+        if (DebugLogs.All || DebugLogs.Chemist)
+          MelonLogger.Msg($"ChemistPatch.GetCauldronsReadyToMove: Found {list.Count} cauldrons for {__instance?.fullName ?? "null"}");
+        return false;
+      }
+      catch (Exception e)
+      {
+        MelonLogger.Error($"ChemistPatch.GetCauldronsReadyToMove: Failed for chemist: {__instance?.fullName ?? "null"}, error: {e}");
+        __result = [];
+        return false;
+      }
+    }
+
+    private static bool CanSourceIngredients(Chemist chemist, int gasolineNeeded, int cocaLeafNeeded)
+    {
+      int gasolineInInventory = chemist.Inventory._GetItemAmount("gasoline");
+      int cocaLeafInInventory = chemist.Inventory._GetItemAmount("cocaleaf");
+      var (gasShelf, gasShelfQty) = FindShelfWithItem(chemist, Registry.Instance._GetItem("gasoline").GetDefaultInstance(), gasolineNeeded - gasolineInInventory);
+      var (cocaShelf, cocaShelfQty) = FindShelfWithItem(chemist, Registry.Instance._GetItem("cocaleaf").GetDefaultInstance(), cocaLeafNeeded - cocaLeafInInventory);
+
+      bool canSourceGasoline = gasolineNeeded <= gasolineInInventory || (gasShelf != null && gasShelfQty >= gasolineNeeded - gasolineInInventory);
+      bool canSourceCocaLeaf = cocaLeafNeeded <= cocaLeafInInventory || (cocaShelf != null && cocaShelfQty >= cocaLeafNeeded - cocaLeafInInventory);
+
+      if (DebugLogs.All || DebugLogs.Chemist)
+        MelonLogger.Msg($"ChemistPatch.CanSourceIngredients: gasolineNeeded={gasolineNeeded}, gasolineInInventory={gasolineInInventory}, gasShelf={(gasShelf != null ? gasShelf.GUID : "null")}, gasShelfQty={gasShelfQty}, cocaLeafNeeded={cocaLeafNeeded}, cocaLeafInInventory={cocaLeafInInventory}, cocaShelf={(cocaShelf != null ? cocaShelf.GUID : "null")}, cocaShelfQty={cocaShelfQty}, canSourceGasoline={canSourceGasoline}, canSourceCocaLeaf={canSourceCocaLeaf}");
+
+      return canSourceGasoline && canSourceCocaLeaf;
+    }
+  }
+}

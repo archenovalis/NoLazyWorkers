@@ -7,7 +7,6 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.Management.SetterScreens;
 using ScheduleOne.Management.UI;
-using ScheduleOne.NPCs;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Loaders;
@@ -30,16 +29,36 @@ namespace NoLazyWorkers
 {
   public static class DebugLogs
   {
+    public static int level = 4;
+    public static bool Production = false;
     public static bool All = false; // enables all but stacktrace logs
     public static bool Core = false;
     public static bool Settings = false;
     public static bool Pot = false;
     public static bool MixingStation = true;
-    public static bool Storage = true;
+    public static bool Storage = false;
     public static bool Chemist = true;
     public static bool Botanist = false;
     public static bool Packager = false;
     public static bool Stacktrace = false;
+  }
+
+  public static class DebugLogger
+  {
+    public enum LogLevel { None, Error, Warning, Info, Verbose }
+    public static LogLevel CurrentLevel { get; set; } = (LogLevel)DebugLogs.level;
+
+    public static void Log(LogLevel level, string message, bool isChemist = false, bool isStation = false, bool isStorage = false)
+    {
+      if (DebugLogs.Production || level > CurrentLevel || (!DebugLogs.All && !isChemist && !isStation && !isStorage))
+        return;
+      switch (level)
+      {
+        case LogLevel.Error: MelonLogger.Error(message); break;
+        case LogLevel.Warning: MelonLogger.Warning(message); break;
+        default: MelonLogger.Msg(message); break;
+      }
+    }
   }
 
   public static class BuildInfo
@@ -241,92 +260,6 @@ namespace NoLazyWorkers
           yield return current;
         }
       }
-    }
-
-    public static int GetAmountInInventoryAndSupply(NPC npc, ItemInstance item)
-    {
-      if (npc == null || item == null)
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInInventoryAndSupply: NPC or item is null");
-        return 0;
-      }
-
-      int inventoryCount = npc.Inventory?._GetItemAmount(item.ID) ?? 0;
-      int supplyCount = GetAmountInSupply(npc, item);
-      return inventoryCount + supplyCount;
-    }
-
-    public static int GetAmountInSupply(NPC npc, ItemInstance item)
-    {
-      if (npc == null || item == null || string.IsNullOrEmpty(item.ID))
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInSupplies: NPC={npc}, item={item}, or item.ID={item?.ID} is null for {npc?.fullName ?? "null"}");
-        return 0;
-      }
-
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(npc.GUID, out var supply) || supply?.SelectedObject == null)
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInSupplies: Supply or SelectedObject is null for {npc.fullName}");
-        return 0;
-      }
-
-      if (supply.SelectedObject is not ITransitEntity supplyT)
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInSupplies: Supply is not ITransitEntity for {npc.fullName}");
-        return 0;
-      }
-
-      if (!npc.Movement.CanGetTo(supplyT, 1f))
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInSupplies: Cannot reach supply for {npc.fullName}");
-        return 0;
-      }
-
-      var slots = (supplyT.OutputSlots ?? [])
-          .Concat(supplyT.InputSlots ?? [])
-          .Where(s => s?.ItemInstance != null && s.Quantity > 0)
-          .Distinct();
-
-      if (!slots.Any())
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Warning($"GetAmountInSupplies: No valid slots in supply {supplyT?.Name} for {npc.fullName}");
-        return 0;
-      }
-
-      int quantity = 0;
-      string itemIdLower = item.ID.ToLower();
-      foreach (ItemSlot slot in slots)
-      {
-        if (slot.ItemInstance.ID.ToLower() == itemIdLower)
-        {
-          quantity += slot.Quantity;
-          if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-            MelonLogger.Msg($"GetAmountInSupplies: Found {itemIdLower} with quantity={slot.Quantity} in slot {slot.GetHashCode()} for {npc.fullName}");
-        }
-        else
-        {
-          if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-            MelonLogger.Msg($"GetAmountInSupplies: Slot {slot.GetHashCode()} contains {slot.ItemInstance.ID} (quantity={slot.Quantity}), not {itemIdLower} for {npc.fullName}");
-        }
-      }
-
-      if (quantity == 0)
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"GetAmountInSupplies: No items of {item.ID} found in supply {supplyT?.Name} for {npc.fullName}");
-      }
-      else
-      {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"GetAmountInSupplies: Total quantity of {item.ID} is {quantity} in supply {supplyT?.Name} for {npc.fullName}");
-      }
-      return quantity;
     }
 
     public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
@@ -767,14 +700,14 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
-      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+      if (DebugLogs.Stacktrace && (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist))
         MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
       bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+        if (DebugLogs.Stacktrace && (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist))
           MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
         /* return false; */
       }

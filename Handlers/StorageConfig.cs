@@ -3,13 +3,13 @@ using FishNet.Object;
 using HarmonyLib;
 using MelonLoader;
 using Newtonsoft.Json.Linq;
+using ScheduleOne;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.Management.UI;
 using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Persistence.Loaders;
 using ScheduleOne.Property;
 using Grid = ScheduleOne.Tiles.Grid;
@@ -22,14 +22,18 @@ using UnityEngine.UI;
 using UnityEngine.Events;
 using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
-using ScheduleOne;
-using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.Product;
+using static NoLazyWorkers.NoLazyUtilities;
+using static NoLazyWorkers.ConfigurationExtensions;
 using static NoLazyWorkers.Handlers.StorageExtensions;
+using static NoLazyWorkers.Handlers.StorageUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
+using MelonLoader.TinyJSON;
+using UnityEngine.EventSystems;
+using ScheduleOne.Tools;
 
 namespace NoLazyWorkers.Handlers
 {
@@ -41,6 +45,8 @@ namespace NoLazyWorkers.Handlers
     public static Dictionary<Guid, StorageConfiguration> Config = [];
     public static Dictionary<Guid, PlaceableStorageEntity> Storage = [];
     public static Dictionary<Guid, JObject> PendingConfigData = [];
+    public static List<PlaceableStorageEntity> AnyShelves = [];
+    public static Dictionary<ItemKey, Dictionary<PlaceableStorageEntity, ShelfInfo>> ShelfCache = new();
     public static readonly string[] InstanceIDs = ["smallstoragerack", "mediumstoragerack", "largestoragerack", "safe"];
 
     public enum StorageMode
@@ -110,7 +116,7 @@ namespace NoLazyWorkers.Handlers
       }
     }
 
-    public static IEnumerator WaitForProxyInitialization(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
+    private static IEnumerator WaitForProxyInitialization(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
     {
       int retries = 30;
       float delay = 0.05f;
@@ -125,12 +131,8 @@ namespace NoLazyWorkers.Handlers
             proxy.CreateWorldspaceUI();
             property.AddConfigurable(proxy);
 
-            // Start the delayed check coroutine after successful initialization
             if (DebugLogs.All || DebugLogs.Storage)
-              MelonLogger.Msg($"WaitForProxyInitialization: Starting 10-second delayed check for GUID: {guid}");
-            //bool initialized = false;
-            //CoroutineRunner.Instance.RunCoroutineWithResult<bool>(DelayedInitializationCheck(guid, storage, proxy), success => initialized = success);
-
+              MelonLogger.Msg($"WaitForProxyInitialization: Completed for GUID: {guid}");
             yield return true;
             yield break;
           }
@@ -140,56 +142,6 @@ namespace NoLazyWorkers.Handlers
       MelonLogger.Error($"WaitForProxyInitialization: Failed for GUID: {guid} after {retries} retries");
       yield return false;
     }
-
-    /* private static IEnumerator DelayedInitializationCheck(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
-    {
-      yield return new WaitForSeconds(10f);
-
-      try
-      {
-        bool isProxyValid = proxy != null;
-        bool isConfigurationValid = proxy != null && proxy.configuration != null;
-        bool isParentPropertyValid = storage != null && storage.ParentProperty != null;
-        bool isWorldspaceUIValid = proxy != null && proxy.WorldspaceUI != null;
-        bool isReplicatorValid = proxy != null && proxy.configReplicator != null;
-        bool isNetworkObjectValid = proxy != null && proxy.configReplicator != null && proxy.configReplicator.NetworkObject != null;
-        bool isReplicatorSpawned = proxy != null && proxy.configReplicator != null && proxy.configReplicator.NetworkObject != null && proxy.configReplicator.NetworkObject.IsSpawned;
-        bool isStorageInDictionary = Storage.ContainsKey(guid);
-        bool isConfigInDictionary = Config.ContainsKey(guid);
-
-        MelonLogger.Msg($"DelayedInitializationCheck: Status after 10 seconds for GUID: {guid}");
-        MelonLogger.Msg($"  - Proxy exists: {isProxyValid}");
-        MelonLogger.Msg($"  - Configuration exists: {isConfigurationValid}");
-        MelonLogger.Msg($"  - ParentProperty exists: {isParentPropertyValid}");
-        MelonLogger.Msg($"  - WorldspaceUI exists: {isWorldspaceUIValid}");
-        MelonLogger.Msg($"  - ConfigurationReplicator exists: {isReplicatorValid}");
-        MelonLogger.Msg($"  - NetworkObject exists: {isNetworkObjectValid}");
-        MelonLogger.Msg($"  - ConfigurationReplicator spawned: {isReplicatorSpawned}");
-        MelonLogger.Msg($"  - Storage in dictionary: {isStorageInDictionary}");
-        MelonLogger.Msg($"  - Config in dictionary: {isConfigInDictionary}");
-
-        if (isProxyValid)
-          MelonLogger.Msg($"  - Proxy GameObject active: {proxy.gameObject.activeInHierarchy}, Name: {proxy.gameObject.name}");
-        if (isConfigurationValid)
-          MelonLogger.Msg($"  - Configuration Mode: {proxy.configuration.Mode}, Item: {proxy.configuration.StorageItem?.SelectedItem?.Name ?? "null"}");
-        if (isParentPropertyValid)
-          MelonLogger.Msg($"  - ParentProperty Name: {storage.ParentProperty?.GetType()?.Name ?? "null"}");
-        if (isWorldspaceUIValid)
-          MelonLogger.Msg($"  - WorldspaceUI Type: {proxy.WorldspaceUI?.GetType()?.Name}, Active: {proxy.WorldspaceUI?.gameObject?.activeInHierarchy}");
-        if (isNetworkObjectValid)
-          MelonLogger.Msg($"  - Replicator NetworkObject ID: {proxy.configReplicator?.NetworkObject?.ObjectId}, IsSpawned: {proxy.configReplicator?.NetworkObject?.IsSpawned}");
-
-        if (PendingConfigData.TryGetValue(guid, out var data))
-        {
-          Config[guid]?.Load(data);
-          PendingConfigData.Remove(guid);
-        }
-      }
-      catch (Exception e)
-      {
-        MelonLogger.Error($"DelayedInitializationCheck: Failed for GUID: {guid}, error: {e.Message}\nStackTrace: {e.StackTrace}");
-      }
-    } */
 
     private static void CacheCrossSprite()
     {
@@ -381,186 +333,280 @@ namespace NoLazyWorkers.Handlers
 
   public static class StorageUtilities
   {
-    public static PlaceableStorageEntity FindShelfWithItem(NPC npc, ItemInstance targetItem, int requiredQuantity, bool prioritizeAny = false)
+    public struct ItemKey
+    {
+      public string ItemID { get; private set; }
+      public string PackagingID { get; private set; }
+
+      public ItemKey(ItemInstance item)
+      {
+        ItemID = item?.ID?.ToLower() ?? throw new ArgumentNullException(nameof(item));
+        PackagingID = item is ProductItemInstance prodItem && prodItem.AppliedPackaging != null
+            ? prodItem.AppliedPackaging.ID.ToLower()
+            : null;
+      }
+
+      public ItemKey(string itemId, string packagingId = null)
+      {
+        ItemID = itemId?.ToLower() ?? throw new ArgumentNullException(nameof(itemId));
+        PackagingID = packagingId?.ToLower();
+      }
+
+      public override bool Equals(object obj) =>
+          obj is ItemKey other && ItemID == other.ItemID && PackagingID == other.PackagingID;
+
+      public override int GetHashCode() =>
+          HashCode.Combine(ItemID, PackagingID);
+
+      public override string ToString() =>
+          PackagingID != null ? $"{ItemID} (pkg: {PackagingID})" : ItemID;
+    }
+
+    public struct ShelfInfo
+    {
+      public PlaceableStorageEntity Shelf { get; set; }
+      public int Quantity { get; set; }
+      public bool IsConfigured { get; set; }
+
+      public ShelfInfo(PlaceableStorageEntity shelf, int quantity, bool isConfigured)
+      {
+        Shelf = shelf ?? throw new ArgumentNullException(nameof(shelf));
+        Quantity = quantity;
+        IsConfigured = isConfigured;
+      }
+    }
+
+    public static void UpdateShelfConfiguration(PlaceableStorageEntity shelf, ItemInstance assignedItem)
+    {
+      if (shelf == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"UpdateShelfConfiguration: Shelf is null", isStorage: true);
+        return;
+      }
+
+      if (!Config.TryGetValue(shelf.GUID, out var config))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"UpdateShelfConfiguration: No config for shelf {shelf.GUID}", isStorage: true);
+        return;
+      }
+
+      // Remove shelf from all lists
+      RemoveShelfFromLists(shelf);
+
+      if (config.Mode == StorageMode.Any)
+      {
+        AnyShelves.Add(shelf);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to AnyShelves, count={AnyShelves.Count}",
+            isStorage: true);
+      }
+      else if (config.Mode == StorageMode.Specific && assignedItem != null)
+      {
+        ItemKey key = new ItemKey(assignedItem);
+        if (!ShelfCache.ContainsKey(key))
+          ShelfCache[key] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
+
+        int quantity = GetItemQuantityInShelf(shelf, assignedItem);
+        ShelfCache[key][shelf] = new ShelfInfo(shelf, quantity, true);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {key}, quantity={quantity}, isConfigured=true",
+            isStorage: true);
+      }
+
+      // Update quantities for non-configured shelves
+      UpdateShelfCache(shelf);
+    }
+
+    public static void UpdateShelfCache(PlaceableStorageEntity shelf)
+    {
+      if (shelf == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"UpdateShelfCache: Shelf is null", isStorage: true);
+        return;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"UpdateShelfCache: Updating for shelf {shelf.GUID}", isStorage: true);
+
+      // Update quantities for all items in shelf
+      var slots = (shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>());
+      var itemQuantities = new Dictionary<ItemKey, int>();
+
+      foreach (var slot in slots)
+      {
+        if (slot?.ItemInstance == null || slot.Quantity <= 0)
+          continue;
+
+        ItemKey key = new ItemKey(slot.ItemInstance);
+        itemQuantities[key] = itemQuantities.GetValueOrDefault(key, 0) + slot.Quantity;
+      }
+
+      // Update ShelfCache with current quantities
+      foreach (var kvp in itemQuantities)
+      {
+        ItemKey key = kvp.Key;
+        int quantity = kvp.Value;
+
+        if (!ShelfCache.ContainsKey(key))
+          ShelfCache[key] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
+
+        bool isConfigured = Config.TryGetValue(shelf.GUID, out var config) &&
+                            config.Mode == StorageMode.Specific &&
+                            config.AssignedItem != null &&
+                            new ItemKey(config.AssignedItem).Equals(key);
+
+        ShelfCache[key][shelf] = new ShelfInfo(shelf, quantity, isConfigured);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"UpdateShelfCache: Updated shelf {shelf.GUID} for {key}, quantity={quantity}, isConfigured={isConfigured}",
+            isStorage: true);
+      }
+
+      // Remove shelf from keys where it has no items
+      foreach (var itemCache in ShelfCache.ToList())
+      {
+        if (itemCache.Value.ContainsKey(shelf) && !itemQuantities.ContainsKey(itemCache.Key))
+        {
+          itemCache.Value.Remove(shelf);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"UpdateShelfCache: Removed shelf {shelf.GUID} from {itemCache.Key} (no items)",
+              isStorage: true);
+        }
+        if (itemCache.Value.Count == 0)
+        {
+          ShelfCache.Remove(itemCache.Key);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"UpdateShelfCache: Removed empty key {itemCache.Key}",
+              isStorage: true);
+        }
+      }
+    }
+
+    public static void RemoveShelfFromLists(PlaceableStorageEntity shelf)
+    {
+      if (shelf == null)
+        return;
+
+      AnyShelves.Remove(shelf);
+      foreach (var itemCache in ShelfCache.Values)
+      {
+        itemCache.Remove(shelf);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists",
+          isStorage: true);
+    }
+
+    public static Dictionary<PlaceableStorageEntity, int> FindShelvesWithItem(NPC npc, ItemInstance targetItem, int needed, int wanted = 0)
     {
       if (targetItem == null)
       {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Warning("FindShelfWithItem: Target item is null");
-        return null;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"FindShelvesWithItem: Target item is null for {npc.fullName}",
+            isChemist: true);
+        return new Dictionary<PlaceableStorageEntity, int>();
       }
 
-      // Get all storage entities
-      var shelves = Storage.Values.ToList();
-      if (!shelves.Any())
+      ItemKey key = new ItemKey(targetItem);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"FindShelvesWithItem: Searching for {key}, needed={needed}, wanted={wanted} for {npc.fullName}",
+          isChemist: true);
+
+      var result = new Dictionary<PlaceableStorageEntity, int>();
+      if (ShelfCache.TryGetValue(key, out var shelves))
       {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg("FindShelfWithItem: No shelves available");
-        return null;
-      }
-
-      PlaceableStorageEntity selectedShelf = null;
-      int availableQuantity = 0;
-
-      if (prioritizeAny)  // "any" then item-assigned shelves
-      {
-        // First, check "any" shelves (no assigned item)
-        foreach (var shelf in shelves)
+        foreach (var shelfInfo in shelves.Values)
         {
-          var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-          if (config == null || config.StorageItem?.SelectedItem != null)
-            continue;
-
-          if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-            continue;
-
-          int quantity = GetItemQuantityInShelf(shelf, targetItem);
-          if (quantity >= requiredQuantity)
+          if (shelfInfo.Quantity >= needed)
           {
-            selectedShelf = shelf;
-            availableQuantity = quantity;
-            break;
-          }
-        }
-        if (selectedShelf == null)
-        {
-          foreach (var shelf in shelves)
-          {
-            var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-            if (config == null || config.StorageItem?.SelectedItem == null || config.StorageItem.SelectedItem.ID != targetItem.ID)
-              continue;
-
-            if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-              continue;
-
-            int quantity = GetItemQuantityInShelf(shelf, targetItem);
-            if (quantity >= requiredQuantity)
-            {
-              selectedShelf = shelf;
-              availableQuantity = quantity;
-              break;
-            }
-          }
-        }
-      }
-      else // item-assigned then "any" shelves
-      {
-        foreach (var shelf in shelves)
-        {
-          var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-          if (config == null || config.StorageItem?.SelectedItem == null || config.StorageItem.SelectedItem.ID != targetItem.ID)
-            continue;
-
-          if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-            continue;
-
-          int quantity = GetItemQuantityInShelf(shelf, targetItem);
-          if (quantity >= requiredQuantity)
-          {
-            selectedShelf = shelf;
-            availableQuantity = quantity;
-            break;
-          }
-        }
-        if (selectedShelf == null)
-        {
-          foreach (var shelf in shelves)
-          {
-            var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-            if (config == null || config.StorageItem?.SelectedItem != null)
-              continue;
-
-            if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-              continue;
-
-            int quantity = GetItemQuantityInShelf(shelf, targetItem);
-            if (quantity >= requiredQuantity)
-            {
-              selectedShelf = shelf;
-              availableQuantity = quantity;
-              break;
-            }
+            int assignedQty = wanted > 0 ? Math.Min(shelfInfo.Quantity, wanted) : shelfInfo.Quantity;
+            result[shelfInfo.Shelf] = assignedQty;
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {key}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}",
+                isChemist: true);
           }
         }
       }
 
-      if (selectedShelf != null && (DebugLogs.All || DebugLogs.Storage))
-        MelonLogger.Msg($"FindShelfWithItem: Selected shelf {selectedShelf.GUID} with {availableQuantity}/{requiredQuantity} of {targetItem.ID}");
-
-      return selectedShelf;
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"FindShelvesWithItem: Found {result.Count} shelves for {key}, totalQty={result.Values.Sum()}",
+          isChemist: true);
+      return result;
     }
 
-    // Find a shelf to deliver an item to, prioritizing matching item-assigned shelves, then any shelves
     public static PlaceableStorageEntity FindShelfForDelivery(NPC npc, ItemInstance targetItem)
     {
       if (targetItem == null)
       {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Warning("FindShelfForDelivery: Target item is null");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"FindShelfForDelivery: Target item is null", isStorage: true);
         return null;
       }
 
-      var shelves = Storage.Values.ToList();
-      if (!shelves.Any())
-      {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg("FindShelfForDelivery: No shelves available");
-        return null;
-      }
-
-      PlaceableStorageEntity selectedShelf = null;
+      ItemKey key = new ItemKey(targetItem);
       int quantityToDeliver = targetItem.Quantity;
 
-      // First, check item-assigned shelves
-      foreach (var shelf in shelves)
+      PlaceableStorageEntity selectedShelf = null;
+      if (ShelfCache.TryGetValue(key, out var itemShelves))
       {
-        var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-        if (config == null || config.StorageItem?.SelectedItem == null || config.StorageItem.SelectedItem.ID != targetItem.ID)
-          continue;
-
-        if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-          continue;
-
-        if (shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver))
+        foreach (var shelfInfo in itemShelves.Values)
         {
+          if (!shelfInfo.IsConfigured) continue;
+          if (!shelfInfo.Shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver)) continue;
+          if (!npc.movement.CanGetTo(shelfInfo.Shelf)) continue;
+          selectedShelf = shelfInfo.Shelf;
+          break;
+        }
+      }
+
+      if (selectedShelf == null)
+      {
+        foreach (var shelf in AnyShelves)
+        {
+          if (!shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver)) continue;
+          if (!npc.movement.CanGetTo(shelf)) continue;
           selectedShelf = shelf;
           break;
         }
       }
 
-      // If no matching shelf or full, check "any" shelves
-      if (selectedShelf == null)
+      if (selectedShelf != null)
       {
-        foreach (var shelf in shelves)
-        {
-          var config = Config.TryGetValue(shelf.GUID, out var cfg) ? cfg : null;
-          if (config == null || config.StorageItem?.SelectedItem != null)
-            continue;
-
-          if (!npc.behaviour.Npc.Movement.CanGetTo(shelf, 1f))
-            continue;
-
-          if (shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver))
-          {
-            selectedShelf = shelf;
-            break;
-          }
-        }
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {key}",
+            isStorage: true);
       }
-
-      if (selectedShelf != null && (DebugLogs.All || DebugLogs.Storage))
-        MelonLogger.Msg($"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem.ID}");
-
       return selectedShelf;
     }
-    private static int GetItemQuantityInShelf(PlaceableStorageEntity shelf, ItemInstance item)
+
+    public static int GetItemQuantityInShelf(PlaceableStorageEntity shelf, ItemInstance targetItem)
     {
-      if (shelf?.OutputSlots == null)
+      if (shelf == null || targetItem == null)
         return 0;
 
-      return shelf.OutputSlots
-          .Where(s => s?.ItemInstance != null && s.ItemInstance.ID.ToLower() == item.ID.ToLower())
-          .Sum(s => s.Quantity);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", isStorage: true);
+
+      int qty = 0;
+      foreach (var slot in (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()))
+      {
+        if (slot?.ItemInstance != null && slot.ItemInstance.ID.ToLower() == targetItem.ID.ToLower())
+          qty += slot.Quantity;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", isStorage: true);
+      return qty;
+    }
+
+    public struct ShelfSearchContext
+    {
+      public NPC Npc { get; set; }
+      public ItemInstance TargetItem { get; set; }
+      public int Needed { get; set; }
+      public int Wanted { get; set; }
     }
   }
 
@@ -576,7 +622,7 @@ namespace NoLazyWorkers.Handlers
       OnChanged?.Invoke();
       var worldSpaceUI = (StorageUIElement)config.Proxy.WorldspaceUI;
       worldSpaceUI.RefreshUI();
-      ConfigurationExtensions.InvokeChanged(config);
+      InvokeChanged(config);
     }
 
     public override void Bind(List<EntityConfiguration> configs)
@@ -602,8 +648,7 @@ namespace NoLazyWorkers.Handlers
 
         List<ItemField> itemFieldList = [];
         bool hasNone = false, hasAny = false, hasSpecific = false;
-        ItemDefinition sharedItem = null;
-        ItemDefinition sharedPackaging = null;
+        ItemInstance item = null;
         bool isConsistent = true;
 
         foreach (var config in configs.OfType<StorageConfiguration>())
@@ -620,13 +665,15 @@ namespace NoLazyWorkers.Handlers
           else if (config.Mode == StorageMode.Specific)
           {
             hasSpecific = true;
-            if (sharedItem == null)
+            if (item == null)
             {
-              sharedItem = config.StorageItem.SelectedItem;
-              sharedPackaging = config.PackagingDefinition;
+              item = config.AssignedItem;
             }
-            else if (sharedItem != config.StorageItem.SelectedItem || sharedPackaging != config.PackagingDefinition)
+            else if (item.ID != config.AssignedItem.ID || (item as ProductItemInstance)?.AppliedPackaging?.ID != (config.AssignedItem as ProductItemInstance)?.AppliedPackaging?.ID)
+            {
               isConsistent = false;
+              break;
+            }
           }
         }
         StorageItemUI.Bind(itemFieldList);
@@ -636,7 +683,7 @@ namespace NoLazyWorkers.Handlers
         else if (hasAny && !hasNone && !hasSpecific)
           StorageItemUI.SelectionLabel.text = "Any";
         else if (hasSpecific && !hasNone && !hasAny && isConsistent)
-          StorageItemUI.SelectionLabel.text = sharedPackaging != null ? $"{sharedItem?.Name} ({sharedPackaging.Name})" : sharedItem?.Name ?? "None";
+          StorageItemUI.SelectionLabel.text = item.Name ?? "None"; //TODO verify full name
         else
           StorageItemUI.SelectionLabel.text = "Mixed";
 
@@ -686,6 +733,7 @@ namespace NoLazyWorkers.Handlers
 
       // Build options from inventory
       var itemSlots = Player.Local.Inventory.ToList();
+      //TODO: add the shelf's items too
       Dictionary<string, List<(ItemDefinition product, ItemDefinition packaging)>> productOptions = [];
 
       foreach (var slot in itemSlots)
@@ -722,7 +770,7 @@ namespace NoLazyWorkers.Handlers
 
         if (primaryConfig.Mode == StorageMode.Specific &&
             primaryField.SelectedItem == product &&
-            primaryConfig.PackagingDefinition == packaging)
+            (primaryConfig.AssignedItem as ProductItemInstance)?.AppliedPackaging == packaging)
           selectedOption = opt;
       }
 
@@ -732,7 +780,7 @@ namespace NoLazyWorkers.Handlers
         {
           StorageMode newMode;
           ItemDefinition selectedItem = selected.Item;
-          PackagingDefinition selectedPackaging = (selected is StorageItemOption storageOption ? storageOption.PackagingDefinition : null) as PackagingDefinition;
+          PackagingDefinition selectedPackaging = (selected is StorageItemOption storageOption ? storageOption?.PackagingDefinition : null) as PackagingDefinition;
 
           if (selected.Title == "None")
             newMode = StorageMode.None;
@@ -743,14 +791,21 @@ namespace NoLazyWorkers.Handlers
 
           foreach (var itemField in itemFields)
           {
+            ItemInstance item = null;
             var config = (StorageConfiguration)itemField.ParentConfig;
-            config.SetModeAndItem(newMode, selectedItem, selectedPackaging);
+            if (newMode == StorageMode.Specific)
+            {
+              item = Registry.GetItem(selectedItem.ID).GetDefaultInstance();
+              if (selectedPackaging != null)
+                (item as ProductItemInstance).SetPackaging(selectedPackaging);
+            }
+            config.SetModeAndItem(newMode, item);
           }
 
           StorageItemUI.SelectionLabel.text = newMode == StorageMode.Any ? "Any" :
-                                                       newMode == StorageMode.None ? "None" :
-                                                       selectedPackaging != null ? $"{selectedItem?.Name} ({selectedPackaging.Name})" :
-                                                       selectedItem?.Name ?? "None";
+                                              newMode == StorageMode.None ? "None" :
+                                              selectedPackaging != null ? $"{selectedItem?.Name} ({selectedPackaging?.Name})" :
+                                              selectedItem?.Name ?? "None";
           StorageItemUI.gameObject.SetActive(true);
 
           if (DebugLogs.All || DebugLogs.Storage)
@@ -772,7 +827,7 @@ namespace NoLazyWorkers.Handlers
     public PlaceableStorageEntity Storage { get; private set; }
     public StorageConfigurableProxy Proxy { get; private set; }
     public StorageMode Mode { get; set; }
-    public PackagingDefinition PackagingDefinition { get; set; }
+    public ItemInstance AssignedItem { get; set; }
 
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
@@ -785,16 +840,20 @@ namespace NoLazyWorkers.Handlers
         MelonLogger.Error($"StorageConfiguration: Null parameters - replicator: {replicator == null}, configurable: {configurable == null}, storage: {storage == null}, GUID: {storage?.GUID}");
         throw new ArgumentNullException("StorageConfiguration: One or more parameters are null");
       }
+
       replicator.Configuration = this;
       Proxy = configurable as StorageConfigurableProxy;
       Storage = storage;
+      Storage.StorageEntity.onContentsChanged.AddListener(() => UpdateShelfCache(Storage));
+
       try
       {
         StorageItem = new ItemField(this)
         {
-          CanSelectNone = true,
+          CanSelectNone = false,
           Options = []
         };
+        StorageItem.onItemChanged.AddListener(_ => UpdateShelfConfiguration(Storage, AssignedItem));
         Config[storage.GUID] = this;
         if (DebugLogs.All || DebugLogs.Storage)
           MelonLogger.Msg($"StorageConfiguration: Initialized for GUID: {storage.GUID}");
@@ -810,8 +869,37 @@ namespace NoLazyWorkers.Handlers
     {
       try
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"StorageConfiguration.Load: Loading for GUID={Storage.GUID}, JSON={jsonObject.ToString()}", isStorage: true);
+
         if (jsonObject["StorageMode"] != null)
-          Mode = (StorageMode)Enum.Parse(typeof(StorageMode), jsonObject["StorageMode"].ToString());
+        {
+          var str = jsonObject["StorageMode"].ToString();
+          try
+          {
+            Mode = (StorageMode)Enum.Parse(typeof(StorageMode), str);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"StorageConfiguration.Load: Set Mode={Mode} for GUID={Storage.GUID}", isChemist: true);
+            if (Mode == StorageMode.Any)
+            {
+              AnyShelves.Add(Storage);
+              DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                  $"StorageConfiguration.Load: Added shelf {Storage.GUID} to AnyShelves, count={AnyShelves.Count}", isChemist: true);
+            }
+          }
+          catch (Exception e)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"StorageConfiguration.Load: Invalid StorageMode '{str}' for GUID={Storage.GUID}, error: {e.Message}", isStorage: true);
+            Mode = StorageMode.None;
+          }
+        }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"StorageConfiguration.Load: StorageMode missing for GUID={Storage.GUID}", isStorage: true);
+          Mode = StorageMode.None;
+        }
 
         if (jsonObject["StorageItem"] != null)
         {
@@ -820,45 +908,45 @@ namespace NoLazyWorkers.Handlers
           if (itemInstance != null)
           {
             StorageItem.SelectedItem = itemInstance.Definition;
-            if (itemInstance is ProductItemInstance productInstance && productInstance.AppliedPackaging != null)
-            {
-              PackagingDefinition = productInstance.AppliedPackaging;
-              if (DebugLogs.All || DebugLogs.Storage)
-                MelonLogger.Msg($"StorageConfiguration.Load: Loaded ProductItemInstance with Item={StorageItem.SelectedItem?.Name}, Packaging={PackagingDefinition?.Name} for GUID: {Storage.GUID}");
-            }
-            else
-            {
-              PackagingDefinition = null;
-              if (DebugLogs.All || DebugLogs.Storage)
-                MelonLogger.Msg($"StorageConfiguration.Load: Loaded ItemInstance with Item={StorageItem.SelectedItem?.Name} for GUID: {Storage.GUID}");
-            }
+            AssignedItem = itemInstance;
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"StorageConfiguration.Load: Loaded Item={StorageItem.SelectedItem?.Name}, Packaging={(itemInstance is ProductItemInstance pi ? pi.AppliedPackaging?.Name : "null")} for GUID={Storage.GUID}", isStorage: true);
           }
           else
           {
-            MelonLogger.Warning($"StorageConfiguration.Load: Failed to deserialize StorageItemInstance for GUID: {Storage.GUID}, JSON: {itemInstanceJson}");
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"StorageConfiguration.Load: Failed to deserialize StorageItem for GUID={Storage.GUID}, JSON={itemInstanceJson}", isStorage: true);
+            StorageItem.SelectedItem = null;
+            AssignedItem = null;
           }
         }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"StorageConfiguration.Load: StorageItem missing for GUID={Storage.GUID}", isStorage: true);
+          StorageItem.SelectedItem = null;
+          AssignedItem = null;
+        }
 
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg($"StorageConfiguration.Load: Loaded Mode={Mode}, Item={StorageItem.SelectedItem?.Name ?? "null"}, Packaging={PackagingDefinition?.Name ?? "null"} for GUID: {Storage.GUID}");
+        UpdateShelfConfiguration(Storage, AssignedItem);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"StorageConfiguration.Load: Completed for GUID={Storage.GUID}, Mode={Mode}, Item={StorageItem.SelectedItem?.Name ?? "null"}, ShelfCache count={ShelfCache.Count}", isStorage: true);
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}\nStackTrace: {e.StackTrace}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}\nStackTrace: {e.StackTrace}", isStorage: true);
       }
     }
 
-    public void SetModeAndItem(StorageMode mode, ItemDefinition item, PackagingDefinition packaging)
+    public void SetModeAndItem(StorageMode mode, ItemInstance item)
     {
       Mode = mode;
-      StorageItem.SelectedItem = mode == StorageMode.Specific ? item : null;
-      PackagingDefinition = mode == StorageMode.Specific ? packaging : null;
-      if (mode == StorageMode.Specific && item != null && packaging != null)
-      {
-        if (!(item is ProductDefinition))
-          MelonLogger.Warning($"SetModeAndItem: Item {item.Name} is not a ProductDefinition but has packaging {packaging.Name} for GUID: {Storage.GUID}");
-      }
+      StorageItem.SelectedItem = mode == StorageMode.Specific ? item?.Definition : null;
+      AssignedItem = mode == StorageMode.Specific ? item : null;
       StorageItem.onItemChanged?.Invoke(StorageItem.SelectedItem);
+      if (DebugLogs.All || DebugLogs.Storage)
+        MelonLogger.Msg($"SetModeAndItem: Set Mode={mode}, Item={item?.Name ?? "null"}, Packaging={(item as ProductItemInstance)?.AppliedPackaging?.Name ?? "null"} for GUID: {Storage.GUID}");
     }
 
     public bool IsAnyMode => Mode == StorageMode.Any;
@@ -907,9 +995,7 @@ namespace NoLazyWorkers.Handlers
         // Save StorageItem as ItemInstance JSON
         if (config.StorageItem.SelectedItem != null)
         {
-          ItemInstance itemInstance = config.StorageItem.SelectedItem.GetDefaultInstance();
-          if (config.PackagingDefinition != null)
-            (itemInstance as ProductItemInstance).SetPackaging(config.PackagingDefinition);
+          ItemInstance itemInstance = config.AssignedItem;
           jsonObject["StorageItem"] = itemInstance.GetItemData().GetJson(true);
           if (DebugLogs.All || DebugLogs.Storage)
             MelonLogger.Msg($"GetSaveStringPostfix: Saved StorageItem for GUID={__instance.GUID}: {jsonObject["StorageItemInstance"]}");
@@ -935,40 +1021,39 @@ namespace NoLazyWorkers.Handlers
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg($"StorageRackLoaderPatch: Processing for {mainPath}");
-
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"StorageRackLoaderPatch: Processing for {mainPath}", isChemist: true);
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) || gridItem == null)
         {
-          if (DebugLogs.All || DebugLogs.Storage)
-            MelonLogger.Warning($"StorageRackLoaderPatch: No GridItem found for mainPath: {mainPath}");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"StorageRackLoaderPatch: No GridItem found for mainPath: {mainPath}", isChemist: true);
           return;
         }
         if (gridItem is not PlaceableStorageEntity storage)
         {
-          if (DebugLogs.All || DebugLogs.Storage)
-            MelonLogger.Warning($"StorageRackLoaderPatch: GridItem is not a PlaceableStorageEntity for mainPath: {mainPath}");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"StorageRackLoaderPatch: GridItem is not a PlaceableStorageEntity for mainPath: {mainPath}", isChemist: true);
           return;
         }
         string dataPath = Path.Combine(mainPath, "Data.json");
         if (!File.Exists(dataPath))
         {
-          if (DebugLogs.All || DebugLogs.Storage)
-            MelonLogger.Warning($"StorageRackLoaderPatch: No Data.json found at: {dataPath}");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"StorageRackLoaderPatch: No Data.json found at: {dataPath}", isChemist: true);
           return;
         }
-
         string json = File.ReadAllText(dataPath);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"StorageRackLoaderPatch: Read JSON for GUID: {gridItem.GUID}, JSON: {json}", isChemist: true);
         JObject jsonObject = JObject.Parse(json);
-        if (jsonObject["StorageMode"] != null)
-          PendingConfigData[storage.GUID] = jsonObject;
-
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg($"StorageRackLoaderPatch: Stored pending config data for GUID: {gridItem.GUID}, JSON: {json}");
+        PendingConfigData[storage.GUID] = jsonObject;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"StorageRackLoaderPatch: Stored pending config data for GUID: {gridItem.GUID}, StorageMode={jsonObject["StorageMode"]}, StorageItem={jsonObject["StorageItem"]}", isChemist: true);
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"StorageRackLoaderPatch: Failed for {mainPath}, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"StorageRackLoaderPatch: Failed for {mainPath}, error: {e}", isChemist: true);
       }
     }
   }
@@ -1054,43 +1139,54 @@ namespace NoLazyWorkers.Handlers
       var networkObject = gameObject.GetComponent<NetworkObject>();
       if (networkObject == null)
       {
-        MelonLogger.Error($"LoadConfigurationWhenReady: No NetworkObject for GUID: {Storage.GUID}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"LoadConfigurationWhenReady: No NetworkObject for GUID: {Storage.GUID}", isChemist: true);
         yield break;
       }
       int retries = 10;
       while (!networkObject.IsSpawned && retries > 0)
       {
-        if (DebugLogs.All || DebugLogs.Storage)
-          MelonLogger.Msg($"LoadConfigurationWhenReady: Waiting for NetworkObject to spawn for GUID: {Storage.GUID}, retries left: {retries}");
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"LoadConfigurationWhenReady: Waiting for NetworkObject to spawn for GUID: {Storage.GUID}, retries left: {retries}", isChemist: true);
         yield return new WaitForSeconds(1f);
         retries--;
       }
       if (!networkObject.IsSpawned)
       {
-        MelonLogger.Error($"LoadConfigurationWhenReady: NetworkObject failed to spawn after retries for GUID: {Storage.GUID}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"LoadConfigurationWhenReady: NetworkObject failed to spawn after retries for GUID: {Storage.GUID}", isChemist: true);
         yield break;
       }
       ManagedObjects.InitializePrefab(networkObject, -1);
       configReplicator._transportManagerCache = NetworkManager.TransportManager;
-      if (DebugLogs.All || DebugLogs.Storage)
-        MelonLogger.Msg($"StorageConfigurableProxy: InitializePrefab for ConfigurationReplicator on {Storage.GUID}");
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"StorageConfigurableProxy: InitializePrefab for ConfigurationReplicator on {Storage.GUID}", isChemist: true);
       yield return new WaitForSeconds(1f);
-
       if (PendingConfigData.TryGetValue(Storage.GUID, out var data))
       {
         try
         {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"LoadConfigurationWhenReady: Applying config for GUID: {Storage.GUID}, JSON={data.ToString()}", isChemist: true);
           configuration.Load(data);
           if (WorldspaceUI != null)
             ((StorageUIElement)WorldspaceUI).RefreshUI();
-          if (DebugLogs.All || DebugLogs.Storage)
-            MelonLogger.Msg($"LoadConfigurationWhenReady: Loaded configuration for GUID: {Storage.GUID}");
+          // Ensure shelf is added to lists
+          UpdateShelfConfiguration(Storage, configuration.AssignedItem);
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"LoadConfigurationWhenReady: Loaded configuration for GUID: {Storage.GUID}, Mode={configuration.Mode}, Item={configuration.StorageItem?.SelectedItem?.Name ?? "null"}, SpecificShelves count={ShelfCache.Count}", isChemist: true);
         }
         catch (Exception e)
         {
-          MelonLogger.Error($"LoadConfigurationWhenReady: Failed to load configuration for GUID: {Storage.GUID}, error: {e.Message}");
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"LoadConfigurationWhenReady: Failed to load configuration for GUID: {Storage.GUID}, error: {e.Message}", isChemist: true);
         }
         PendingConfigData.Remove(Storage.GUID);
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"LoadConfigurationWhenReady: No pending config data for GUID: {Storage.GUID}", isChemist: true);
       }
     }
 
@@ -1289,8 +1385,8 @@ namespace NoLazyWorkers.Handlers
       }
       else if (config.Mode == StorageMode.Specific)
       {
-        if (config.PackagingDefinition != null && config.StorageItem?.SelectedItem != null)
-          newSprite = GetPackagedSprite(config.StorageItem.SelectedItem, config.PackagingDefinition);
+        if (config.AssignedItem != null)
+          newSprite = GetPackagedSprite(config.AssignedItem.definition, (config.AssignedItem as ProductItemInstance)?.AppliedPackaging);
         else
           newSprite = config.StorageItem?.SelectedItem?.Icon;
         iconColor = Color.white;
@@ -1301,28 +1397,7 @@ namespace NoLazyWorkers.Handlers
       Icon.enabled = newSprite != null;
 
       if (DebugLogs.All || DebugLogs.Storage)
-        MelonLogger.Msg($"StorageUIElement.UpdateWorldspaceUIIcon: Mode: {config?.Mode}, Sprite: {(newSprite != null ? newSprite.name : "null")}, Color: {iconColor}, Packaging: {config?.PackagingDefinition?.Name ?? "null"} for GUID: {Proxy.Storage.GUID}");
-    }
-  }
-
-  [HarmonyPatch(typeof(ItemSelector))]
-  public class ItemSelectorPatch
-  {
-    [HarmonyPostfix]
-    [HarmonyPatch("CreateOptions")]
-    static void CreateOptionsPostfix(ItemSelector __instance, List<ItemSelector.Option> options)
-    {
-      for (int i = 0; i < __instance.optionButtons.Count; i++)
-      {
-        var option = options[i];
-        if (option is StorageItemOption storageOption && storageOption.PackagingDefinition != null && storageOption.Item != null)
-        {
-          var button = __instance.optionButtons[i];
-          var icon = button.transform.Find("Icon").gameObject.GetComponent<Image>();
-          icon.sprite = GetPackagedSprite(storageOption.Item, storageOption.PackagingDefinition);
-          icon.gameObject.SetActive(icon.sprite != null);
-        }
-      }
+        MelonLogger.Msg($"StorageUIElement.UpdateWorldspaceUIIcon: Mode: {config?.Mode}, Sprite: {(newSprite != null ? newSprite.name : "null")}, Color: {iconColor}, Packaging: {(config?.AssignedItem as ProductItemInstance)?.AppliedPackaging?.Name ?? "null"} for GUID: {Proxy.Storage.GUID}");
     }
   }
 
@@ -1387,6 +1462,31 @@ namespace NoLazyWorkers.Handlers
         return false;
       }
       return true;
+    }
+  }
+
+  [HarmonyPatch(typeof(ItemSelector))]
+  public class ItemSelectorPatch
+  {
+    [HarmonyPostfix]
+    [HarmonyPatch("CreateOptions")]
+    static void CreateOptionsPostfix(ItemSelector __instance, List<ItemSelector.Option> options)
+    {
+      for (int i = 0; i < __instance.optionButtons.Count; i++)
+      {
+        var button = __instance.optionButtons[i];
+        var btnComponent = button.GetComponent<UnityEngine.UI.Button>();
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ItemSelectorPatch.CreateOptionsPostfix: Button {i}, Title={options[i].Title}, interactable={btnComponent?.interactable}, active={button.gameObject.activeSelf}",
+            isStorage: true);
+        var option = options[i];
+        if (option is StorageItemOption storageOption && storageOption.PackagingDefinition != null && storageOption.Item != null)
+        {
+          var icon = button.transform.Find("Icon").gameObject.GetComponent<Image>();
+          icon.sprite = GetPackagedSprite(storageOption.Item, storageOption.PackagingDefinition);
+          icon.gameObject.SetActive(icon.sprite != null);
+        }
+      }
     }
   }
 }

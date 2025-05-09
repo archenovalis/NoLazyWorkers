@@ -1,521 +1,692 @@
 using FishNet;
 using HarmonyLib;
 using MelonLoader;
-using ScheduleOne;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.NPCs;
-using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
-using ScheduleOne.Product;
 using System.Collections;
 using UnityEngine;
+using static NoLazyWorkers.Chemists.ChemistExtensions;
+using static NoLazyWorkers.Chemists.ChemistUtilities;
 using static NoLazyWorkers.Handlers.StorageUtilities;
 
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 namespace NoLazyWorkers.Chemists
 {
-  public static class ChemistBehaviour
+  public static class ChemistExtensions
   {
-    public static readonly Dictionary<Chemist, EntityConfiguration> cachedConfigs = [];
-    public static readonly Dictionary<Behaviour, StateData> states = [];
+    public interface IStationAdapter
+    {
+      Guid GUID { get; }
+      string Name { get; }
+      Vector3 GetAccessPoint();
+      ItemSlot InsertSlot { get; }
+      List<ItemSlot> ProductSlots { get; }
+      ItemSlot OutputSlot { get; }
+      bool IsInUse { get; }
+      bool HasActiveOperation { get; }
+      int StartThreshold { get; }
+      void StartOperation(Behaviour behaviour);
+      int GetInputQuantity();
+      ItemField GetInputItemForProduct();
+      object Station { get; }
+      int MaxProductQuantity { get; } //TODO switch this to dynamic stack size
+    }
+  }
+
+  public static class ChemistUtilities
+  {
+    public static bool HasSufficientItems(NPC npc, ItemInstance targetItem, int needed)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HasSufficientItems: Entered for {npc?.fullName}, targetItem={targetItem?.ID}, needed={needed}", isChemist: true);
+      if (targetItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HasSufficientItems: Target item is null for {npc?.fullName}", isChemist: true);
+        return false;
+      }
+      var shelves = FindShelvesWithItem(npc, targetItem, needed);
+      if (shelves == null || shelves.Count == 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HasSufficientItems: No shelves found for {targetItem.ID}, needed={needed}, hasSufficient=false for {npc?.fullName}", isChemist: true);
+        return false;
+      }
+      int shelfQty = shelves.Values.Sum();
+      bool hasSufficient = shelfQty >= needed;
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"HasSufficientItems: Completed for {targetItem.ID}, shelfQty={shelfQty}, needed={needed}, hasSufficient={hasSufficient} for {npc?.fullName}", isChemist: true);
+      return hasSufficient;
+    }
+  }
+
+  public abstract class ChemistBehaviour
+  {
+    public static readonly Dictionary<Chemist, EntityConfiguration> cachedConfigs = new();
+    public static readonly Dictionary<Behaviour, StateData> states = new();
+    public delegate void StateHandler(Behaviour behaviour, StateData state);
+    public enum EState
+    {
+      Idle,
+      Grabbing,
+      Inserting,
+      StartingOperation,
+      Completed
+    }
+
+    public readonly Dictionary<EState, StateHandler> StateHandlers;
+
+    public ChemistBehaviour()
+    {
+      StateHandlers = new Dictionary<EState, StateHandler>
+            {
+                { EState.Idle, HandleIdle },
+                { EState.Grabbing, HandleGrabbing },
+                { EState.Inserting, HandleInserting },
+                { EState.StartingOperation, HandleStartingOperation },
+                { EState.Completed, HandleCompleted }
+            };
+    }
 
     public class StateData
     {
-
-      public EState CurrentState { get; set; }
-      public ItemInstance TargetItem { get; set; } // For cauldron (gasoline, cocaleaf) or mixing station (mixer item)
-      public int QuantityToFetch { get; set; }
-      public bool IsFetchingPrimary { get; set; } // Gasoline for cauldron, mixer item for mixing station
-      public bool IsFetchingSecondary { get; set; } // Coca leaf for cauldron
-      public bool ClearStationSlot { get; set; } // For mixing station MixerSlot clearing
+      public EState CurrentState { get; set; } = EState.Idle;
+      public ItemInstance TargetItem { get; set; }
+      public int QuantityInventory { get; set; }
+      public int QuantityNeeded { get; set; }
+      public int QuantityWanted { get; set; }
       public Coroutine WalkToSuppliesRoutine { get; set; }
       public Coroutine GrabRoutine { get; set; }
       public Coroutine InsertRoutine { get; set; }
       public ITransitEntity LastSupply { get; set; }
-      public bool CookPending { get; set; }
+      public bool OperationPending { get; set; }
+      public ITransitEntity Destination { get; set; }
+      public float MoveTimeout { get; set; }
+      public float MoveElapsed { get; set; }
+      public bool IsMoving { get; set; }
+      public string ExpectedInputItemID { get; set; }
+      public Dictionary<PlaceableStorageEntity, int> Fetching { get; set; } = new();
+      public object CachedConfig { get; set; }
+      public int MovementStartFrames { get; set; }
+      public bool FailedToFetch { get; set; }
     }
 
-    public enum EState
+    protected void TransitionState(Behaviour behaviour, StateData state, EState newState, string reason)
     {
-      Idle,
-      WalkingToSupplies,
-      GrabbingSupplies,
-      WalkingToStation,
-      InsertingItems,
-      StartingOperation,
-      Cooking
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"TransitionState: {chemist?.fullName} from {state.CurrentState} to {newState}, reason={reason}, invQty={state.QuantityInventory}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}, fetchingCount={state.Fetching.Count}, station={station?.GUID}",
+          isChemist: true);
+      state.CurrentState = newState;
     }
 
-    public static void PrepareToFetchItems(Behaviour __instance, StateData state)
+    public virtual bool ValidateState(Chemist chemist, Behaviour behaviour, StateData state, out bool canStart, out bool canRestock)
     {
-      Chemist chemist = (Chemist)__instance.Npc;
-      if (__instance is StartMixingStationBehaviour mixingBehaviour)
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateState: Entered for {chemist?.fullName}, state={state.CurrentState}", isChemist: true);
+      canStart = false;
+      canRestock = false;
+      IStationAdapter station = GetStation(behaviour);
+      if (station == null || chemist == null)
       {
-        MixingStation station = mixingBehaviour.targetStation;
-        ItemInstance targetMixer = station.MixerSlot.ItemInstance ?? Registry.Instance._GetItem(state.TargetItem.ID).GetDefaultInstance();
-
-        int quantityNeeded = station.MixerSlot.GetCapacityForItem(targetMixer) - station.MixerSlot.Quantity;
-        int inventoryCount = chemist.Inventory._GetItemAmount(targetMixer.ID);
-        state.IsFetchingPrimary = quantityNeeded > inventoryCount;
-        state.QuantityToFetch = quantityNeeded - inventoryCount;
-        state.TargetItem = targetMixer;
-        state.ClearStationSlot = station.MixerSlot.ItemInstance != null && station.MixerSlot.ItemInstance.ID != targetMixer.ID;
-
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"BehaviourPatch.PrepareToFetchItems: MixingStation, target={targetMixer.ID}, needed={quantityNeeded}, inventory={inventoryCount}, fetch={state.IsFetchingPrimary}, clearSlot={state.ClearStationSlot}");
-
-        if (!state.IsFetchingPrimary)
-        {
-          HandleInventorySufficient(__instance, state, inventoryCount);
-          return;
-        }
-      }
-      else if (__instance is StartCauldronBehaviour cauldronBehaviour)
-      {
-        Cauldron cauldron = cauldronBehaviour.Station;
-        int gasolineNeeded = cauldron.LiquidSlot.Quantity < 1 ? 1 : 0;
-        int gasolineInInventory = chemist.Inventory._GetItemAmount("gasoline");
-        state.IsFetchingPrimary = gasolineNeeded > gasolineInInventory;
-        state.QuantityToFetch = gasolineNeeded - gasolineInInventory;
-
-        int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
-        int cocaLeafInInventory = chemist.Inventory._GetItemAmount("cocaleaf");
-        state.IsFetchingSecondary = cocaLeafNeeded > cocaLeafInInventory;
-        if (state.IsFetchingSecondary && !state.IsFetchingPrimary)
-          state.QuantityToFetch = cocaLeafNeeded - cocaLeafInInventory;
-
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"BehaviourPatch.PrepareToFetchItems: Cauldron, gasolineNeeded={gasolineNeeded}, gasolineInInventory={gasolineInInventory}, cocaLeafNeeded={cocaLeafNeeded}, cocaLeafInInventory={cocaLeafInInventory}, fetchPrimary={state.IsFetchingPrimary}, fetchSecondary={state.IsFetchingSecondary}");
-
-        if (!state.IsFetchingPrimary && !state.IsFetchingSecondary)
-        {
-          HandleInventorySufficient(__instance, state, 0); // Inventory check handled in InsertItems
-          return;
-        }
-
-        state.TargetItem = state.IsFetchingPrimary ? Registry.Instance._GetItem("gasoline").GetDefaultInstance() : Registry.Instance._GetItem("cocaleaf").GetDefaultInstance();
-      }
-      else
-      {
-        __instance.Disable();
-        return;
-      }
-
-      if (state.TargetItem == null)
-      {
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"BehaviourPatch.PrepareToFetchItems: Target item not found for {chemist.fullName}, type={__instance.GetType().Name}");
-        __instance.Disable();
-        return;
-      }
-
-      PlaceableStorageEntity shelf = FindShelfWithItem(chemist, state.TargetItem, state.QuantityToFetch);
-      if (shelf == null)
-      {
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"BehaviourPatch.PrepareToFetchItems: No shelf found for {state.TargetItem.ID} for {chemist.fullName}");
-        __instance.Disable();
-        return;
-      }
-
-      ConfigurationExtensions.NPCSupply[chemist.GUID] = new ObjectField(null) { SelectedObject = shelf };
-      state.LastSupply = shelf;
-
-      if (IsAtSupplies(__instance))
-      {
-        state.CurrentState = EState.GrabbingSupplies;
-        GrabItem(__instance, state);
-      }
-      else
-      {
-        state.CurrentState = EState.WalkingToSupplies;
-        WalkToSupplies(__instance, state);
-      }
-    }
-
-    private static void HandleInventorySufficient(Behaviour __instance, StateData state, int inventoryCount)
-    {
-      if (IsAtStation(__instance))
-      {
-        int inserted = InsertItemsFromInventory(__instance, state);
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"BehaviourPatch.HandleInventorySufficient: Inserted {inserted} items for {__instance.Npc?.fullName}, type={__instance.GetType().Name}");
-        state.CurrentState = EState.StartingOperation;
-      }
-      else
-      {
-        state.CurrentState = EState.WalkingToStation;
-        __instance.SetDestination(GetStationAccessPoint(__instance), true);
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"BehaviourPatch.HandleInventorySufficient: Walking to station with {inventoryCount} inventory items for {__instance.Npc?.fullName}, type={__instance.GetType().Name}");
-      }
-    }
-
-    private static bool IsAtSupplies(Behaviour __instance)
-    {
-      Chemist chemist = (Chemist)__instance.Npc;
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist.GUID, out var supply) || supply.SelectedObject == null)
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateState: Invalid station or chemist for {chemist?.fullName}, station={station?.GUID}", isChemist: true);
         return false;
-
-      bool atSupplies = NavMeshUtility.IsAtTransitEntity(supply.SelectedObject as ITransitEntity, chemist, 0.4f);
-      if (DebugLogs.All || DebugLogs.Chemist)
-      {
-        Vector3 chemistPos = chemist.transform.position;
-        Vector3 supplyPos = supply.SelectedObject?.transform.position ?? Vector3.zero;
-        float distance = Vector3.Distance(chemistPos, supplyPos);
-        MelonLogger.Msg($"BehaviourPatch.IsAtSupplies: Result={atSupplies}, chemist={chemist?.fullName ?? "null"}, ChemistPos={chemistPos}, SupplyPos={supplyPos}, Distance={distance}, type={__instance.GetType().Name}");
       }
-      return atSupplies;
-    }
-
-    private static void WalkToSupplies(Behaviour __instance, StateData state)
-    {
-      Chemist chemist = (Chemist)__instance.Npc;
-      if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist.GUID, out var supply) || supply.SelectedObject == null)
+      if (station.IsInUse || station.HasActiveOperation || station.OutputSlot.Quantity > 0)
       {
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"BehaviourPatch.WalkToSupplies: Supply not found for {chemist?.fullName ?? "null"}, type={__instance.GetType().Name}");
-        Disable(__instance);
-        return;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateState: Station in use, active, or has output for {chemist?.fullName}, station={station.GUID}", isChemist: true);
+        return false;
       }
-
-      ITransitEntity supplyEntity = supply.SelectedObject as ITransitEntity;
-      if (!chemist.Movement.CanGetTo(supplyEntity, 1f))
+      ItemField inputItem = station.GetInputItemForProduct();
+      if (inputItem?.SelectedItem == null)
       {
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"BehaviourPatch.WalkToSupplies: Cannot reach supply for {chemist?.fullName ?? "null"}, type={__instance.GetType().Name}");
-        Disable(__instance);
-        return;
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateState: Input item null for station {station.GUID}, chemist={chemist?.fullName}", isChemist: true);
+        return false;
       }
-
-      if (DebugLogs.All || DebugLogs.Chemist)
-        MelonLogger.Msg($"BehaviourPatch.WalkToSupplies: Walking to supply {supplyEntity.Name} for {chemist?.fullName}, type={__instance.GetType().Name}, state={state.CurrentState}");
-
-      state.WalkToSuppliesRoutine = (Coroutine)MelonCoroutines.Start(WalkRoutine(__instance, supplyEntity, state));
-    }
-
-    private static IEnumerator WalkRoutine(Behaviour __instance, ITransitEntity supply, StateData state)
-    {
-      Chemist chemist = (Chemist)__instance.Npc;
-      Vector3 startPos = chemist.transform.position;
-      __instance.SetDestination(supply, true);
-      if (DebugLogs.All || DebugLogs.Chemist)
-        MelonLogger.Msg($"BehaviourPatch.WalkRoutine: Set destination for {chemist?.fullName}, IsMoving={chemist.Movement.IsMoving}, type={__instance.GetType().Name}");
-
-      yield return new WaitForSeconds(0.2f);
-      float timeout = 10f;
-      float elapsed = 0f;
-      while (chemist.Movement.IsMoving && elapsed < timeout)
+      ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
+      if (targetItem == null)
       {
-        yield return null;
-        elapsed += Time.deltaTime;
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateState: Target item null for station {station.GUID}, chemist={chemist?.fullName}", isChemist: true);
+        return false;
       }
-      if (elapsed >= timeout)
+      state.TargetItem = targetItem;
+      int threshold = station.StartThreshold;
+      int desiredQty = Math.Min(station.MaxProductQuantity, station.ProductSlots.Sum(s => s.Quantity));
+      int invQty = chemist.Inventory._GetItemAmount(targetItem.ID);
+      int inputQty = station.GetInputQuantity();
+      state.QuantityInventory = invQty;
+      state.QuantityNeeded = Math.Max(0, threshold - inputQty);
+      state.QuantityWanted = Math.Max(0, desiredQty - inputQty);
+      canStart = inputQty >= threshold && desiredQty >= threshold;
+      canRestock = invQty > 0 || HasSufficientItems(chemist, targetItem, state.QuantityNeeded - invQty);
+      if (inputQty < threshold && !canRestock)
       {
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"BehaviourPatch.WalkRoutine: Timeout walking to supply for {chemist?.fullName}, type={__instance.GetType().Name}");
-        Disable(__instance);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateState: Below threshold and cannot restock for {chemist?.fullName}, inputQty={inputQty}, threshold={threshold}", isChemist: true);
+        Disable(behaviour);
       }
-
-      state.WalkToSuppliesRoutine = null;
-      state.CurrentState = EState.GrabbingSupplies;
-      GrabItem(__instance, state);
-
-      if (DebugLogs.All || DebugLogs.Chemist)
+      if (canRestock)
       {
-        bool atSupplies = IsAtSupplies(__instance);
-        Vector3 chemistPos = chemist.transform.position;
-        Vector3 supplyPos = supply != null ? ((BuildableItem)supply).transform.position : Vector3.zero;
-        float distanceMoved = Vector3.Distance(startPos, chemistPos);
-        MelonLogger.Msg($"BehaviourPatch.WalkRoutine: Completed walk to supply for {chemist?.fullName}, AtSupplies={atSupplies}, ChemistPos={chemistPos}, SupplyPos={supplyPos}, DistanceMoved={distanceMoved}, Elapsed={elapsed}, type={__instance.GetType().Name}");
-      }
-    }
-
-    private static void GrabItem(Behaviour __instance, StateData state)
-    {
-      Chemist chemist = (Chemist)__instance.Npc;
-
-      ITransitEntity station = (ITransitEntity)((__instance as StartMixingStationBehaviour)?.targetStation) ?? ((__instance as StartCauldronBehaviour)?.Station);
-      try
-      {
-        if (!ConfigurationExtensions.NPCSupply.TryGetValue(chemist.GUID, out var supply) || supply.SelectedObject == null)
+        var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+        if (shelves != null && shelves.Count > 0)
         {
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Warning($"BehaviourPatch.GrabItem: Shelf not found for {chemist?.fullName}, type={__instance.GetType().Name}");
-          Disable(__instance);
-          return;
-        }
-
-        ITransitEntity shelf = supply.SelectedObject as ITransitEntity;
-        var slots = (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>())
-            .Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>())
-            .Where(s => s?.ItemInstance != null && s.Quantity > 0 && s.ItemInstance.ID.ToLower() == state.TargetItem.ID.ToLower())
-            .ToList();
-
-        if (!slots.Any())
-        {
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Warning($"BehaviourPatch.GrabItem: No slots with {state.TargetItem.ID} in shelf {shelf.GUID}, type={__instance.GetType().Name}");
-          Disable(__instance);
-          return;
-        }
-
-        // Station-specific output check
-        if (__instance is StartMixingStationBehaviour mixingBehaviour && mixingBehaviour.targetStation.OutputSlot.Quantity > 0)
-        {
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Warning($"BehaviourPatch.GrabItem: Output quantity {mixingBehaviour.targetStation.OutputSlot.Quantity} > 0, disabling for {chemist?.fullName}");
-          Disable(__instance);
-          return;
-        }
-
-        // Clear station slot if needed (mixing station only)
-        if (__instance is StartMixingStationBehaviour mixing && state.ClearStationSlot && mixing.targetStation.MixerSlot.ItemInstance != null)
-        {
-          int currentQuantity = mixing.targetStation.MixerSlot.Quantity;
-          chemist.Inventory.InsertItem(mixing.targetStation.MixerSlot.ItemInstance.GetCopy(currentQuantity));
-          mixing.targetStation.MixerSlot.SetQuantity(0);
-          state.ClearStationSlot = false;
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Msg($"BehaviourPatch.GrabItem: Cleared MixerSlot ({currentQuantity} items returned to inventory) for {chemist?.fullName}");
-        }
-
-        int totalAvailable = slots.Sum(s => s.Quantity);
-        int quantityToFetch = Mathf.Min(state.QuantityToFetch, totalAvailable);
-
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"BehaviourPatch.GrabItem: Available {totalAvailable}/{state.QuantityToFetch} for {state.TargetItem.ID}, type={__instance.GetType().Name}");
-
-        if (quantityToFetch <= 0)
-        {
-          Disable(__instance);
-          return;
-        }
-
-        int remainingToFetch = quantityToFetch;
-        foreach (var slot in slots)
-        {
-          int amountToTake = Mathf.Min(slot.Quantity, remainingToFetch);
-          if (amountToTake > 0)
+          state.Fetching.Clear();
+          foreach (var shelf in shelves)
           {
-            chemist.Inventory.InsertItem(slot.ItemInstance.GetCopy(amountToTake));
-            slot.ChangeQuantity(-amountToTake, false);
-            remainingToFetch -= amountToTake;
-            if (DebugLogs.All || DebugLogs.Chemist)
-              MelonLogger.Msg($"BehaviourPatch.GrabItem: Took {amountToTake} of {slot.ItemInstance.ID} from slot, type={__instance.GetType().Name}");
+            state.Fetching[shelf.Key] = Math.Min(shelf.Value, state.QuantityWanted - invQty);
           }
-          if (remainingToFetch <= 0)
-            break;
         }
-
-        if (remainingToFetch > 0)
-        {
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Warning($"BehaviourPatch.GrabItem: Could not fetch full quantity, still need {remainingToFetch} of {state.TargetItem.ID}, type={__instance.GetType().Name}");
-        }
-
-        state.GrabRoutine = (Coroutine)MelonCoroutines.Start(GrabRoutine(__instance, state));
       }
-      catch (System.Exception e)
-      {
-        MelonLogger.Error($"BehaviourPatch.GrabItem: Failed for {chemist?.fullName}, type={__instance.GetType().Name}, error: {e}");
-        Disable(__instance);
-      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateState: Completed for {chemist?.fullName}, canStart={canStart}, canRestock={canRestock}, invQty={invQty}, inputQty={inputQty}, desiredQty={desiredQty}, threshold={threshold}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}, fetchingCount={state.Fetching.Count}",
+          isChemist: true);
+      return true;
     }
 
-    private static IEnumerator GrabRoutine(Behaviour __instance, StateData state)
+    public virtual bool ValidateFetchState(Chemist chemist, Behaviour behaviour, StateData state)
     {
-      Chemist chemist = (Chemist)__instance.Npc;
-      yield return new WaitForSeconds(0.2f);
-      try
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateFetchState: Entered for {chemist?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      if (state.QuantityInventory >= state.QuantityWanted || state.Fetching.Count == 0)
       {
-        if (chemist.Avatar?.Anim != null)
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateFetchState: No fetching needed for {chemist?.fullName}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}, fetchingCount={state.Fetching.Count}", isChemist: true);
+        return false;
+      }
+      PlaceableStorageEntity shelf = state.Fetching.First().Key;
+      int available = GetItemQuantityInShelf(shelf, state.TargetItem);
+      bool isValid = available >= Math.Min(state.QuantityWanted - state.QuantityInventory, state.Fetching[shelf]);
+      if (!isValid)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateFetchState: Insufficient items in shelf {shelf.GUID}, available={available}, needed={state.QuantityWanted - state.QuantityInventory} for {chemist?.fullName}", isChemist: true);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateFetchState: Completed for {chemist?.fullName}, isValid={isValid}, shelfAvailable={available}, qtyWanted={state.QuantityWanted}, invQty={state.QuantityInventory}, fetchingCount={state.Fetching.Count}",
+          isChemist: true);
+      return isValid;
+    }
+
+    public virtual bool ValidateInsertState(Chemist chemist, Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateInsertState: Entered for {chemist?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}", isChemist: true);
+      IStationAdapter station = GetStation(behaviour);
+      if (station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateInsertState: Station is null for {chemist?.fullName}", isChemist: true);
+        return false;
+      }
+      int invQty = chemist.Inventory._GetItemAmount(state.TargetItem?.ID);
+      state.QuantityInventory = invQty;
+      bool isValid = invQty > 0 && (station.InsertSlot.ItemInstance == null || station.InsertSlot.ItemInstance.ID == state.TargetItem.ID);
+      if (!isValid)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateInsertState: Invalid conditions for {chemist?.fullName}, invQty={invQty}, slotItem={station.InsertSlot.ItemInstance?.ID ?? "null"}", isChemist: true);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateInsertState: Completed for {chemist?.fullName}, isValid={isValid}, invQty={invQty}, slotItem={station.InsertSlot.ItemInstance?.ID ?? "null"}",
+          isChemist: true);
+      return isValid;
+    }
+
+    public virtual bool ValidateOperationState(Chemist chemist, Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateOperationState: Entered for {chemist?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}", isChemist: true);
+      IStationAdapter station = GetStation(behaviour);
+      if (station == null || state.OperationPending || station.HasActiveOperation || station.IsInUse)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateOperationState: Invalid station, pending, or active operation for {chemist?.fullName}, station={station?.GUID}, pending={state.OperationPending}, active={station?.HasActiveOperation}", isChemist: true);
+        return false;
+      }
+      if (!IsAtStation(behaviour))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateOperationState: Not at station for {chemist?.fullName}", isChemist: true);
+        return false;
+      }
+      int inputQty = station.GetInputQuantity();
+      int productQty = station.ProductSlots.Sum(s => s.Quantity);
+      int threshold = station.StartThreshold;
+      bool isValid = inputQty >= threshold && productQty >= threshold;
+      // TODO check canrestock here?
+      if (!isValid)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateOperationState: Insufficient input for {chemist?.fullName}, inputQty={inputQty}, threshold={threshold}", isChemist: true);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateOperationState: Completed for {chemist?.fullName}, isValid={isValid}, inputQty={inputQty}, threshold={threshold}, activeOperation={station.HasActiveOperation}",
+          isChemist: true);
+      return isValid;
+    }
+
+    public virtual bool ValidateCompletedState(Chemist chemist, Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateCompletedState: Entered for {chemist?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}", isChemist: true);
+      IStationAdapter station = GetStation(behaviour);
+      if (station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateCompletedState: Station is null for {chemist?.fullName}", isChemist: true);
+        Disable(behaviour);
+      }
+      bool isValid = IsAtStation(behaviour) && station.OutputSlot.Quantity > 0;
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateCompletedState: Completed for {chemist?.fullName}, isValid={isValid}, pending={state.OperationPending}, activeOperation={station.HasActiveOperation}, outputQty={station.OutputSlot.Quantity}",
+          isChemist: true);
+      return isValid;
+    }
+
+    protected virtual void HandleIdle(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleIdle: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+      if (!ValidateState(chemist, behaviour, state, out bool canStart, out bool canRestock))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleIdle: State validation failed for {chemist?.fullName}, disabling behaviour", isChemist: true);
+        Disable(behaviour);
+        return;
+      }
+      if (canRestock)
+      {
+        // TODO duplicate HasSufficient check from canrestock
+        if (state.QuantityInventory > 0 && (state.QuantityInventory >= state.QuantityWanted || !HasSufficientItems(chemist, state.TargetItem, state.QuantityWanted - state.QuantityInventory)))
         {
-          chemist.Avatar.Anim.ResetTrigger("GrabItem");
-          chemist.Avatar.Anim.SetTrigger("GrabItem");
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Msg($"BehaviourPatch.GrabRoutine: Triggered GrabItem animation for {chemist?.fullName}, type={__instance.GetType().Name}");
+          TransitionState(behaviour, state, EState.Inserting, "Have enough items to insert");
+          if (!IsAtStation(behaviour))
+            WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+          else
+            HandleInserting(behaviour, state);
         }
         else
         {
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Warning($"BehaviourPatch.GrabRoutine: Animator missing for {chemist?.fullName}, skipping animation, type={__instance.GetType().Name}");
+          TransitionState(behaviour, state, EState.Grabbing, "Need to fetch items");
+          PrepareToFetchItems(behaviour, state);
         }
       }
-      catch (System.Exception e)
+      else if (canStart)
       {
-        MelonLogger.Error($"BehaviourPatch.GrabRoutine: Failed for {chemist?.fullName}, type={__instance.GetType().Name}, error: {e}");
-        Disable(__instance);
-      }
-      yield return new WaitForSeconds(0.2f);
-
-      state.GrabRoutine = null;
-
-      // Update fetching flags and fetch next item if needed (cauldron only)
-      if (__instance is StartCauldronBehaviour cauldronBehaviour)
-      {
-        if (state.IsFetchingPrimary)
-          state.IsFetchingPrimary = false;
-        else if (state.IsFetchingSecondary)
-          state.IsFetchingSecondary = false;
-
-        if (state.IsFetchingPrimary || state.IsFetchingSecondary)
-        {
-          PrepareToFetchItems(__instance, state);
-          yield break;
-        }
+        TransitionState(behaviour, state, EState.StartingOperation, "Can start operation");
+        if (!IsAtStation(behaviour))
+          WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+        else
+          HandleStartingOperation(behaviour, state);
       }
       else
       {
-        state.IsFetchingPrimary = false; // Mixing station only fetches one item
-      }
-
-      state.CurrentState = EState.WalkingToStation;
-      __instance.SetDestination(GetStationAccessPoint(__instance), true);
-      if (DebugLogs.All || DebugLogs.Chemist)
-        MelonLogger.Msg($"BehaviourPatch.GrabRoutine: Grab complete, walking to station for {chemist?.fullName}, type={__instance.GetType().Name}");
-    }
-
-    public static int InsertItemsFromInventory(Behaviour __instance, StateData state)
-    {
-      Chemist chemist = (Chemist)__instance.Npc;
-      try
-      {
-        if (__instance is StartMixingStationBehaviour mixingBehaviour)
-        {
-          MixingStation station = mixingBehaviour.targetStation;
-          if (state.TargetItem == null || station.MixerSlot == null)
-          {
-            if (DebugLogs.All || DebugLogs.Chemist)
-              MelonLogger.Warning($"BehaviourPatch.InsertItemsFromInventory: TargetItem or MixerSlot is null for {chemist?.fullName}");
-            return 0;
-          }
-
-          int quantity = chemist.Inventory._GetItemAmount(state.TargetItem.ID);
-          if (quantity <= 0)
-          {
-            if (DebugLogs.All || DebugLogs.Chemist)
-              MelonLogger.Warning($"BehaviourPatch.InsertItemsFromInventory: No items of {state.TargetItem.ID} in inventory for {chemist?.fullName}");
-            return 0;
-          }
-
-          ItemInstance item = state.TargetItem;
-          int currentQuantity = station.MixerSlot.Quantity;
-          station.MixerSlot.InsertItem(item.GetCopy(quantity));
-          int newQuantity = station.MixerSlot.Quantity;
-
-          int quantityToRemove = quantity;
-          List<(ItemSlot slot, int amount)> toRemove = [];
-          foreach (ItemSlot slot in chemist.Inventory.ItemSlots)
-          {
-            if (slot?.ItemInstance != null && slot.ItemInstance.ID == state.TargetItem.ID && slot.Quantity > 0)
-            {
-              int amount = Mathf.Min(slot.Quantity, quantityToRemove);
-              toRemove.Add((slot, amount));
-              quantityToRemove -= amount;
-              if (quantityToRemove <= 0)
-                break;
-            }
-          }
-
-          foreach (var (slot, amount) in toRemove)
-          {
-            slot.SetQuantity(slot.Quantity - amount);
-          }
-
-          if (quantityToRemove > 0)
-          {
-            if (DebugLogs.All || DebugLogs.Chemist)
-              MelonLogger.Warning($"BehaviourPatch.InsertItemsFromInventory: Failed to remove {quantityToRemove} of {state.TargetItem.ID}, reverting MixerSlot for {chemist?.fullName}");
-            station.MixerSlot.SetQuantity(currentQuantity);
-            return 0;
-          }
-
-          if (DebugLogs.All || DebugLogs.Chemist)
-            MelonLogger.Msg($"BehaviourPatch.InsertItemsFromInventory: Inserted {quantity} of {state.TargetItem.ID} into MixerSlot, quantity changed from {currentQuantity} to {newQuantity} for {chemist?.fullName}");
-          return quantity;
-        }
-        else if (__instance is StartCauldronBehaviour cauldronBehaviour)
-        {
-          Cauldron cauldron = cauldronBehaviour.Station;
-          int inserted = 0;
-
-          // Insert gasoline
-          if (cauldron.LiquidSlot.Quantity < 1)
-          {
-            int gasolineInInventory = chemist.Inventory._GetItemAmount("gasoline");
-            if (gasolineInInventory >= 1)
-            {
-              ItemInstance gasoline = Registry.Instance._GetItem("gasoline").GetDefaultInstance(1);
-              cauldron.LiquidSlot.InsertItem(gasoline.GetCopy(1));
-              RemoveItem(chemist, 1, state, gasoline.ID);
-              inserted += 1;
-              if (DebugLogs.All || DebugLogs.Chemist)
-                MelonLogger.Msg($"BehaviourPatch.InsertItemsFromInventory: Inserted 1 gasoline into LiquidSlot for {chemist?.fullName}");
-            }
-            else
-            {
-              if (DebugLogs.All || DebugLogs.Chemist)
-                MelonLogger.Warning($"BehaviourPatch.InsertItemsFromInventory: Insufficient gasoline in inventory for {chemist?.fullName}");
-              return 0;
-            }
-          }
-
-          // Insert coca leaves
-          int cocaLeafNeeded = Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity);
-          int cocaLeafInInventory = chemist.Inventory._GetItemAmount("cocaleaf");
-          if (cocaLeafInInventory >= cocaLeafNeeded)
-          {
-            ItemInstance cocaLeaf = Registry.Instance._GetItem("cocaleaf").GetDefaultInstance(cocaLeafNeeded);
-            foreach (var slot in cauldron.IngredientSlots)
-            {
-              int space = slot.GetCapacityForItem(cocaLeaf) - slot.Quantity;
-              if (space > 0)
-              {
-                int amountToInsert = Mathf.Min(space, cocaLeafNeeded);
-                slot.InsertItem(cocaLeaf.GetCopy(amountToInsert));
-                cocaLeafNeeded -= amountToInsert;
-                inserted += amountToInsert;
-                if (DebugLogs.All || DebugLogs.Chemist)
-                  MelonLogger.Msg($"BehaviourPatch.InsertItemsFromInventory: Inserted {amountToInsert} coca leaves into IngredientSlot for {chemist?.fullName}");
-              }
-              if (cocaLeafNeeded <= 0)
-                break;
-            }
-            RemoveItem(chemist, Cauldron.COCA_LEAF_REQUIRED - cauldron.IngredientSlots.Sum(slot => slot.Quantity), state, "cocaleaf");
-          }
-          else
-          {
-            if (DebugLogs.All || DebugLogs.Chemist)
-              MelonLogger.Warning($"BehaviourPatch.InsertItemsFromInventory: Insufficient coca leaves in inventory for {chemist?.fullName}");
-            return 0;
-          }
-
-          return inserted;
-        }
-
-        return 0;
-      }
-      catch (System.Exception e)
-      {
-        MelonLogger.Error($"BehaviourPatch.InsertItemsFromInventory: Failed for {chemist?.fullName}, item={state.TargetItem?.ID ?? "null"}, type={__instance.GetType().Name}, error: {e}");
-        return 0;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleIdle: No actions possible for {chemist?.fullName}, disabling behaviour", isChemist: true);
+        Disable(behaviour);
       }
     }
 
-    private static void RemoveItem(NPC npc, int quantity, StateData state, string id = "")
+    protected virtual void HandleGrabbing(Behaviour behaviour, StateData state)
     {
-      string targetItem = id != "" ? id : state.TargetItem.ID;
-      // Remove from inventory
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleGrabbing: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      var curInv = chemist.Inventory._GetItemAmount(state.TargetItem?.ID);
+      if (curInv < state.QuantityInventory)
+      {
+        state.QuantityInventory = curInv;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: Inventory loss detected for {chemist?.fullName}, expected={state.QuantityInventory}, actual={chemist.Inventory._GetItemAmount(state.TargetItem?.ID)}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Inventory loss detected");
+        return;
+      }
+      state.QuantityInventory = curInv;
+      if (state.QuantityInventory >= state.QuantityWanted)
+      {
+        TransitionState(behaviour, state, EState.Inserting, "Sufficient inventory");
+        IStationAdapter station = GetStation(behaviour);
+        if (!IsAtStation(behaviour))
+          WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+        else
+          HandleInserting(behaviour, state);
+        return;
+      }
+      if (!ValidateFetchState(chemist, behaviour, state))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: Fetch state invalid for {chemist?.fullName}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Invalid fetch state");
+        return;
+      }
+      GrabItem(behaviour, state);
+    }
+
+    protected virtual void HandleInserting(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleInserting: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+      var curInv = chemist.Inventory._GetItemAmount(state.TargetItem?.ID); //TODO replace with onchanged state listener
+      if (curInv < state.QuantityInventory)
+      {
+        state.QuantityInventory = curInv;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleInserting: Inventory loss detected for {chemist?.fullName}, expected={state.QuantityInventory}, actual={chemist.Inventory._GetItemAmount(state.TargetItem?.ID)}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Inventory loss detected");
+        return;
+      }
+      state.QuantityInventory = curInv;
+      if (!IsAtStation(behaviour))
+      {
+        WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInserting: Moving to station for {chemist?.fullName}", isChemist: true);
+        return;
+      }
+      if (!ValidateInsertState(chemist, behaviour, state))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleInserting: Insert state invalid for {chemist?.fullName}, atStation={IsAtStation(behaviour)}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Insert state invalid");
+        return;
+      }
+
+      if (!InsertItemsFromInventory(behaviour, state))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleInserting: Failed to insert {state.QuantityInventory} for {chemist?.fullName}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Failed to insert items");
+        return;
+      }
+
+      if (ValidateOperationState(chemist, behaviour, state))
+      {
+        TransitionState(behaviour, state, EState.StartingOperation, $"Can start operation after inserting {state.QuantityInventory} items");
+        HandleStartingOperation(behaviour, state);
+      }
+      else
+      {
+        TransitionState(behaviour, state, EState.Idle, $"Inserted {curInv - state.QuantityInventory} items, but failed validate operation state");
+      }
+    }
+
+    protected virtual void HandleStartingOperation(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleStartingOperation: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+
+      if (!IsAtStation(behaviour))
+      {
+        WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleStartingOperation: Moving to station for {chemist?.fullName}", isChemist: true);
+        return;
+      }
+      if (!ValidateOperationState(chemist, behaviour, state))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleStartingOperation: Operation state invalid for {chemist?.fullName}, returning to Idle", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Invalid operation state");
+        state.OperationPending = false;
+        return;
+      }
+      state.OperationPending = true;
+      station.StartOperation(behaviour);
+      TransitionState(behaviour, state, EState.Completed, "Operation started");
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleStartingOperation: Operation started for {chemist?.fullName}", isChemist: true);
+    }
+
+    protected virtual void HandleCompleted(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleCompleted: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+      if (state.OperationPending)
+      {
+        if (ValidateCompletedState(chemist, behaviour, state))
+        {
+          state.OperationPending = false;
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleCompleted: Operation complete but validation failed for {chemist?.fullName}, returning to Idle", isChemist: true);
+          TransitionState(behaviour, state, EState.Idle, "Invalid completed state");
+          return;
+        }
+        if (!station.HasActiveOperation)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation pending but no active operation for {chemist?.fullName}, waiting", isChemist: true);
+          return;
+        }
+        state.OperationPending = false;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation started, clearing pending for {chemist?.fullName}", isChemist: true);
+      }
+      else if (!station.HasActiveOperation)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation complete, disabling for {chemist?.fullName}", isChemist: true);
+        Disable(behaviour);
+      }
+    }
+
+    protected virtual void WalkToDestination(Behaviour behaviour, StateData state, ITransitEntity destination)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"WalkToDestination: Entered for {behaviour.Npc?.fullName}, destination={destination?.Name}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      if (destination == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"WalkToDestination: Destination null for {chemist?.fullName}, disabling behaviour", isChemist: true);
+        Disable(behaviour);
+        return;
+      }
+      if (!chemist.Movement.CanGetTo(destination, 1f))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"WalkToDestination: Cannot reach {destination.Name} for {chemist?.fullName}, disabling behaviour", isChemist: true);
+        Disable(behaviour); //TODO how to exclude blocked shelves?
+        return;
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"WalkToDestination: Initiating movement to {destination.Name} for {chemist?.fullName}", isChemist: true);
+      Vector3 initialPosition = chemist.transform.position;
+      state.MovementStartFrames = 0;
+      behaviour.SetDestination(destination, true);
+      state.Destination = destination;
+      state.MoveTimeout = 5f;
+      state.MoveElapsed = 0f;
+      state.IsMoving = true;
+      if (state.WalkToSuppliesRoutine != null)
+        MelonCoroutines.Stop(state.WalkToSuppliesRoutine);
+      state.WalkToSuppliesRoutine = (Coroutine)MelonCoroutines.Start(MonitorMovementStart(chemist, initialPosition, state, behaviour));
+    }
+
+    private IEnumerator MonitorMovementStart(Chemist chemist, Vector3 initialPosition, StateData state, Behaviour behaviour)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MonitorMovementStart: Entered for {chemist?.fullName}, initialPos={initialPosition}", isChemist: true);
+      int maxFrames = 20;
+      while (state.MovementStartFrames < maxFrames)
+      {
+        state.MovementStartFrames++;
+        if (chemist.Movement.IsMoving || Vector3.Distance(chemist.transform.position, initialPosition) > 0.01f)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"MonitorMovementStart: Movement started for {chemist?.fullName}", isChemist: true);
+          state.WalkToSuppliesRoutine = null;
+          yield break;
+        }
+        yield return new WaitForSeconds(0.2f);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MonitorMovementStart: Movement failed to start after {maxFrames} frames for {chemist?.fullName}, returning to Idle", isChemist: true);
+      state.IsMoving = false;
+      state.MovementStartFrames = 0;
+      TransitionState(behaviour, state, EState.Idle, "Movement failed to start");
+    }
+
+    public virtual void UpdateMovement(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateMovement: Entered for {behaviour.Npc?.fullName}, isMoving={state.IsMoving}, destination={state.Destination?.Name}", isChemist: true);
+      if (!state.IsMoving) return;
+      Chemist chemist = behaviour.Npc as Chemist;
+      state.MoveElapsed += Time.deltaTime;
+      if (state.MoveElapsed >= state.MoveTimeout)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateMovement: Timeout moving to {state.Destination?.Name} for {chemist?.fullName}, returning to Idle", isChemist: true);
+        state.IsMoving = false;
+        state.MovementStartFrames = 0;
+        TransitionState(behaviour, state, EState.Idle, "Movement timeout");
+        return;
+      }
+      if (!chemist.Movement.IsMoving)
+      {
+        state.IsMoving = false;
+        state.MovementStartFrames = 0;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateMovement: Movement complete to {state.Destination?.Name} for {chemist?.fullName}", isChemist: true);
+        if (state.Destination == state.LastSupply)
+          HandleGrabbing(behaviour, state);
+        else if (state.Destination == GetStation(behaviour)?.Station)
+          HandleInserting(behaviour, state);
+      }
+    }
+
+    public virtual void PrepareToFetchItems(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PrepareToFetchItems: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      if (state.Fetching.Count == 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PrepareToFetchItems: No shelves available for {chemist?.fullName}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}, disabling behaviour", isChemist: true);
+        state.FailedToFetch = true;
+        Disable(behaviour);
+        return;
+      }
+      var shelf = state.Fetching.First().Key;
+      ConfigurationExtensions.NPCSupply[chemist.GUID] = new ObjectField(chemist.configuration) { SelectedObject = shelf };
+      state.LastSupply = shelf;
+      state.FailedToFetch = false;
+      if (!IsAtShelf(behaviour, state))
+      {
+        WalkToDestination(behaviour, state, shelf);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PrepareToFetchItems: Moving to shelf {shelf.GUID} for {state.TargetItem?.ID}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      }
+      else
+      {
+        HandleGrabbing(behaviour, state);
+      }
+    }
+
+    public virtual bool InsertItemsFromInventory(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InsertItemsFromInventory: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+      if (!ValidateInsertState(chemist, behaviour, state) || station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InsertItemsFromInventory: Invalid state or station for {chemist?.fullName}, returning 0", isChemist: true);
+        return false;
+      }
+      if (station.InsertSlot.ItemInstance != null && station.InsertSlot.ItemInstance.ID != state.TargetItem.ID)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InsertItemsFromInventory: Insert slot contains wrong item {station.InsertSlot.ItemInstance.ID} for {chemist?.fullName}", isChemist: true);
+        return false;
+      }
+      int toInsert = Math.Min(state.QuantityInventory, state.QuantityWanted);
+      int currentQuantity = station.InsertSlot.Quantity;
+      station.InsertSlot.InsertItem(state.TargetItem.GetCopy(toInsert));
+      int newQuantity = station.InsertSlot.Quantity;
+      int inserted = newQuantity - currentQuantity;
+      if (inserted > 0)
+      {
+        RemoveItem(chemist, inserted, state);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InsertItemsFromInventory: Inserted {inserted} of {state.TargetItem?.ID} for {chemist?.fullName}", isChemist: true);
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InsertItemsFromInventory: Failed to insert {state.TargetItem?.ID} for {chemist?.fullName}", isChemist: true);
+      }
+      return true;
+    }
+
+    public virtual void GrabItem(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GrabItem: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      IStationAdapter station = GetStation(behaviour);
+
+      if (!IsAtShelf(behaviour, state))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GrabItem: Not at supplies for {chemist.fullName}", isChemist: true);
+        WalkToDestination(behaviour, state, state.LastSupply);
+        return;
+      }
+      PlaceableStorageEntity shelf = state.Fetching.First().Key;
+      int available = GetItemQuantityInShelf(shelf, state.TargetItem);
+      int quantityToFetch = Math.Min(state.Fetching[shelf], state.QuantityWanted - state.QuantityInventory);
+      quantityToFetch = Math.Min(quantityToFetch, available);
+      if (quantityToFetch <= 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GrabItem: quantityToFetch <= 0 {shelf.GUID}, available={available}, wanted={quantityToFetch} for {chemist?.fullName}", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "Failed to fetch");
+        return;
+      }
+      int fetched = 0;
+      foreach (ItemSlot slot in (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()))
+      {
+        if (slot?.ItemInstance == null || slot.Quantity <= 0 || slot.ItemInstance.ID.ToLower() != state.TargetItem.ID.ToLower())
+          continue;
+        int amountToTake = Math.Min(slot.Quantity, quantityToFetch - fetched);
+        if (amountToTake <= 0) continue;
+        ItemInstance itemCopy = slot.ItemInstance.GetCopy(amountToTake);
+        if (itemCopy == null) continue;
+        chemist.Inventory.InsertItem(itemCopy);
+        slot.ChangeQuantity(-amountToTake, false);
+        fetched += amountToTake;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GrabItem: Took {amountToTake} of {state.TargetItem.ID} from {shelf.GUID} for {chemist?.fullName}", isChemist: true);
+        if (fetched >= quantityToFetch) break;
+      }
+      state.QuantityInventory += fetched;
+      state.Fetching.Remove(shelf);
+      if (fetched == 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GrabItem: No items fetched from {shelf.GUID} for {chemist?.fullName}", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "No items fetched from");
+        return;
+      }
+      if (state.QuantityInventory >= state.QuantityWanted)
+      {
+        TransitionState(behaviour, state, EState.Inserting, "Sufficient inventory after grabbing");
+        if (!IsAtStation(behaviour))
+          WalkToDestination(behaviour, state, (ITransitEntity)station.Station);
+        else
+          HandleInserting(behaviour, state);
+      }
+      else if (state.Fetching.Count > 0)
+      {
+        state.LastSupply = state.Fetching.First().Key;
+        TransitionState(behaviour, state, EState.Grabbing, "Need more items, moving to next shelf");
+        WalkToDestination(behaviour, state, state.LastSupply);
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GrabItem: No more shelves available for {chemist?.fullName}, qtyWanted={state.QuantityWanted}, invQty={state.QuantityInventory}", isChemist: true);
+        TransitionState(behaviour, state, EState.Idle, "No more shelves available for");
+        return;
+      }
+      if (state.GrabRoutine != null)
+        MelonCoroutines.Stop(state.GrabRoutine);
+      state.GrabRoutine = (Coroutine)MelonCoroutines.Start(GrabRoutine(behaviour, state));
+    }
+
+    public abstract IStationAdapter GetStation(Behaviour behaviour);
+
+    public virtual bool IsAtShelf(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"IsAtShelf: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}", isChemist: true);
+      if (state.Fetching.Count == 0) return false;
+      Chemist chemist = behaviour.Npc as Chemist;
+      var shelf = state.Fetching.First().Key;
+      bool atShelf = NavMeshUtility.IsAtTransitEntity(shelf, chemist, 0.4f);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"IsAtShelf: Result={atShelf}, chemist={chemist?.fullName}, ChemistPos={chemist.transform.position}, SupplyPos={shelf.transform.position}, Distance={Vector3.Distance(chemist.transform.position, shelf.transform.position)}",
+          isChemist: true);
+      return atShelf;
+    }
+
+    public virtual IEnumerator GrabRoutine(Behaviour behaviour, StateData state)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GrabRoutine: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      if (chemist.Avatar?.Anim != null)
+      {
+        chemist.Avatar.Anim.ResetTrigger("GrabItem");
+        chemist.Avatar.Anim.SetTrigger("GrabItem");
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GrabRoutine: Triggered GrabItem animation for {chemist?.fullName}", isChemist: true);
+        yield return new WaitForSeconds(0.2f);
+      }
+      state.GrabRoutine = null;
+    }
+
+    protected virtual void RemoveItem(NPC npc, int quantity, StateData state, string id = "")
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"RemoveItem: Entered for {npc?.fullName}, quantity={quantity}, targetItem={state.TargetItem?.ID}", isChemist: true);
+      string targetItemId = string.IsNullOrEmpty(id) ? state.TargetItem.ID : id;
       int quantityToRemove = quantity;
-      List<(ItemSlot slot, int amount)> toRemove = [];
+      List<(ItemSlot slot, int amount)> toRemove = new();
       foreach (ItemSlot slot in npc.Inventory.ItemSlots)
       {
-        if (slot?.ItemInstance != null && slot.ItemInstance.ID == targetItem && slot.Quantity > 0)
+        if (slot?.ItemInstance != null && slot.ItemInstance.ID == targetItemId && slot.Quantity > 0)
         {
           int amount = Mathf.Min(slot.Quantity, quantityToRemove);
           toRemove.Add((slot, amount));
@@ -524,242 +695,223 @@ namespace NoLazyWorkers.Chemists
             break;
         }
       }
-
       foreach (var (slot, amount) in toRemove)
       {
         slot.SetQuantity(slot.Quantity - amount);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveItem: Removed {amount} of {targetItemId} from {npc?.fullName}", isChemist: true);
       }
+      state.QuantityInventory = npc.Inventory._GetItemAmount(state.TargetItem.ID);
     }
 
-    public static void Disable(Behaviour __instance)
+    public virtual void Disable(Behaviour behaviour)
     {
-      if (states.TryGetValue(__instance, out var state))
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Disable: Entered for {behaviour.Npc?.fullName}", isChemist: true);
+      Chemist chemist = behaviour.Npc as Chemist;
+      if (states.TryGetValue(behaviour, out var state))
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"Disable: Disabling behaviour for {chemist?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}, fetchingCount={state.Fetching.Count}",
+            isChemist: true);
         if (state.WalkToSuppliesRoutine != null)
-        {
           MelonCoroutines.Stop(state.WalkToSuppliesRoutine);
-          state.WalkToSuppliesRoutine = null;
-        }
         if (state.GrabRoutine != null)
-        {
           MelonCoroutines.Stop(state.GrabRoutine);
-          state.GrabRoutine = null;
-        }
         if (state.InsertRoutine != null)
-        {
           MelonCoroutines.Stop(state.InsertRoutine);
-          state.InsertRoutine = null;
-        }
-        state.TargetItem = null;
-        state.ClearStationSlot = false;
-        state.QuantityToFetch = 0;
-        state.IsFetchingPrimary = false;
-        state.IsFetchingSecondary = false;
-        state.CurrentState = EState.Idle;
-        state.LastSupply = null;
-        states.Remove(__instance);
+        state.WalkToSuppliesRoutine = null;
+        state.GrabRoutine = null;
+        state.InsertRoutine = null;
+        state.Fetching.Clear();
+        state.OperationPending = false;
+        state.IsMoving = false;
+        states.Remove(behaviour);
       }
-      __instance.Disable();
-      if (DebugLogs.All || DebugLogs.Chemist)
-        MelonLogger.Msg($"BehaviourPatch.Disable: Disabled behaviour for {__instance.Npc?.fullName ?? "null"}, type={__instance.GetType().Name}");
+      behaviour.Disable();
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Disable: Behaviour disabled for {chemist?.fullName}", isChemist: true);
     }
 
-    public static bool IsAtStation(Behaviour __instance)
+    public virtual bool IsAtStation(Behaviour behaviour)
     {
-      ITransitEntity station = (ITransitEntity)(__instance as StartMixingStationBehaviour)?.targetStation ?? (__instance as StartCauldronBehaviour)?.Station;
-      bool atStation = station != null && Vector3.Distance(__instance.Npc.transform.position, GetStationAccessPoint(__instance)) < 1f;
-      if (DebugLogs.All || DebugLogs.Chemist)
-        MelonLogger.Msg($"BehaviourPatch.IsAtStation: Result={atStation}, chemist={__instance.Npc?.fullName ?? "null"}, type={__instance.GetType().Name}");
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"IsAtStation: Entered for {behaviour.Npc?.fullName}", isChemist: true);
+      IStationAdapter station = GetStation(behaviour);
+      if (station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"IsAtStation: Station is null for {behaviour.Npc?.fullName}", isChemist: true);
+        return false;
+      }
+      float distance = Vector3.Distance(behaviour.Npc.transform.position, station.GetAccessPoint());
+      bool atStation = distance < 1.5f;
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"IsAtStation: Result={atStation}, Distance={distance:F2}, chemist={behaviour.Npc?.fullName}, station={station.GUID}",
+          isChemist: true);
       return atStation;
     }
 
-    public static Vector3 GetStationAccessPoint(Behaviour __instance)
+    public static void Cleanup(Behaviour behaviour)
     {
-      ITransitEntity station = (ITransitEntity)(__instance as StartMixingStationBehaviour)?.targetStation ?? (__instance as StartCauldronBehaviour)?.Station;
-      return station?.AccessPoints.FirstOrDefault()?.position ?? __instance.Npc.transform.position;
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Cleanup: Entered for {behaviour.Npc?.fullName}", isChemist: true);
+      if (states.ContainsKey(behaviour))
+      {
+        var state = states[behaviour];
+        if (state.WalkToSuppliesRoutine != null) MelonCoroutines.Stop(state.WalkToSuppliesRoutine);
+        if (state.GrabRoutine != null) MelonCoroutines.Stop(state.GrabRoutine);
+        if (state.InsertRoutine != null) MelonCoroutines.Stop(state.InsertRoutine);
+        states.Remove(behaviour);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed state for {behaviour.Npc?.fullName}", isChemist: true);
+      }
     }
+  }
 
-    // Initialize state for Chemist behaviors
+  [HarmonyPatch(typeof(Chemist))]
+  public class ChemistPatch
+  {
     [HarmonyPatch("Awake")]
     [HarmonyPostfix]
     static void AwakePostfix(Chemist __instance)
     {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ChemistPatch.Awake: Entered for {__instance?.fullName}", isChemist: true);
       try
       {
-        if (!states.ContainsKey(__instance.StartCauldronBehaviour))
-        {
-          states[__instance.StartCauldronBehaviour] = new StateData { CurrentState = EState.Idle };
-        }
-        if (!states.ContainsKey(__instance.StartMixingStationBehaviour))
-        {
-          states[__instance.StartMixingStationBehaviour] = new StateData { CurrentState = EState.Idle };
-        }
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"ChemistPatch.Awake: Initialized states for {__instance?.fullName ?? "null"}");
+        ChemistBehaviour.Cleanup(__instance.StartCauldronBehaviour);
+        ChemistBehaviour.Cleanup(__instance.StartMixingStationBehaviour);
+        ChemistBehaviour.states[__instance.StartCauldronBehaviour] = new ChemistBehaviour.StateData { CurrentState = ChemistBehaviour.EState.Idle };
+        ChemistBehaviour.states[__instance.StartMixingStationBehaviour] = new ChemistBehaviour.StateData { CurrentState = ChemistBehaviour.EState.Idle };
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.Awake: Reinitialized states for {__instance?.fullName}", isChemist: true);
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"ChemistPatch.Awake: Failed for chemist: {__instance?.fullName ?? "null"}, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistPatch.Awake: Failed for chemist: {__instance?.fullName}, error: {e}", isChemist: true);
       }
     }
 
-    // Patch TryStartNewTask to orchestrate tasks
     [HarmonyPatch("TryStartNewTask")]
     [HarmonyPrefix]
     static bool TryStartNewTaskPrefix(Chemist __instance)
     {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ChemistPatch.TryStartNewTask: Entered for {__instance?.fullName}", isChemist: true);
       if (!InstanceFinder.IsServer)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Skipping, not server for {__instance?.fullName}", isChemist: true);
         return false;
-
+      }
       try
       {
-        // Check for ovens ready to finish
         List<LabOven> labOvensReadyToFinish = __instance.GetLabOvensReadyToFinish();
         if (labOvensReadyToFinish.Count > 0)
         {
           __instance.FinishLabOven(labOvensReadyToFinish[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Finishing lab oven for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
-        // Check for stations ready to start
         List<LabOven> labOvensReadyToStart = __instance.GetLabOvensReadyToStart();
         if (labOvensReadyToStart.Count > 0)
         {
           __instance.StartLabOven(labOvensReadyToStart[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Starting lab oven for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<ChemistryStation> chemistryStationsReadyToStart = __instance.GetChemistryStationsReadyToStart();
         if (chemistryStationsReadyToStart.Count > 0)
         {
           __instance.StartChemistryStation(chemistryStationsReadyToStart[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Starting chemistry station for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<Cauldron> cauldronsReadyToStart = __instance.GetCauldronsReadyToStart();
         if (cauldronsReadyToStart.Count > 0)
         {
           __instance.StartCauldron(cauldronsReadyToStart[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Starting cauldron for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<MixingStation> mixingStationsReadyToStart = __instance.GetMixingStationsReadyToStart();
         if (mixingStationsReadyToStart.Count > 0)
         {
           __instance.StartMixingStation(mixingStationsReadyToStart[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Starting mixing station for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
-        // Check for stations with outputs to move
         List<LabOven> labOvensReadyToMove = __instance.GetLabOvensReadyToMove();
         if (labOvensReadyToMove.Count > 0)
         {
-          MoveOutputToShelf(__instance, labOvensReadyToMove[0].OutputSlot.ItemInstance);
+          MoveOutputToShelf(__instance, labOvensReadyToMove[0].OutputSlot.ItemInstance, labOvensReadyToMove[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Moving lab oven output for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<ChemistryStation> chemStationsReadyToMove = __instance.GetChemStationsReadyToMove();
         if (chemStationsReadyToMove.Count > 0)
         {
-          MoveOutputToShelf(__instance, chemStationsReadyToMove[0].OutputSlot.ItemInstance);
+          MoveOutputToShelf(__instance, chemStationsReadyToMove[0].OutputSlot.ItemInstance, chemStationsReadyToMove[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Moving chemistry station output for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<Cauldron> cauldronsReadyToMove = __instance.GetCauldronsReadyToMove();
         if (cauldronsReadyToMove.Count > 0)
         {
-          MoveOutputToShelf(__instance, cauldronsReadyToMove[0].OutputSlot.ItemInstance);
+          MoveOutputToShelf(__instance, cauldronsReadyToMove[0].OutputSlot.ItemInstance, cauldronsReadyToMove[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Moving cauldron output for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         List<MixingStation> mixStationsReadyToMove = __instance.GetMixStationsReadyToMove();
         if (mixStationsReadyToMove.Count > 0)
         {
-          MoveOutputToShelf(__instance, mixStationsReadyToMove[0].OutputSlot.ItemInstance);
+          MoveOutputToShelf(__instance, mixStationsReadyToMove[0].OutputSlot.ItemInstance, mixStationsReadyToMove[0]);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: Moving mixing station output for {__instance?.fullName}", isChemist: true);
           return false;
         }
-
         __instance.SubmitNoWorkReason("No tasks available.", string.Empty, 0);
         __instance.SetIdle(true);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistPatch.TryStartNewTask: No tasks available, setting idle for {__instance?.fullName}", isChemist: true);
         return false;
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"ChemistPatch.TryStartNewTask: Failed for chemist: {__instance?.fullName ?? "null"}, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistPatch.TryStartNewTask: Failed for chemist: {__instance?.fullName}, error: {e}", isChemist: true);
         __instance.SubmitNoWorkReason("Task assignment error.", string.Empty, 0);
         __instance.SetIdle(true);
         return false;
       }
     }
-    private static void MoveOutputToShelf(Chemist chemist, ItemInstance outputItem)
+
+    private static void MoveOutputToShelf(Chemist chemist, ItemInstance outputItem, ITransitEntity source)
     {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MoveOutputToShelf: Entered for {chemist?.fullName}, item={outputItem?.ID}", isChemist: true);
       PlaceableStorageEntity shelf = FindShelfForDelivery(chemist, outputItem);
       if (shelf == null)
       {
         chemist.SubmitNoWorkReason($"No shelf for {outputItem.ID}.", string.Empty, 0);
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"ChemistPatch.MoveOutputToShelf: No shelf found for {outputItem.ID} for {chemist?.fullName ?? "null"}");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MoveOutputToShelf: No shelf found for {outputItem.ID} for {chemist?.fullName}", isChemist: true);
         return;
       }
-
-      TransitRoute route = new TransitRoute(null, shelf);
+      TransitRoute route = new TransitRoute(source, shelf);
       if (chemist.MoveItemBehaviour.IsTransitRouteValid(route, outputItem.ID))
       {
         chemist.MoveItemBehaviour.Initialize(route, outputItem);
         chemist.MoveItemBehaviour.Enable_Networked(null);
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Msg($"ChemistPatch.MoveOutputToShelf: Moving {outputItem.ID} to shelf {shelf.GUID} for {chemist?.fullName ?? "null"}");
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"MoveOutputToShelf: Moving {outputItem.ID} to shelf {shelf.GUID} for {chemist?.fullName}", isChemist: true);
       }
       else
       {
         chemist.SubmitNoWorkReason($"Invalid route to shelf for {outputItem.ID}.", string.Empty, 0);
-        if (DebugLogs.All || DebugLogs.Chemist)
-          MelonLogger.Warning($"ChemistPatch.MoveOutputToShelf: Invalid route to shelf {shelf.GUID} for {outputItem.ID} for {chemist?.fullName ?? "null"}");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MoveOutputToShelf: Invalid route to shelf {shelf.GUID} for {outputItem.ID} for {chemist?.fullName}", isChemist: true);
       }
     }
   }
 
-  public static class ChemistExtensions
+  [HarmonyPatch(typeof(Employee))]
+  public class EmployeePatch
   {
-    public static ItemField GetMixerItemForProductSlot(MixingStation station)
+    [HarmonyPatch("OnDestroy")]
+    [HarmonyPostfix]
+    static void OnDestroyPostfix(Employee __instance)
     {
-      if (station == null)
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"EmployeePatch.OnDestroy: Entered for {__instance?.fullName}", isChemist: true);
+      if (__instance is Chemist chemist)
       {
-        if (DebugLogs.All || DebugLogs.MixingStation)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot item is not a ProductDefinition for station={station?.GUID}");
-        return null;
+        ChemistBehaviour.Cleanup(chemist.StartCauldronBehaviour);
+        ChemistBehaviour.Cleanup(chemist.StartMixingStationBehaviour);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"EmployeePatch.OnDestroy: Cleaned up states for {chemist?.fullName}", isChemist: true);
       }
-
-      // Get the product from the product slot
-      var productInSlot = station.ProductSlot.ItemInstance?.Definition as ProductDefinition;
-      if (productInSlot == null)
-      {
-        if (DebugLogs.All || DebugLogs.MixingStation)
-          MelonLogger.Warning($"GetMixerItemForProductSlot: Product slot {station.ProductSlot.ItemInstance?.Definition} item is not a ProductDefinition for station={station?.GUID}");
-        return null;
-      }
-
-      // Get the routes for the station
-      if (!MixingStationExtensions.MixingRoutes.TryGetValue(station.GUID, out var routes) || routes == null || routes.Count == 0)
-      {
-        if (DebugLogs.All || DebugLogs.MixingStation)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No routes defined for station={station.GUID}");
-        return null;
-      }
-      // Find the first route where the product matches
-      var matchingRoute = routes.FirstOrDefault(route =>
-          route.Product?.SelectedItem != null &&
-          route.Product.SelectedItem == productInSlot);
-      if (matchingRoute == null)
-      {
-        if (DebugLogs.All || DebugLogs.MixingStation)
-          MelonLogger.Msg($"GetMixerItemForProductSlot: No route matches product={productInSlot.Name} for station={station.GUID}");
-        return null;
-      }
-      // Return the mixerItem from the matching route
-      if (DebugLogs.All || DebugLogs.MixingStation)
-        MelonLogger.Msg($"GetMixerItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={station.GUID}");
-      return matchingRoute.MixerItem;
     }
   }
 }

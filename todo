@@ -1,4 +1,6 @@
-# handlers
+# employees
+
+## handlers
 
 move items from any shelf to assigned shelf
 move items from loading dock to assigned/any shelf
@@ -8,7 +10,7 @@ package product and move to assigned/any shelf
 - if packaging station is assigned jars and less than 5 unpackaged product are in the station, then handler will get baggies and package them into baggies
 move packaged product to assigned/any shelf
 
-# botanists
+## botanists
 
 get pot supplies from any/assigned shelf
 deliver harvest to assigned/any shelf

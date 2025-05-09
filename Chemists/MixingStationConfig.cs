@@ -18,6 +18,9 @@ using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 using static NoLazyWorkers.NoLazyUtilities;
+using static NoLazyWorkers.Chemists.ChemistExtensions;
+using ScheduleOne.NPCs.Behaviour;
+using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 namespace NoLazyWorkers.Chemists
 {
   public static class MixingStationExtensions
@@ -25,6 +28,43 @@ namespace NoLazyWorkers.Chemists
     public static Dictionary<Guid, MixingStationConfiguration> Config = [];
     public static Dictionary<Guid, List<MixingRoute>> MixingRoutes = [];
     public static GameObject MixingRouteListTemplate { get; set; }
+
+    public class MixingStationAdapter : IStationAdapter
+    {
+      public readonly MixingStation _station;
+
+      public MixingStationAdapter(MixingStation station)
+      {
+        _station = station;
+      }
+      public object Station => _station;
+      public string Name => _station.Name;
+      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      public ItemSlot InsertSlot => _station.MixerSlot;
+      public List<ItemSlot> ProductSlots => [_station.ProductSlot];
+      public ItemSlot OutputSlot => _station.OutputSlot;
+      public bool IsInUse => _station.IsOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
+      public bool HasActiveOperation => _station.CurrentMixOperation != null;
+      public int StartThreshold => (int)(_station.Configuration as MixingStationConfiguration).StartThrehold.Value;
+      Guid IStationAdapter.GUID => _station.GUID;
+      public int MaxProductQuantity => 20;
+      public void StartOperation(Behaviour behaviour)
+      {
+        if (behaviour is StartMixingStationBehaviour mixingBehaviour)
+        {
+          mixingBehaviour.StartCook();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}", isStation: true);
+        }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"MixingStationAdapter.StartOperation: Invalid behaviour type for station {_station.GUID}, expected StartMixingStationBehaviour, got {behaviour?.GetType().Name}", isStation: true);
+        }
+      }
+      public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
+      public ItemField GetInputItemForProduct() => MixingStationUtilities.GetInputItemForProductSlot(this);
+    }
 
     public static void RestoreConfigurations()
     {
@@ -700,7 +740,8 @@ namespace NoLazyWorkers.Chemists
         if (!MixingStationExtensions.Config.ContainsKey(guid) || MixingStationExtensions.Config[guid] == null)
         {
           MixingStationExtensions.Config[guid] = __instance;
-          MelonLogger.Msg("MixingStationConfigurationPatch: Initialized MixingConfig");
+          if (DebugLogs.All || DebugLogs.MixingStation)
+            MelonLogger.Msg("MixingStationConfigurationPatch: Initialized MixingConfig");
         }
         if (!MixingStationExtensions.MixingRoutes.ContainsKey(guid) || MixingStationExtensions.MixingRoutes[guid] == null)
         {
