@@ -22,45 +22,62 @@ namespace NoLazyWorkers.Botanists
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Botanist) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Processing configs, count: {configs?.Count ?? 0}"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"BotanistConfigPanelBindPatch: Processing configs, count: {configs?.Count ?? 0}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+
         if (__instance == null)
         {
-          MelonLogger.Error("BotanistConfigPanelBindPatch: __instance is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "BotanistConfigPanelBindPatch: __instance is null",
+              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
           return;
         }
 
         // Verify UI components
         if (__instance.SuppliesUI == null)
         {
-          MelonLogger.Error("BotanistConfigPanelBindPatch: SuppliesUI is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "BotanistConfigPanelBindPatch: SuppliesUI is null",
+              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
           return;
         }
         if (__instance.PotsUI == null)
         {
-          MelonLogger.Error("BotanistConfigPanelBindPatch: PotsUI is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "BotanistConfigPanelBindPatch: PotsUI is null",
+              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
           return;
         }
 
         // Hide SuppliesUI
         __instance.SuppliesUI.gameObject.SetActive(false);
-        if (DebugLogs.All || DebugLogs.Botanist) { MelonLogger.Msg("BotanistConfigPanelBindPatch: Hid SuppliesUI"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "BotanistConfigPanelBindPatch: Hid SuppliesUI",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
 
         // Move PotsUI to SuppliesUI's y-coordinate
         RectTransform suppliesRect = __instance.SuppliesUI.GetComponent<RectTransform>();
         RectTransform potsRect = __instance.PotsUI.GetComponent<RectTransform>();
         if (suppliesRect == null || potsRect == null)
         {
-          MelonLogger.Error("BotanistConfigPanelBindPatch: SuppliesUI or PotsUI RectTransform is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "BotanistConfigPanelBindPatch: SuppliesUI or PotsUI RectTransform is null",
+              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
           return;
         }
 
         float suppliesY = suppliesRect.anchoredPosition.y;
         potsRect.anchoredPosition = new Vector2(potsRect.anchoredPosition.x, suppliesY);
-        if (DebugLogs.All || DebugLogs.Botanist) { MelonLogger.Msg($"BotanistConfigPanelBindPatch: Moved PotsUI to y={suppliesY}"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"BotanistConfigPanelBindPatch: Moved PotsUI to y={suppliesY}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"BotanistConfigPanelBindPatch: Failed, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"BotanistConfigPanelBindPatch: Failed, error: {e}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Settings, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -85,10 +102,9 @@ namespace NoLazyWorkers.Botanists
                 if (PotExtensions.Supply.TryGetValue(pot.GUID, out var potSupply) && potSupply != null)
                 {
                   __instance.AssignSuppliesEntry.Complete();
-                  if (DebugLogs.All || DebugLogs.Botanist)
-                  {
-                    MelonLogger.Msg($"QuestBotanistsMinPassPatch: Completed AssignSuppliesEntry for botanist {botanist.name}, pot {pot.name}");
-                  }
+                  DebugLogger.Log(DebugLogger.LogLevel.Info,
+                      $"QuestBotanistsMinPassPatch: Completed AssignSuppliesEntry for botanist {botanist.name}, pot {pot.name}",
+                      DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
                   return true;
                 }
               }
@@ -99,7 +115,9 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"QuestBotanistsMinPassPatch: Failed, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"QuestBotanistsMinPassPatch: Failed, error: {e}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot, DebugLogger.Category.Stacktrace);
         return true;
       }
     }
@@ -112,11 +130,14 @@ namespace NoLazyWorkers.Botanists
     public static void Prefix(BotanistConfiguration __instance)
     {
       __instance.Supplies.SelectedObject = null; // Clear before serialization
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"BotanistConfigurationGetSaveStringPatch: Cleared Supplies.SelectedObject for serialization",
+          DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
     }
   }
 
   [HarmonyPatch(typeof(Botanist), "GetDryableInSupplies")]
-  public static class BotanistGetDryableInSuppliesPatch //todo: add supply to racks then check each rack's supply shelf. otherwise, check shelves with product set matching dryable's product set
+  public static class BotanistGetDryableInSuppliesPatch
   {
     [HarmonyPrefix]
     public static bool Prefix(Botanist __instance, ref QualityItemInstance __result)
@@ -125,7 +146,9 @@ namespace NoLazyWorkers.Botanists
       {
         if (!(__instance.Configuration is BotanistConfiguration botanistConfig))
         {
-          MelonLogger.Warning("BotanistGetDryableInSuppliesPatch: BotanistConfiguration is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              "BotanistGetDryableInSuppliesPatch: BotanistConfiguration is null",
+              DebugLogger.Category.Botanist);
           __result = null;
           return false;
         }
@@ -148,10 +171,9 @@ namespace NoLazyWorkers.Botanists
             if (slot.Quantity > 0 && ItemFilter_Dryable.IsItemDryable(slot.ItemInstance))
             {
               __result = slot.ItemInstance as QualityItemInstance;
-              if (DebugLogs.All || DebugLogs.Botanist)
-              {
-                MelonLogger.Msg($"BotanistGetDryableInSuppliesPatch: Found dryable {__result?.ID ?? "null"} in pot {pot.name}'s supply");
-              }
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"BotanistGetDryableInSuppliesPatch: Found dryable {__result?.ID ?? "null"} in pot {pot.name}'s supply",
+                  DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
               return false;
             }
           }
@@ -162,7 +184,9 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"BotanistGetDryableInSuppliesPatch: Failed, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"BotanistGetDryableInSuppliesPatch: Failed, error: {e}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot, DebugLogger.Category.Stacktrace);
         __result = null;
         return false;
       }
@@ -178,15 +202,17 @@ namespace NoLazyWorkers.Botanists
     {
       if (PotExtensions.Supply.TryGetValue(pot.GUID, out var supply))
       {
-        if (DebugLogs.All || DebugLogs.Botanist)
-          MelonLogger.Msg($"PotActionBehaviourPatch InitializePrefix: Found supply {supply.SelectedObject.GUID} for {__instance.botanist.fullName}");
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"PotActionBehaviourPatch InitializePrefix: Found supply {supply.SelectedObject.GUID} for {__instance.botanist.fullName}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
         __instance.botanist.configuration.Supplies.SelectedObject = supply.SelectedObject;
         return true;
       }
       else
       {
-        if (DebugLogs.All || DebugLogs.Botanist)
-          MelonLogger.Msg($"PotActionBehaviourPatch InitializePrefix: Pot {pot.GUID} does not have a supply for {__instance.botanist.fullName}");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"PotActionBehaviourPatch InitializePrefix: Pot {pot.GUID} does not have a supply for {__instance.botanist.fullName}",
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
         __instance.Disable();
         return false;
       }

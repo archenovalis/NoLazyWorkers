@@ -3,13 +3,13 @@ using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using UnityEngine;
-using static NoLazyWorkers.Chemists.ChemistExtensions;
+using static NoLazyWorkers.General.GeneralExtensions;
 
 namespace NoLazyWorkers.Chemists
 {
   public static class LabOvenExtensions
   {
-    public class LabOvenAdapter : IStationAdapter
+    public class LabOvenAdapter : IStationAdapter<LabOven>
     {
       private readonly LabOven _station;
 
@@ -18,44 +18,32 @@ namespace NoLazyWorkers.Chemists
         _station = station;
       }
 
+      public LabOven Station => _station;
       public string Name => _station.Name;
-      Vector3 IStationAdapter.GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
       public bool IsInUse => _station.isOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
       public bool HasActiveOperation => _station.CurrentOperation != null;
-
-      Guid IStationAdapter.GUID => _station.GUID;
-
+      public Guid GUID => _station.GUID;
       public ItemSlot InsertSlot => null;
-
       public List<ItemSlot> ProductSlots => [_station.IngredientSlot];
-
-      ItemSlot IStationAdapter.OutputSlot => _station.OutputSlot;
-
+      public ItemSlot OutputSlot => _station.OutputSlot;
       int IStationAdapter.StartThreshold => 1;
-
-      public object Station => _station;
-
-      public int MaxProductQuantity => throw new NotImplementedException();
-
+      public int MaxProductQuantity => 20;
       public int GetInputQuantity() => _station.IngredientSlot?.Quantity ?? 0;
-      public ItemField GetInputItemForProduct()
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+
+      public List<ItemField> GetInputItemForProduct()
       {
         var item = _station.IngredientSlot?.ItemInstance?.Definition;
-        return item != null ? new ItemField(_station.ovenConfiguration) { SelectedItem = item } : null;
+        return [item != null ? new ItemField(_station.ovenConfiguration) { SelectedItem = item } : null];
       }
+
       public void StartOperation(ScheduleOne.NPCs.Behaviour.Behaviour behaviour)
       {
-        if (behaviour is StartLabOvenBehaviour labOvenBehaviour)
-        {
-          labOvenBehaviour.StartCook();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}", isStation: true);
-        }
-        else
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              $"MixingStationAdapter.StartOperation: Invalid behaviour type for station {_station.GUID}, expected StartMixingStationBehaviour, got {behaviour?.GetType().Name}", isStation: true);
-        }
+        (behaviour as StartLabOvenBehaviour).StartCook();
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"LabOvenAdapter.StartOperation: Started cook for station {_station.GUID}",
+            DebugLogger.Category.Chemist, DebugLogger.Category.LabOven);
       }
     }
   }

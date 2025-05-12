@@ -20,7 +20,8 @@ using System.Reflection;
 //using NoLazyWorkers.Handlers;
 using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
-using NoLazyWorkers.Handlers;
+using NoLazyWorkers.General;
+using static NoLazyWorkers.General.GeneralExtensions;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -29,34 +30,99 @@ namespace NoLazyWorkers
 {
   public static class DebugLogs
   {
-    public static int level = 4;
-    public static bool Production = false;
+    public static bool Enabled = true;
+    public static int Level = 4;
     public static bool All = false; // enables all but stacktrace logs
     public static bool Core = false;
     public static bool Settings = false;
-    public static bool Pot = false;
-    public static bool MixingStation = true;
-    public static bool Storage = false;
-    public static bool Chemist = true;
+    // employees
+    public static bool Chemist = false;
     public static bool Botanist = false;
-    public static bool Packager = false;
+    public static bool Handler = true;
+    // generic
+    public static bool Storage = true;
+    public static bool General = true;
+    // stations
+    public static bool Pot = false;
+    public static bool LabOven = false;
+    public static bool ChemistryStation = false;
+    public static bool MixingStation = false;
     public static bool Stacktrace = false;
   }
 
   public static class DebugLogger
   {
     public enum LogLevel { None, Error, Warning, Info, Verbose }
-    public static LogLevel CurrentLevel { get; set; } = (LogLevel)DebugLogs.level;
-
-    public static void Log(LogLevel level, string message, bool isChemist = false, bool isStation = false, bool isStorage = false)
+    public enum Category
     {
-      if (DebugLogs.Production || level > CurrentLevel || (!DebugLogs.All && !isChemist && !isStation && !isStorage))
+      None,
+      Core,
+      Settings,
+      Chemist,
+      Botanist,
+      Handler,
+      Storage,
+      Pot,
+      LabOven,
+      ChemistryStation,
+      General,
+      MixingStation,
+      Stacktrace
+    }
+
+    public static LogLevel CurrentLevel { get; set; } = (LogLevel)DebugLogs.Level;
+
+    private static readonly Dictionary<Category, Func<bool>> CategoryEnabled = new()
+    {
+        { Category.Core, () => DebugLogs.Core },
+        { Category.Settings, () => DebugLogs.Settings },
+        { Category.Chemist, () => DebugLogs.Chemist },
+        { Category.Botanist, () => DebugLogs.Botanist },
+        { Category.Handler, () => DebugLogs.Handler },
+        { Category.Storage, () => DebugLogs.Storage },
+        { Category.Pot, () => DebugLogs.Pot },
+        { Category.LabOven, () => DebugLogs.LabOven },
+        { Category.ChemistryStation, () => DebugLogs.ChemistryStation },
+        { Category.General, () => DebugLogs.General },
+        { Category.MixingStation, () => DebugLogs.MixingStation },
+        { Category.Stacktrace, () => DebugLogs.Stacktrace },
+        { Category.None, () => true } // Always enabled if All is true
+    };
+
+    public static void Log(LogLevel level, string message, params Category[] categories)
+    {
+      if (!DebugLogs.Enabled || level > CurrentLevel)
         return;
+
+      // Determine if any category is enabled
+      bool isEnabled = DebugLogs.All || categories.Any(c => c != Category.Stacktrace && CategoryEnabled[c]());
+      if (!isEnabled)
+        return;
+
+      // Get the first non-Stacktrace category for labeling (or "None" if only Stacktrace)
+      Category labelCategory = categories.FirstOrDefault(c => c != Category.Stacktrace);
+      string prefix = $"[{labelCategory}]";
+      bool includeStacktrace = DebugLogs.Stacktrace || categories.Contains(Category.Stacktrace);
+
+      // Format the message
+      string fullMessage = $"{prefix} {message}";
+      if (includeStacktrace)
+      {
+        fullMessage += $"\nStacktrace: {Environment.StackTrace}";
+      }
+
+      // Output to MelonLogger
       switch (level)
       {
-        case LogLevel.Error: MelonLogger.Error(message); break;
-        case LogLevel.Warning: MelonLogger.Warning(message); break;
-        default: MelonLogger.Msg(message); break;
+        case LogLevel.Error:
+          MelonLogger.Error(fullMessage);
+          break;
+        case LogLevel.Warning:
+          MelonLogger.Warning(fullMessage);
+          break;
+        default:
+          MelonLogger.Msg(fullMessage);
+          break;
       }
     }
   }
@@ -79,31 +145,27 @@ namespace NoLazyWorkers
       try
       {
         HarmonyInstance.PatchAll();
-        MelonLogger.Msg("NoLazyWorkers_Alternative loaded!");
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "NoLazyWorkers_Alternative loaded!", DebugLogger.Category.Core);
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to initialize NoLazyWorkers_Alternative: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to initialize NoLazyWorkers_Alternative: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
       }
 
       Instance = this;
       string configPath = Path.Combine(MelonEnvironment.UserDataDirectory, "NoLazyWorkers.cfg");
-
       if (File.Exists(configPath))
       {
         Config = Settings.Default.LoadFromFile(configPath);
-        if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Msg("Config loaded.");
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "Config loaded.", DebugLogger.Category.Core);
       }
       else
       {
         Config = new Settings.Default();
         Config.SaveToFile(configPath);
-        if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Msg("Default config created.");
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "Default config created.", DebugLogger.Category.Core);
       }
 
-      // Register scene load callback
       MelonEvents.OnSceneWasLoaded.Subscribe(OnSceneWasLoaded);
     }
 
@@ -113,9 +175,7 @@ namespace NoLazyWorkers
       {
         var configure = new Settings.Configure();
         MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
-        if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Msg("Applied Fixer and Misc settings on main scene load.");
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "Applied Fixer and Misc settings on main scene load.", DebugLogger.Category.Core);
         MixingStationExtensions.InitializeStaticRouteListTemplate();
         StorageExtensions.InitializeStorageModule();
       }
@@ -125,15 +185,13 @@ namespace NoLazyWorkers
     {
       ConfigurationExtensions.NPCSupply.Clear();
       Settings.SettingsExtensions.Configured.Clear();
-      if (DebugLogs.All || DebugLogs.Core)
-        MelonLogger.Msg("Cleared ConfigurationExtensions and SettingsExtensions on scene unload.");
+      DebugLogger.Log(DebugLogger.LogLevel.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", DebugLogger.Category.Core);
     }
   }
 
   public static class ConfigurationExtensions
   {
     public static Dictionary<Guid, ObjectField> NPCSupply = [];
-
     private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
     private static readonly float debounceTime = 0.2f;
 
@@ -143,24 +201,24 @@ namespace NoLazyWorkers
       {
         if (config == null)
         {
-          MelonLogger.Error("InvokeChanged: EntityConfiguration is null");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "InvokeChanged: EntityConfiguration is null", DebugLogger.Category.Core);
           return;
         }
+
         float currentTime = Time.time;
         if (lastInvokeTimes.TryGetValue(config, out float lastTime) && currentTime - lastTime < debounceTime)
         {
-          if (DebugLogs.All || DebugLogs.Core)
-            MelonLogger.Msg($"InvokeChanged debounced for config: {config}");
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InvokeChanged debounced for config: {config}", DebugLogger.Category.Core);
           return;
         }
+
         lastInvokeTimes[config] = currentTime;
-        if (DebugLogs.Stacktrace)
-          MelonLogger.Msg($"InvokeChanged called for config: {config}, StackTrace: {new System.Diagnostics.StackTrace()}");
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InvokeChanged called for config: {config}", DebugLogger.Category.Core);
         config.InvokeChanged();
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"InvokeChanged failed: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InvokeChanged failed: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -214,7 +272,6 @@ namespace NoLazyWorkers
     public class CoroutineRunner : MonoBehaviour
     {
       private static CoroutineRunner _instance;
-
       public static CoroutineRunner Instance
       {
         get
@@ -226,6 +283,31 @@ namespace NoLazyWorkers
             DontDestroyOnLoad(go);
           }
           return _instance;
+        }
+      }
+
+      public void RunCoroutine(IEnumerator coroutine)
+      {
+        StartCoroutine(RunCoroutineInternal(coroutine));
+      }
+
+      private IEnumerator RunCoroutineInternal(IEnumerator coroutine)
+      {
+        while (true)
+        {
+          object current;
+          try
+          {
+            if (!coroutine.MoveNext())
+              yield break;
+            current = coroutine.Current;
+          }
+          catch (Exception e)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+            yield break;
+          }
+          yield return current;
         }
       }
 
@@ -247,11 +329,10 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            MelonLogger.Error($"CoroutineRunner: Exception in coroutine: {e.Message}, stack: {e.StackTrace}");
+            DebugLogger.Log(DebugLogger.LogLevel.Error, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
             callback?.Invoke(default);
             yield break;
           }
-
           if (current is T result)
           {
             callback?.Invoke(result);
@@ -290,42 +371,39 @@ namespace NoLazyWorkers
             break;
           // Add other types as needed
           default:
-            MelonLogger.Error($"Unsupported EConfigurableType: {configType}");
+            DebugLogger.Log(DebugLogger.LogLevel.Error, $"Unsupported EConfigurableType: {configType}", DebugLogger.Category.Core);
             UnityEngine.Object.Destroy(dummyEntity);
             return null;
         }
+
         if (configPanelPrefab == null)
         {
-          MelonLogger.Error($"No ConfigPanel prefab found for {configType}");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"No ConfigPanel prefab found for {configType}", DebugLogger.Category.Core);
           return null;
         }
 
-        // Instantiate prefab temporarily
         GameObject tempPanelObj = UnityEngine.Object.Instantiate(configPanelPrefab);
-        tempPanelObj.SetActive(false); // Keep inactive to avoid rendering
+        tempPanelObj.SetActive(false);
         ConfigPanel tempPanel = tempPanelObj.GetComponent<ConfigPanel>();
         if (tempPanel == null)
         {
-          MelonLogger.Error($"Instantiated prefab for {configType} lacks ConfigPanel component");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Instantiated prefab for {configType} lacks ConfigPanel component", DebugLogger.Category.Core);
           UnityEngine.Object.Destroy(tempPanelObj);
           return null;
         }
 
         // Bind to initialize UI components (mimic game behavior)
         List<EntityConfiguration> configs = [];
-
         configs.Add(config);
         tempPanel.Bind(configs);
-        if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Msg($"Bound temporary ConfigPanel for {configType} to initialize UI components");
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Bound temporary ConfigPanel for {configType} to initialize UI components", DebugLogger.Category.Core);
 
         // Get the UI template
         var uiTemplate = tempPanel.transform.Find(componentStr);
         if (uiTemplate == null)
-          MelonLogger.Error($"Failed to retrieve UI template from ConfigPanel for {configType}");
-        else if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Msg($"Successfully retrieved UI template from ConfigPanel for {configType}");
-
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to retrieve UI template from ConfigPanel for {configType}", DebugLogger.Category.Core);
+        else
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Successfully retrieved UI template from ConfigPanel for {configType}", DebugLogger.Category.Core);
 
         // Clean up
         UnityEngine.Object.Destroy(tempPanelObj);
@@ -334,7 +412,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to get UI template from ConfigPanel for {configType}: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to get UI template from ConfigPanel for {configType}: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
         return null;
       }
     }
@@ -349,54 +427,52 @@ namespace NoLazyWorkers
         {
           if (obj.name.Contains(id))
           {
-            if (DebugLogs.All || DebugLogs.Core)
-              MelonLogger.Msg($"Found prefab: {obj.name}");
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Found prefab: {obj.name}", DebugLogger.Category.Core);
             prefab = obj;
             break;
           }
         }
+
         if (prefab != null)
         {
           GameObject instance = UnityEngine.Object.Instantiate(prefab);
-          if (DebugLogs.All || DebugLogs.Core)
-            MelonLogger.Msg($"Instantiated prefab: {instance.name}");
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Instantiated prefab: {instance.name}", DebugLogger.Category.Core);
           return instance;
         }
         else
         {
-          MelonLogger.Error($"Prefab {id} not found in Resources.");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Prefab {id} not found in Resources.", DebugLogger.Category.Core);
           return null;
         }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"Failed to find prefab: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to find prefab: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
         return null;
       }
     }
 
     public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
     {
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg("=== ItemFieldUI Details ==="); }
+      DebugLogger.Log(DebugLogger.LogLevel.Info, "=== ItemFieldUI Details ===", DebugLogger.Category.Core);
 
       // Log basic info
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}"); }
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}"); }
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemFieldUI Type: {itemfieldUI.GetType().Name}"); }
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}", DebugLogger.Category.Core);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}", DebugLogger.Category.Core);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI Type: {itemfieldUI.GetType().Name}", DebugLogger.Category.Core);
 
       // Log ItemFieldUI properties
       LogComponentDetails(itemfieldUI, 0);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, "--- Hierarchy and Components ---", DebugLogger.Category.Core);
 
       // Log hierarchy and components
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg("--- Hierarchy and Components ---"); }
       if (itemfieldUI.gameObject != null)
       {
         LogGameObjectDetails(itemfieldUI.gameObject, 0);
       }
       else
       {
-        if (DebugLogs.All || DebugLogs.Core)
-          MelonLogger.Warning("ItemFieldUI GameObject is null, cannot log hierarchy and components");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "ItemFieldUI GameObject is null, cannot log hierarchy and components", DebugLogger.Category.Core);
       }
     }
 
@@ -404,11 +480,11 @@ namespace NoLazyWorkers
     {
       if (go == null)
       {
-        if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "GameObject: null"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, new string(' ', indentLevel * 2) + "GameObject: null", DebugLogger.Category.Core);
         return;
       }
 
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}"); }
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}", DebugLogger.Category.Core);
 
       // Log components on this GameObject
       foreach (var component in go.GetComponents<Component>())
@@ -438,11 +514,11 @@ namespace NoLazyWorkers
     {
       if (component == null)
       {
-        if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + "Component: null"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, new string(' ', indentLevel * 2) + "Component: null", DebugLogger.Category.Core);
         return;
       }
 
-      if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}"); }
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}", DebugLogger.Category.Core);
 
       // Use reflection to log all public fields
       var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -452,11 +528,11 @@ namespace NoLazyWorkers
         {
           var value = field.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}", DebugLogger.Category.Core);
         }
         catch (Exception e)
         {
-          MelonLogger.Error(new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
         }
       }
 
@@ -466,16 +542,15 @@ namespace NoLazyWorkers
       {
         // Skip properties that can't be read
         if (!property.CanRead) continue;
-
         try
         {
           var value = property.GetValue(component);
           string valueStr = ValueToString(value);
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg(new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}", DebugLogger.Category.Core);
         }
         catch (Exception e)
         {
-          MelonLogger.Error(new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}");
+          DebugLogger.Log(DebugLogger.LogLevel.Error, new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
         }
       }
     }
@@ -507,25 +582,24 @@ namespace NoLazyWorkers
       {
         if (option is ItemField itemField)
         {
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}", DebugLogger.Category.Core);
           if (itemField.Options != null)
           {
-            if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}"); }
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}", DebugLogger.Category.Core);
           }
           else
           {
-            if (DebugLogs.All || DebugLogs.Core)
-              MelonLogger.Warning("ItemSetterScreenOpenPatch: ItemField Options is null");
+            DebugLogger.Log(DebugLogger.LogLevel.Warning, "ItemSetterScreenOpenPatch: ItemField Options is null", DebugLogger.Category.Core);
           }
         }
         else
         {
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}", DebugLogger.Category.Core);
         }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"ItemSetterScreenOpenPatch: Prefix failed, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ItemSetterScreenOpenPatch: Prefix failed, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -537,7 +611,7 @@ namespace NoLazyWorkers
       var field = obj.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
       if (field == null)
       {
-        Debug.LogError($"Field {fieldName} not found on {obj.GetType().Name}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Field {fieldName} not found on {obj.GetType().Name}", DebugLogger.Category.Core);
         return null;
       }
       return field.GetValue(obj) as T;
@@ -548,7 +622,7 @@ namespace NoLazyWorkers
       var field = obj.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
       if (field == null)
       {
-        Debug.LogError($"Field {fieldName} not found on {obj.GetType().Name}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Field {fieldName} not found on {obj.GetType().Name}", DebugLogger.Category.Core);
         return;
       }
       field.SetValue(obj, value);
@@ -592,7 +666,7 @@ namespace NoLazyWorkers
       {
         __instance.onLoadComplete.AddListener(delegate
         {
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg("onLoadComplete fired, restoring configurations"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Info, "onLoadComplete fired, restoring configurations", DebugLogger.Category.Core);
           PotExtensions.RestoreConfigurations();
           MixingStationExtensions.RestoreConfigurations();
           //StorageExtensions.RestoreConfigurations();
@@ -600,7 +674,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"LoadManagerPatch.Awake failed: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadManagerPatch.Awake failed: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -614,21 +688,20 @@ namespace NoLazyWorkers
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}"); }
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}", DebugLogger.Category.Core);
         if (__result != null)
         {
           LoadedGridItems[mainPath] = __result;
-          if (DebugLogs.All || DebugLogs.Core) { MelonLogger.Msg($"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}"); }
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}", DebugLogger.Category.Core);
         }
         else
         {
-          if (DebugLogs.All || DebugLogs.Core)
-            MelonLogger.Warning($"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}", DebugLogger.Category.Core);
         }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -638,59 +711,79 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
     {
-      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}",
+          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}",
+          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+      for (int i = 0; i < __instance.Configuration.Fields.Count; i++)
       {
-        MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}");
-        MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}");
-        for (int i = 0; i < __instance.Configuration.Fields.Count; i++)
-          MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Fields[{i}]={__instance.Configuration.Fields[i]?.GetType().Name ?? "null"}");
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ConfigurationReplicatorReceiveItemFieldPatch: Fields[{i}]={__instance.Configuration.Fields[i]?.GetType().Name ?? "null"}",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
       }
+
       if (fieldIndex < 0 || fieldIndex >= __instance.Configuration.Fields.Count)
       {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
         return false;
       }
+
       var itemField = __instance.Configuration.Fields[fieldIndex] as ItemField;
       if (itemField == null)
       {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
         return false;
       }
+
       if (string.IsNullOrEmpty(value) && !itemField.CanSelectNone)
       {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
         return false;
       }
-      if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-        MelonLogger.Msg($"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}");
+
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}",
+          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
       return true;
     }
+
     static void Postfix(ConfigurationReplicator __instance, int fieldIndex, string value)
     {
       try
       {
-        if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-          MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}");
-        if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6) // Supply is Fields[6]
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+
+        if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6)
         {
           if (PotExtensions.Supply.TryGetValue(potConfig.Pot.GUID, out ObjectField supply))
           {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-              MelonLogger.Msg($"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string");
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string",
+                DebugLogger.Category.Core, DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
           }
           else
           {
-            if (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist)
-              MelonLogger.Warning($"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}");
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}",
+                DebugLogger.Category.Core, DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
           }
         }
       }
       catch (Exception e)
       {
-        MelonLogger.Error($"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}");
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
       }
     }
   }
@@ -700,17 +793,19 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
-      if (DebugLogs.Stacktrace && (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist))
-        MelonLogger.Msg($"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}",
+          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
 
       // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
       bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
       if ((item == null && __instance.CanSelectNone) || isProductField)
       {
-        if (DebugLogs.Stacktrace && (DebugLogs.All || DebugLogs.Core || DebugLogs.Chemist || DebugLogs.Botanist))
-          MelonLogger.Msg($"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}, StackTrace: {new System.Diagnostics.StackTrace().ToString()}");
-        /* return false; */
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}",
+            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
       }
+
       return true;
     }
   }
