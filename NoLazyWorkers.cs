@@ -22,6 +22,7 @@ using NoLazyWorkers.Chemists;
 using NoLazyWorkers.Botanists;
 using NoLazyWorkers.General;
 using static NoLazyWorkers.General.GeneralExtensions;
+using FluffyUnderware.DevTools.Extensions;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -33,20 +34,22 @@ namespace NoLazyWorkers
     public static bool Enabled = true;
     public static int Level = 4;
     public static bool All = false; // enables all but stacktrace logs
-    public static bool Core = false;
+    public static bool Core = true;
     public static bool Settings = false;
     // employees
     public static bool Chemist = false;
     public static bool Botanist = false;
-    public static bool Handler = true;
+    public static bool Handler = false;
     // generic
     public static bool Storage = true;
-    public static bool General = true;
+    public static bool General = false;
     // stations
     public static bool Pot = false;
     public static bool LabOven = false;
     public static bool ChemistryStation = false;
-    public static bool MixingStation = false;
+    public static bool MixingStation = true;
+    public static bool PackagingStation = true;
+    //
     public static bool Stacktrace = false;
   }
 
@@ -67,6 +70,7 @@ namespace NoLazyWorkers
       ChemistryStation,
       General,
       MixingStation,
+      PackagingStation,
       Stacktrace
     }
 
@@ -85,6 +89,7 @@ namespace NoLazyWorkers
         { Category.ChemistryStation, () => DebugLogs.ChemistryStation },
         { Category.General, () => DebugLogs.General },
         { Category.MixingStation, () => DebugLogs.MixingStation },
+        { Category.PackagingStation, () => DebugLogs.PackagingStation },
         { Category.Stacktrace, () => DebugLogs.Stacktrace },
         { Category.None, () => true } // Always enabled if All is true
     };
@@ -145,7 +150,7 @@ namespace NoLazyWorkers
       try
       {
         HarmonyInstance.PatchAll();
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "NoLazyWorkers_Alternative loaded!", DebugLogger.Category.Core);
+        MelonLogger.Msg("NoLazyWorkers_Alternative loaded!");
       }
       catch (Exception e)
       {
@@ -417,10 +422,13 @@ namespace NoLazyWorkers
       }
     }
 
+    private static readonly Dictionary<string, GameObject> CachedPrefabs = [];
     public static GameObject GetPrefabGameObject(string id)
     {
       try
       {
+        if (CachedPrefabs.Count > 0 && CachedPrefabs.Keys.Contains(id))
+          return CachedPrefabs[id];
         GameObject prefab = null;
         GameObject[] allObjects = Resources.FindObjectsOfTypeAll<GameObject>();
         foreach (GameObject obj in allObjects)
@@ -437,6 +445,7 @@ namespace NoLazyWorkers
         {
           GameObject instance = UnityEngine.Object.Instantiate(prefab);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"Instantiated prefab: {instance.name}", DebugLogger.Category.Core);
+          CachedPrefabs[id] = prefab;
           return instance;
         }
         else
@@ -788,25 +797,47 @@ namespace NoLazyWorkers
     }
   }
 
-  [HarmonyPatch(typeof(ItemField), "SetItem", [typeof(ItemDefinition), typeof(bool)])]
+  [HarmonyPatch(typeof(ItemField), "SetItem", new[] { typeof(ItemDefinition), typeof(bool) })]
   public class ItemFieldSetItemPatch
   {
+    private static readonly Dictionary<ItemField, (float Time, ItemDefinition Item, bool Network)> RecentUpdates = new();
+    private const float AntiBounceWindow = 0.15f;
+
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
+      string callStack = Environment.StackTrace; // Capture stack trace for debugging
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}",
           DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
 
-      // Check if this is the Product field (assume Product has CanSelectNone=false or is paired with Mixer)
-      bool isProductField = __instance.Options != null && __instance.Options.Any(o => ProductManager.FavouritedProducts.Contains(o));
-      if ((item == null && __instance.CanSelectNone) || isProductField)
+      // Anti-bounce: Block redundant updates within 0.2s
+      if (!network && RecentUpdates.TryGetValue(__instance, out var recentUpdate) &&
+          Time.time - recentUpdate.Time < AntiBounceWindow)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"ItemFieldSetItemPatch: Blocked null update for Product field, CanSelectNone={__instance.CanSelectNone}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}",
+            $"ItemFieldSetItemPatch: Blocked redundant update for ItemField, Item={item?.Name ?? "null"}, Network={network}, TimeSinceLast={Time.time - recentUpdate.Time:F3}s\nCallStack: {callStack}",
             DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+        return false;
       }
 
+      // Update recent updates cache
+      RecentUpdates[__instance] = (Time.time, item, network);
+
       return true;
+    }
+
+    static void Postfix(ItemField __instance)
+    {
+      // Clean up old entries (optional, to prevent memory buildup)
+      var keysToRemove = RecentUpdates
+        .Where(kvp => Time.time - kvp.Value.Time > AntiBounceWindow * 2)
+        .Select(kvp => kvp.Key)
+        .ToList();
+
+      foreach (var key in keysToRemove)
+      {
+        RecentUpdates.Remove(key);
+      }
     }
   }
 }

@@ -45,7 +45,7 @@ namespace NoLazyWorkers.General
     public interface IStationAdapter
     {
       Guid GUID { get; }
-      Vector3 GetAccessPoint();
+      Vector3 GetAccessPoint(NPC npc);
       ItemSlot InsertSlot { get; }
       List<ItemSlot> ProductSlots { get; }
       ItemSlot OutputSlot { get; }

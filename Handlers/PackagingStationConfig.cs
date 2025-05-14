@@ -18,6 +18,8 @@ using ScheduleOne.NPCs.Behaviour;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using Steamworks;
 using ScheduleOne.Product;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.NPCs;
 
 namespace NoLazyWorkers.Handlers
 {
@@ -31,10 +33,9 @@ namespace NoLazyWorkers.Handlers
     }
 
     public PackagingStation Station => _station;
-    public PackagingStationConfiguration Config => _station.stationConfiguration;
 
     public Guid GUID => _station.GUID;
-    public Vector3 GetAccessPoint() => _station.AccessPoints.FirstOrDefault()?.position ?? _station.transform.position;
+    public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
     public ItemSlot InsertSlot => _station.InputSlots.FirstOrDefault();
     public List<ItemSlot> ProductSlots => _station.OutputSlots;
     public ItemSlot OutputSlot => _station.OutputSlots.FirstOrDefault();
@@ -42,7 +43,7 @@ namespace NoLazyWorkers.Handlers
     public bool HasActiveOperation => false;
     public int StartThreshold => 1;
     public int GetInputQuantity() => _station.InputSlots.Sum(s => s.Quantity);
-    public List<ItemField> GetInputItemForProduct() => PackagingStationExtensions.ItemFields[GUID];
+    public List<ItemField> GetInputItemForProduct() => ItemFields[GUID];
     public void StartOperation(Behaviour behaviour) => (behaviour as PackagingStationBehaviour).StartPackaging();
     public int MaxProductQuantity => 20;
     public ITransitEntity TransitEntity => _station as ITransitEntity;
@@ -51,43 +52,44 @@ namespace NoLazyWorkers.Handlers
   public static class PackagingStationExtensions
   {
     public static Dictionary<Guid, List<ItemField>> ItemFields { get; } = new();
+    public static Dictionary<Guid, List<QualityField>> QualityFields { get; } = new();
     public static Dictionary<Guid, PackagingStationConfiguration> Config { get; } = new();
 
     public static void RegisterItemFields(PackagingStation station, List<ItemField> itemFields)
     {
       if (station == null || itemFields == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterItemFields: Station or itemFields is null", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterItemFields: Station or itemFields is null", DebugLogger.Category.PackagingStation);
         return;
       }
       ItemFields[station.GUID] = itemFields;
       DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"PackagingExtensions.RegisterItemFields: Registered {itemFields.Count} ItemFields for station {station.GUID}", DebugLogger.Category.Handler);
+          $"PackagingExtensions.RegisterItemFields: Registered {itemFields.Count} ItemFields for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
 
     public static void RegisterConfig(PackagingStation station, PackagingStationConfiguration config)
     {
       if (station == null || config == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterConfig: Station or config is null", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterConfig: Station or config is null", DebugLogger.Category.PackagingStation);
         return;
       }
       Config[station.GUID] = config;
       DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"PackagingExtensions.RegisterConfig: Registered config for station {station.GUID}", DebugLogger.Category.Handler);
+          $"PackagingExtensions.RegisterConfig: Registered config for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
 
     public static void Cleanup(PackagingStation station)
     {
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.PackagingStation);
         return;
       }
       ItemFields.Remove(station.GUID);
       Config.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"PackagingExtensions.Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.Handler);
+          $"PackagingExtensions.Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
   }
 
@@ -99,78 +101,48 @@ namespace NoLazyWorkers.Handlers
       {
         if (station == null || config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeItemFields: Station or Configuration is null", DebugLogger.Category.Handler);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeItemFields: Station or Configuration is null", DebugLogger.Category.PackagingStation);
           return;
         }
 
         Guid guid = station.GUID;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.Handler);
+            $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.PackagingStation);
 
         var itemFields = new List<ItemField>();
+        var qualityFields = new List<QualityField>();
         for (int i = 0; i < 6; i++)
         {
-          var itemField = new ItemField(config);
+          var targetQuality = new QualityField(config);
+          targetQuality.onValueChanged.RemoveAllListeners();
+          targetQuality.onValueChanged.AddListener(delegate
+          {
+            config.InvokeChanged();
+          });
+          qualityFields.Add(targetQuality);
+
+          var itemField = new ItemField(config)
+          {
+            CanSelectNone = true
+          };
           itemField.onItemChanged.RemoveAllListeners();
-          itemField.onItemChanged.AddListener(item => RefreshChanged(item, config));
+          itemField.onItemChanged.AddListener(delegate
+          {
+            config.InvokeChanged();
+          });
           itemFields.Add(itemField);
         }
+        QualityFields[station.GUID] = qualityFields;
 
-        PackagingStationExtensions.RegisterItemFields(station, itemFields);
+        RegisterItemFields(station, itemFields);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeItemFields: Initialized 6 ItemFields for station {guid}", DebugLogger.Category.Handler);
+            $"InitializeItemFields: Initialized 6 ItemFields for station {guid}", DebugLogger.Category.PackagingStation);
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"InitializeItemFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.Handler);
-      }
-    }
-
-    public static void RefreshChanged(ItemDefinition item, PackagingStationConfiguration config)
-    {
-      try
-      {
-        if (config == null || config.Station == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "RefreshChanged: PackagingStationConfiguration or Station is null", DebugLogger.Category.Handler);
-          return;
-        }
-
-        Guid guid = config.Station.GUID;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"RefreshChanged: Called for station {guid}, Item: {item?.ID ?? "null"}", DebugLogger.Category.Handler);
-
-        if (!PackagingStationExtensions.ItemFields.ContainsKey(guid))
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"RefreshChanged: No ItemFields for station {guid}", DebugLogger.Category.Handler);
-          return;
-        }
-
-        var itemFields = PackagingStationExtensions.ItemFields[guid];
-        bool itemChanged = false;
-        foreach (var field in itemFields)
-        {
-          if (field.SelectedItem?.ID == item?.ID)
-          {
-            itemChanged = true;
-            break;
-          }
-        }
-
-        if (itemChanged)
-        {
-          ConfigurationExtensions.InvokeChanged(config);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"RefreshChanged: Updated ItemFields for station {guid}, Item: {item?.ID ?? "null"}", DebugLogger.Category.Handler);
-        }
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"RefreshChanged: Failed for station {config?.Station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.Handler);
+            $"InitializeItemFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
   }
@@ -186,14 +158,14 @@ namespace NoLazyWorkers.Handlers
       {
         __instance.DestinationUI.gameObject.SetActive(false);
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"PackagingStationPanelPatch.BindPostfix: Binding {configs.Count} configs", DebugLogger.Category.Handler);
+            $"PackagingStationPanelPatch.BindPostfix: Binding {configs.Count} configs", DebugLogger.Category.PackagingStation);
 
         var configPanel = __instance.GetComponent<PackagingStationConfigPanel>();
         if (configPanel == null)
         {
           configPanel = __instance.gameObject.AddComponent<PackagingStationConfigPanel>();
           DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"PackagingStationPanelPatch.BindPostfix: Added PackagingStationConfigPanel to {__instance.gameObject.name}", DebugLogger.Category.Handler);
+              $"PackagingStationPanelPatch.BindPostfix: Added PackagingStationConfigPanel to {__instance.gameObject.name}", DebugLogger.Category.PackagingStation);
         }
 
         ItemFieldUI templateUI = null;
@@ -219,20 +191,30 @@ namespace NoLazyWorkers.Handlers
         List<ItemField> itemFieldList4 = new();
         List<ItemField> itemFieldList5 = new();
         List<ItemField> itemFieldList6 = new();
+        List<QualityField> qualityList1 = new();
+        List<QualityField> qualityList2 = new();
+        List<QualityField> qualityList3 = new();
+        List<QualityField> qualityList4 = new();
+        List<QualityField> qualityList5 = new();
+        List<QualityField> qualityList6 = new();
         foreach (var config in configs.OfType<PackagingStationConfiguration>())
         {
-          if (!PackagingStationExtensions.ItemFields.TryGetValue(config.Station.GUID, out var itemFields))
+          if (!ItemFields.TryGetValue(config.Station.GUID, out var itemFields))
           {
             DebugLogger.Log(DebugLogger.LogLevel.Warning,
-                $"PackagingStationPanelPatch.BindPostfix: No ItemFields for station {config.Station.GUID}", DebugLogger.Category.Handler);
+                $"PackagingStationPanelPatch.BindPostfix: No ItemFields for station {config.Station.GUID}", DebugLogger.Category.PackagingStation);
+            continue;
+          }
+          if (!QualityFields.TryGetValue(config.Station.GUID, out var qualityFields))
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"PackagingStationPanelPatch.BindPostfix: No ItemFields for station {config.Station.GUID}", DebugLogger.Category.PackagingStation);
             continue;
           }
 
           foreach (var field in itemFields)
           {
             field.Options = favorites;
-            field.onItemChanged.RemoveAllListeners();
-            field.onItemChanged.AddListener(item => PackagingStationUtilities.RefreshChanged(item, config));
           }
           itemFieldList1.Add(itemFields[0]);
           itemFieldList2.Add(itemFields[1]);
@@ -240,27 +222,44 @@ namespace NoLazyWorkers.Handlers
           itemFieldList4.Add(itemFields[3]);
           itemFieldList5.Add(itemFields[4]);
           itemFieldList6.Add(itemFields[5]);
+
+          qualityList1.Add(qualityFields[0]);
+          qualityList2.Add(qualityFields[1]);
+          qualityList3.Add(qualityFields[2]);
+          qualityList4.Add(qualityFields[3]);
+          qualityList5.Add(qualityFields[4]);
+          qualityList6.Add(qualityFields[5]);
         }
 
-        for (int i = 0; i < 6; i++)
+        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
+        var qualityFieldUIObj = dryingRackPanelObj.transform.Find("QualityFieldUI")?.gameObject;
+        qualityFieldUIObj.transform.Find("Description").gameObject.SetActive(false);
+        for (int i = 0; i < 5; i++)
         {
           var uiObj = Object.Instantiate(templateUI.gameObject, __instance.transform, false);
           uiObj.name = $"ItemFieldUI_{i}";
-          var ui = uiObj.GetComponent<ItemFieldUI>();
-          if (ui == null)
+          var itemFieldUI = uiObj.GetComponent<ItemFieldUI>();
+          if (itemFieldUI == null)
           {
-            ui = uiObj.AddComponent<ItemFieldUI>();
-            ui.gameObject.AddComponent<CanvasRenderer>();
+            itemFieldUI = uiObj.AddComponent<ItemFieldUI>();
+            itemFieldUI.gameObject.AddComponent<CanvasRenderer>();
           }
-          ui.gameObject.SetActive(true);
+          itemFieldUI.gameObject.SetActive(true);
 
-          var rect = ui.GetComponent<RectTransform>();
+
+          var qualityUIObj = Object.Instantiate(qualityFieldUIObj, __instance.transform, false);
+          qualityUIObj.SetActive(true);
+          qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Min Quality";
+
+          var rect = itemFieldUI.GetComponent<RectTransform>();
+          var qualRect = qualityUIObj.GetComponent<RectTransform>();
           if (rect != null)
           {
-            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -30 - 60f * i);
+            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -11 - 104f * i);
+            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -79 - 104f * i);
           }
 
-          foreach (var text in ui.GetComponentsInChildren<TextMeshProUGUI>())
+          foreach (var text in itemFieldUI.GetComponentsInChildren<TextMeshProUGUI>())
           {
             if (text.gameObject.name == "Title" || text.gameObject.name.Contains("Title"))
             {
@@ -269,7 +268,7 @@ namespace NoLazyWorkers.Handlers
             }
           }
 
-          var fieldsForIndex = i switch
+          var iFieldsForIndex = i switch
           {
             0 => itemFieldList1,
             1 => itemFieldList2,
@@ -279,19 +278,31 @@ namespace NoLazyWorkers.Handlers
             5 => itemFieldList6,
             _ => new List<ItemField>()
           };
-          ui.Bind(fieldsForIndex);
+          itemFieldUI.Bind(iFieldsForIndex);
+
+          var qFieldsForIndex = i switch
+          {
+            0 => qualityList1,
+            1 => qualityList2,
+            2 => qualityList3,
+            3 => qualityList4,
+            4 => qualityList5,
+            5 => qualityList6,
+            _ => new List<QualityField>()
+          };
+          qualityUIObj.GetComponent<QualityFieldUI>().Bind(qFieldsForIndex);
 
           DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"PackagingStationPanelPatch.BindPostfix: Bound ItemFieldUI_{i} to {fieldsForIndex.Count} ItemFields", DebugLogger.Category.Handler);
+              $"PackagingStationPanelPatch.BindPostfix: Bound ItemFieldUI_{i} to {iFieldsForIndex.Count} ItemFields", DebugLogger.Category.PackagingStation);
         }
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"PackagingStationPanelPatch.BindPostfix: Added and bound 6 ItemFieldUIs for {configs.Count} configs", DebugLogger.Category.Handler);
+            $"PackagingStationPanelPatch.BindPostfix: Added and bound 6 ItemFieldUIs for {configs.Count} configs", DebugLogger.Category.PackagingStation);
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"PackagingStationPanelPatch.BindPostfix: Failed, error: {e}", DebugLogger.Category.Handler);
+            $"PackagingStationPanelPatch.BindPostfix: Failed, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
   }
@@ -306,17 +317,17 @@ namespace NoLazyWorkers.Handlers
       try
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"PackagingStationConfigurationPatch.ConstructorPostfix: Initializing for station {station.GUID}", DebugLogger.Category.Handler);
-        PackagingStationExtensions.RegisterConfig(station, __instance);
-        if (!PackagingStationExtensions.ItemFields.ContainsKey(station.GUID))
+            $"PackagingStationConfigurationPatch.ConstructorPostfix: Initializing for station {station.GUID}", DebugLogger.Category.PackagingStation);
+        RegisterConfig(station, __instance);
+        if (!ItemFields.ContainsKey(station.GUID))
         {
-          PackagingStationUtilities.InitializeItemFields(station, __instance);
+          InitializeItemFields(station, __instance);
         }
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"PackagingStationConfigurationPatch.ConstructorPostfix: Failed for station {station.GUID}, error: {e}", DebugLogger.Category.Handler);
+            $"PackagingStationConfigurationPatch.ConstructorPostfix: Failed for station {station.GUID}, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
 
@@ -329,7 +340,7 @@ namespace NoLazyWorkers.Handlers
         if (__instance.Station == null) return;
 
         var json = JObject.Parse(__result);
-        if (PackagingStationExtensions.ItemFields.TryGetValue(__instance.Station.GUID, out var itemFields))
+        if (ItemFields.TryGetValue(__instance.Station.GUID, out var itemFields))
         {
           var itemFieldsData = new JArray();
           for (int i = 0; i < 6; i++)
@@ -342,15 +353,30 @@ namespace NoLazyWorkers.Handlers
           }
           json["ItemFields"] = itemFieldsData;
         }
+        JArray qualityFieldsArray = [];
+        if (QualityFields.TryGetValue(__instance.Station.GUID, out var fields) && fields.Any())
+        {
+          foreach (var field in fields)
+          {
+            string quality = field.Value.ToString();
+
+            var qualityObj = new JObject
+            {
+              ["Quality"] = quality,
+            };
+            qualityFieldsArray.Add(qualityObj);
+          }
+        }
+        json["Qualities"] = qualityFieldsArray;
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}: {__result}", DebugLogger.Category.Handler);
+            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}: {__result}", DebugLogger.Category.PackagingStation);
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Failed for station {__instance.Station.GUID}, error: {e}", DebugLogger.Category.Handler);
+            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Failed for station {__instance.Station.GUID}, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
 
@@ -361,12 +387,12 @@ namespace NoLazyWorkers.Handlers
       try
       {
         if (__instance.Station == null) return;
-        PackagingStationExtensions.Cleanup(__instance.Station);
+        Cleanup(__instance.Station);
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"PackagingStationConfigurationPatch.DestroyPostfix: Failed for station {__instance.Station?.GUID}, error: {e}", DebugLogger.Category.Handler);
+            $"PackagingStationConfigurationPatch.DestroyPostfix: Failed for station {__instance.Station?.GUID}, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
   }
@@ -383,14 +409,14 @@ namespace NoLazyWorkers.Handlers
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"PackagingStationLoaderPatch.LoadPostfix: No GridItem for {mainPath}", DebugLogger.Category.Handler);
+              $"PackagingStationLoaderPatch.LoadPostfix: No GridItem for {mainPath}", DebugLogger.Category.PackagingStation);
           return;
         }
 
         if (!(gridItem is PackagingStation station))
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"PackagingStationLoaderPatch.LoadPostfix: GridItem is not a PackagingStation for {mainPath}", DebugLogger.Category.Handler);
+              $"PackagingStationLoaderPatch.LoadPostfix: GridItem is not a PackagingStation for {mainPath}", DebugLogger.Category.PackagingStation);
           return;
         }
 
@@ -398,7 +424,7 @@ namespace NoLazyWorkers.Handlers
         if (!File.Exists(configPath))
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"PackagingStationLoaderPatch.LoadPostfix: No Configuration.json at {configPath}", DebugLogger.Category.Handler);
+              $"PackagingStationLoaderPatch.LoadPostfix: No Configuration.json at {configPath}", DebugLogger.Category.PackagingStation);
           return;
         }
 
@@ -408,22 +434,26 @@ namespace NoLazyWorkers.Handlers
         if (config == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
-              $"PackagingStationLoaderPatch.LoadPostfix: No valid PackagingStationConfiguration for station {station.GUID}", DebugLogger.Category.Handler);
+              $"PackagingStationLoaderPatch.LoadPostfix: No valid PackagingStationConfiguration for station {station.GUID}", DebugLogger.Category.PackagingStation);
           return;
         }
 
         Guid guid = station.GUID;
-        if (!PackagingStationExtensions.ItemFields.ContainsKey(guid))
+        if (!ItemFields.ContainsKey(guid))
         {
-          PackagingStationUtilities.InitializeItemFields(station, config);
+          InitializeItemFields(station, config);
         }
 
-        var itemFields = PackagingStationExtensions.ItemFields[guid];
+        var itemFields = ItemFields[guid];
         var itemFieldsData = jsonObject["ItemFields"] as JArray;
-        if (itemFieldsData != null && itemFieldsData.Count == 6)
+        var qualityFields = QualityFields[guid];
+        var mixingRoutesJToken = jsonObject["Qualities"] as JArray;
+        if (itemFieldsData != null && itemFieldsData.Count <= 6)
         {
           for (int i = 0; i < 6; i++)
           {
+            var qualityData = mixingRoutesJToken[i] as JObject;
+            qualityFields[i].SetValue(Enum.Parse<EQuality>(qualityData["Quality"]?.ToString()), false);
             var itemFieldData = itemFieldsData[i] as JObject;
             if (itemFieldData != null && itemFieldData["ItemID"] != null)
             {
@@ -435,12 +465,12 @@ namespace NoLazyWorkers.Handlers
                 {
                   itemFields[i].SelectedItem = item;
                   DebugLogger.Log(DebugLogger.LogLevel.Info,
-                      $"PackagingStationLoaderPatch.LoadPostfix: Loaded ItemField {i} for station {guid}, ItemID: {itemID}", DebugLogger.Category.Handler);
+                      $"PackagingStationLoaderPatch.LoadPostfix: Loaded ItemField {i} for station {guid}, ItemID: {itemID}", DebugLogger.Category.PackagingStation);
                 }
                 else
                 {
                   DebugLogger.Log(DebugLogger.LogLevel.Warning,
-                      $"PackagingStationLoaderPatch.LoadPostfix: Failed to load item for ItemField {i}, ItemID: {itemID}", DebugLogger.Category.Handler);
+                      $"PackagingStationLoaderPatch.LoadPostfix: Failed to load item for ItemField {i}, ItemID: {itemID}", DebugLogger.Category.PackagingStation);
                 }
               }
             }
@@ -449,18 +479,18 @@ namespace NoLazyWorkers.Handlers
         else
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"PackagingStationLoaderPatch.LoadPostfix: Invalid or missing ItemFields data for station {guid}", DebugLogger.Category.Handler);
+              $"PackagingStationLoaderPatch.LoadPostfix: Invalid or missing ItemFields data for station {guid}", DebugLogger.Category.PackagingStation);
         }
 
-        PackagingStationExtensions.RegisterConfig(station, config);
+        RegisterConfig(station, config);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"PackagingStationLoaderPatch.LoadPostfix: Loaded config for station {station.GUID}", DebugLogger.Category.Handler);
+            $"PackagingStationLoaderPatch.LoadPostfix: Loaded config for station {station.GUID}", DebugLogger.Category.PackagingStation);
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"PackagingStationLoaderPatch.LoadPostfix: Failed for {mainPath}, error: {e}", DebugLogger.Category.Handler);
+            $"PackagingStationLoaderPatch.LoadPostfix: Failed for {mainPath}, error: {e}", DebugLogger.Category.PackagingStation);
       }
     }
   }

@@ -21,6 +21,7 @@ using static NoLazyWorkers.NoLazyUtilities;
 using static NoLazyWorkers.General.GeneralExtensions;
 using ScheduleOne.NPCs.Behaviour;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+using ScheduleOne.NPCs;
 
 namespace NoLazyWorkers.Chemists
 {
@@ -29,11 +30,11 @@ namespace NoLazyWorkers.Chemists
     public static Dictionary<Guid, MixingStationConfiguration> Config = [];
     public static Dictionary<Guid, List<MixingRoute>> MixingRoutes = [];
     public static GameObject MixingRouteListTemplate { get; set; }
+    public static Dictionary<Guid, QualityField> QualityFields = [];
 
     public class MixingStationAdapter : IStationAdapter<MixingStation>
     {
       private readonly MixingStation _station;
-      private readonly MixingStationConfiguration _config;
 
       public MixingStationAdapter(MixingStation station)
       {
@@ -51,7 +52,7 @@ namespace NoLazyWorkers.Chemists
       public int StartThreshold => (int)(_station.Configuration as MixingStationConfiguration).StartThrehold.Value;
       public int MaxProductQuantity => 20;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
-      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public List<ItemField> GetInputItemForProduct() => [MixingStationUtilities.GetInputItemForProductSlot(this)];
       public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
       public void StartOperation(Behaviour behaviour)
@@ -829,6 +830,8 @@ namespace NoLazyWorkers.Chemists
         if (mixingRoutesArray.Count > 0)
           jsonObject["MixingRoutes"] = mixingRoutesArray;
 
+        if (MixingStationExtensions.QualityFields.TryGetValue(guid, out var field))
+          jsonObject["Quality"] = field.Value.ToString();
         __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -931,9 +934,22 @@ namespace NoLazyWorkers.Chemists
         routeListUIObj.SetActive(true);
         var customRouteListUI = routeListUIObj.GetComponent<MixingRouteListFieldUI>();
 
+        var sliderObj = __instance.transform.Find("NumberFieldUI").gameObject;
+        sliderObj.transform.Find("Description").gameObject.SetActive(false);
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"MixingStationConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}",
+            DebugLogger.Category.MixingStation);
+
+        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
+        var qualityFieldUIObj = dryingRackPanelObj.transform.Find("QualityFieldUI")?.gameObject;
+        qualityFieldUIObj.transform.Find("Description").gameObject.SetActive(false);
+        var qualityUIObj = Object.Instantiate(qualityFieldUIObj, __instance.transform, false);
+        qualityUIObj.SetActive(true);
+
         List<List<MixingRoute>> routesLists = [];
         List<MixingStationConfiguration> configList = [];
-
+        List<QualityField> qualityList = new List<QualityField>();
         foreach (var config in configs.OfType<MixingStationConfiguration>())
         {
           Guid guid = config.station.GUID;
@@ -943,15 +959,19 @@ namespace NoLazyWorkers.Chemists
             MixingStationExtensions.MixingRoutes[guid] = [];
           routesLists.Add(MixingStationExtensions.MixingRoutes[guid]);
           configList.Add(config);
+          if (!MixingStationExtensions.QualityFields.ContainsKey(guid))
+            MixingStationExtensions.QualityFields[guid] = new QualityField(config);
+          qualityList.Add(MixingStationExtensions.QualityFields[guid]);
         }
-
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}",
-            DebugLogger.Category.MixingStation);
         customRouteListUI.Bind(routesLists, configList, () => configs.ForEach(c => ConfigurationExtensions.InvokeChanged(c)));
+        qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityList);
+        qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Min Quality";
 
         RectTransform routeListRect = routeListUIObj.GetComponent<RectTransform>();
         routeListRect.anchoredPosition = new Vector2(routeListRect.anchoredPosition.x, -165.76f);
+        var qualityRect = qualityUIObj.GetComponent<RectTransform>();
+        qualityRect.anchoredPosition = new Vector2(routeListRect.anchoredPosition.x, routeListRect.anchoredPosition.y + 70f);
+
       }
       catch (Exception e)
       {
@@ -1064,9 +1084,18 @@ namespace NoLazyWorkers.Chemists
                 DebugLogger.Category.MixingStation);
           }
           MixingStationExtensions.MixingRoutes[guid] = routes;
+
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"MixingStationLoaderPatch: Loaded {routes.Count} MixingRoutes for station={guid}",
               DebugLogger.Category.MixingStation);
+
+          var targetQuality = new QualityField(config);
+          targetQuality.onValueChanged.AddListener(delegate
+          {
+            config.InvokeChanged();
+          });
+          targetQuality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), network: false);
+          MixingStationExtensions.QualityFields[guid] = targetQuality;
         }
         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
         DebugLogger.Log(DebugLogger.LogLevel.Info,

@@ -1,5 +1,7 @@
+using ScheduleOne.DevUtilities;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
+using ScheduleOne.NPCs;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using UnityEngine;
@@ -19,7 +21,7 @@ namespace NoLazyWorkers.Chemists
       }
 
       public ChemistryStation Station => _station;
-      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public bool IsInUse => _station.isOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
       public bool HasActiveOperation => _station.CurrentCookOperation != null;
       public Guid GUID => _station.GUID;

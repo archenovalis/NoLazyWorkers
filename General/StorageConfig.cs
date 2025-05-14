@@ -31,6 +31,7 @@ using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
+using NoLazyWorkers.Handlers;
 
 namespace NoLazyWorkers.General
 {
@@ -43,7 +44,7 @@ namespace NoLazyWorkers.General
     public static Dictionary<Guid, PlaceableStorageEntity> Storage = [];
     public static Dictionary<Guid, JObject> PendingConfigData = [];
     public static List<PlaceableStorageEntity> AnyShelves = [];
-    public static Dictionary<ItemKey, Dictionary<PlaceableStorageEntity, ShelfInfo>> ShelfCache = new();
+    public static Dictionary<ItemInstance, Dictionary<PlaceableStorageEntity, ShelfInfo>> ShelfCache = new();
     public static readonly string[] InstanceIDs = ["smallstoragerack", "mediumstoragerack", "largestoragerack", "safe"];
 
     public enum StorageMode
@@ -218,94 +219,191 @@ namespace NoLazyWorkers.General
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Starting", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Starting",
+            DebugLogger.Category.Storage);
 
         if (ConfigPanelTemplate != null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Returning cached template", DebugLogger.Category.Storage);
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Returning cached template",
+              DebugLogger.Category.Storage);
           return ConfigPanelTemplate;
         }
+
+        // Get template from PotConfigPanel
         Transform storageTransform = GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "");
         if (storageTransform == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "GetStorageConfigPanelTemplate: storageTransform is null", DebugLogger.Category.Storage);
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: storageTransform is null",
+              DebugLogger.Category.Storage);
           return null;
         }
 
         GameObject storageObj = Object.Instantiate(storageTransform.gameObject);
         storageObj.name = "StorageConfigPanel";
         if (storageObj.GetComponent<CanvasRenderer>() == null)
-          storageObj.AddComponent<CanvasRenderer>();
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Instantiated StorageConfigPanel", DebugLogger.Category.Storage);
-
-        var defaultScript = storageObj.GetComponent<PotConfigPanel>();
-        if (defaultScript == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "GetStorageConfigPanelTemplate: PotConfigPanel script not found", DebugLogger.Category.Storage);
-          return null;
+          storageObj.AddComponent<CanvasRenderer>();
         }
-        Object.Destroy(defaultScript);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Instantiated StorageConfigPanel",
+            DebugLogger.Category.Storage);
 
-        StorageConfigPanel configPanel = storageObj.AddComponent<StorageConfigPanel>();
+        // Remove default script
+        var defaultScript = storageObj.GetComponent<PotConfigPanel>();
+        if (defaultScript != null)
+        {
+          Object.Destroy(defaultScript);
+        }
+
+        // Add StorageConfigPanel
+        StorageConfigPanel configPanel = storageObj.GetComponent<StorageConfigPanel>();
         if (configPanel == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "GetStorageConfigPanelTemplate: Failed to add StorageConfigPanel", DebugLogger.Category.Storage);
-          return null;
+          configPanel = storageObj.AddComponent<StorageConfigPanel>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added StorageConfigPanel",
+              DebugLogger.Category.Storage);
         }
 
-        foreach (string partName in new[] { "Additive2", "Additive3", "Botanist", "ObjectFieldUI", "SupplyUI" })
+        // Remove unnecessary components
+        foreach (string partName in new[] { "Additive2", "Additive3", "Botanist", "ObjectFieldUI", "SupplyUI", "Seed" })
         {
           var part = storageObj.transform.Find(partName);
           if (part != null)
+          {
             Object.Destroy(part.gameObject);
+          }
         }
-        storageObj.transform.Find("Seed").gameObject.SetActive(false);
+
+        // Setup StorageItemUI
         Transform itemFieldUITransform = storageObj.transform.Find("Additive1");
         if (itemFieldUITransform == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "GetStorageConfigPanelTemplate: itemFieldUITransform (Additive1) not found", DebugLogger.Category.Storage);
-          return null;
+          // Fallback: Instantiate from PotConfigPanel prefab
+          var potPanel = GetPrefabGameObject("PotConfigPanel");
+          if (potPanel == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                "GetStorageConfigPanelTemplate: PotConfigPanel prefab not found",
+                DebugLogger.Category.Storage);
+            return null;
+          }
+          var templateUI = potPanel.GetComponentInChildren<ItemFieldUI>();
+          if (templateUI == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                "GetStorageConfigPanelTemplate: ItemFieldUI not found in PotConfigPanel",
+                DebugLogger.Category.Storage);
+            return null;
+          }
+          itemFieldUITransform = Object.Instantiate(templateUI.gameObject, storageObj.transform, false).transform;
+          itemFieldUITransform.name = "StorageItemUI";
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Instantiated StorageItemUI from prefab",
+              DebugLogger.Category.Storage);
         }
 
         GameObject itemFieldUIObj = itemFieldUITransform.gameObject;
-        itemFieldUIObj.name = "StorageItemUI";
-        itemFieldUITransform.gameObject.SetActive(true);
-        if (itemFieldUIObj.GetComponent<ItemFieldUI>() == null)
-          itemFieldUIObj.AddComponent<ItemFieldUI>();
-        if (itemFieldUIObj.GetComponent<CanvasRenderer>() == null)
-          itemFieldUIObj.AddComponent<CanvasRenderer>();
-        var itemFieldRect = itemFieldUIObj.GetComponent<RectTransform>();
-        itemFieldRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 50f);
         itemFieldUIObj.SetActive(true);
+        var itemFieldUI = itemFieldUIObj.GetComponent<ItemFieldUI>();
+        if (itemFieldUI == null)
+        {
+          itemFieldUI = itemFieldUIObj.AddComponent<ItemFieldUI>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added ItemFieldUI to StorageItemUI",
+              DebugLogger.Category.Storage);
+        }
+        if (itemFieldUIObj.GetComponent<CanvasRenderer>() == null)
+        {
+          itemFieldUIObj.AddComponent<CanvasRenderer>();
+        }
 
-        configPanel.StorageItemUI = itemFieldUIObj.GetComponent<ItemFieldUI>();
+        configPanel.StorageItemUI = itemFieldUI;
         if (configPanel.StorageItemUI == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "GetStorageConfigPanelTemplate: Failed to assign StorageItemUI", DebugLogger.Category.Storage);
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: Failed to assign StorageItemUI",
+              DebugLogger.Category.Storage);
           return null;
         }
 
-        TextMeshProUGUI titleText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>().FirstOrDefault(t => t.gameObject.name == "Title");
+        // Setup Title and Description
+        TextMeshProUGUI titleText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+            .FirstOrDefault(t => t.gameObject.name == "Title");
         if (titleText != null)
         {
           titleText.text = "Assign Item";
-          DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Set Title to 'Assign Item'", DebugLogger.Category.Storage);
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Set Title to 'Assign Item'",
+              DebugLogger.Category.Storage);
         }
-
-        TextMeshProUGUI descText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>().FirstOrDefault(t => t.gameObject.name == "Description");
+        TextMeshProUGUI descText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+            .FirstOrDefault(t => t.gameObject.name == "Description");
         if (descText != null)
         {
           descText.text = "Select the item to assign to this shelf";
-          DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Set Description", DebugLogger.Category.Storage);
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Set Description",
+              DebugLogger.Category.Storage);
+        }
+
+        // Setup QualityFieldUI
+        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
+        if (dryingRackPanelObj == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: DryingRackPanel prefab not found",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+        var qualityFieldUIObj = dryingRackPanelObj.GetComponentInChildren<QualityFieldUI>();
+        if (qualityFieldUIObj == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: QualityFieldUI not found in DryingRackPanel",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+        var qualityUIObj = Object.Instantiate(qualityFieldUIObj.gameObject, storageObj.transform, false);
+        qualityUIObj.name = "QualityFieldUI";
+        qualityUIObj.transform.Find("Description").gameObject.SetActive(false);
+        qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Quality";
+        qualityUIObj.SetActive(false);
+
+        var qualityRect = qualityUIObj.GetComponent<RectTransform>();
+        var itemFieldRect = itemFieldUIObj.GetComponent<RectTransform>();
+        if (qualityRect != null && itemFieldRect != null)
+        {
+          qualityRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 75f);
+        }
+
+        configPanel.QualityUI = qualityUIObj.GetComponent<QualityFieldUI>();
+        if (configPanel.QualityUI == null)
+        {
+          configPanel.QualityUI = qualityUIObj.AddComponent<QualityFieldUI>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added QualityFieldUI to QualityFieldUI",
+              DebugLogger.Category.Storage);
+        }
+        if (qualityUIObj.GetComponent<CanvasRenderer>() == null)
+        {
+          qualityUIObj.AddComponent<CanvasRenderer>();
         }
 
         ConfigPanelTemplate = configPanel;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "GetStorageConfigPanelTemplate: Template initialized successfully", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Template initialized successfully",
+            DebugLogger.Category.Storage);
         return configPanel;
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetStorageConfigPanelTemplate: Failed, error: {e.Message}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"GetStorageConfigPanelTemplate: Failed, error: {e.Message}\nStackTrace: {e.StackTrace}",
+            DebugLogger.Category.Storage);
         return null;
       }
     }
@@ -313,35 +411,6 @@ namespace NoLazyWorkers.General
 
   public static class StorageUtilities
   {
-    public struct ItemKey
-    {
-      public string ItemID { get; private set; }
-      public string PackagingID { get; private set; }
-
-      public ItemKey(ItemInstance item)
-      {
-        ItemID = item?.ID?.ToLower() ?? throw new ArgumentNullException(nameof(item));
-        PackagingID = item is ProductItemInstance prodItem && prodItem.AppliedPackaging != null
-            ? prodItem.AppliedPackaging.ID.ToLower()
-            : null;
-      }
-
-      public ItemKey(string itemId, string packagingId = null)
-      {
-        ItemID = itemId?.ToLower() ?? throw new ArgumentNullException(nameof(itemId));
-        PackagingID = packagingId?.ToLower();
-      }
-
-      public override bool Equals(object obj) =>
-          obj is ItemKey other && ItemID == other.ItemID && PackagingID == other.PackagingID;
-
-      public override int GetHashCode() =>
-          HashCode.Combine(ItemID, PackagingID);
-
-      public override string ToString() =>
-          PackagingID != null ? $"{ItemID} (pkg: {PackagingID})" : ItemID;
-    }
-
     public struct ShelfInfo
     {
       public PlaceableStorageEntity Shelf { get; set; }
@@ -380,13 +449,12 @@ namespace NoLazyWorkers.General
       }
       else if (config.Mode == StorageMode.Specific && assignedItem != null)
       {
-        ItemKey key = new ItemKey(assignedItem);
-        if (!ShelfCache.ContainsKey(key))
-          ShelfCache[key] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
-
+        if (!ShelfCache.Keys.Any(i => i.CanStackWith(assignedItem, false)))
+          ShelfCache[assignedItem] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
+        RouteQueueManager.NoDestinationCache[config.Storage.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
         int quantity = GetItemQuantityInShelf(shelf, assignedItem);
-        ShelfCache[key][shelf] = new ShelfInfo(shelf, quantity, true);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {key}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
+        ShelfCache[assignedItem][shelf] = new ShelfInfo(shelf, quantity, true);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {assignedItem}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
       }
 
       // Update quantities for non-configured shelves
@@ -405,21 +473,19 @@ namespace NoLazyWorkers.General
 
       // Update quantities for all items in shelf
       var slots = (shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>());
-      var itemQuantities = new Dictionary<ItemKey, int>();
+      var itemQuantities = new Dictionary<ItemInstance, int>();
 
       foreach (var slot in slots)
       {
         if (slot?.ItemInstance == null || slot.Quantity <= 0)
           continue;
-
-        ItemKey key = new ItemKey(slot.ItemInstance);
-        itemQuantities[key] = itemQuantities.GetValueOrDefault(key, 0) + slot.Quantity;
+        itemQuantities[slot.ItemInstance] = itemQuantities.GetValueOrDefault(slot.ItemInstance, 0) + slot.Quantity;
       }
 
       // Update ShelfCache with current quantities
       foreach (var kvp in itemQuantities)
       {
-        ItemKey key = kvp.Key;
+        var key = kvp.Key;
         int quantity = kvp.Value;
 
         if (!ShelfCache.ContainsKey(key))
@@ -428,7 +494,7 @@ namespace NoLazyWorkers.General
         bool isConfigured = Config.TryGetValue(shelf.GUID, out var config) &&
                             config.Mode == StorageMode.Specific &&
                             config.AssignedItem != null &&
-                            new ItemKey(config.AssignedItem).Equals(key);
+                            config.AssignedItem == key;
 
         ShelfCache[key][shelf] = new ShelfInfo(shelf, quantity, isConfigured);
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfCache: Updated shelf {shelf.GUID} for {key}, quantity={quantity}, isConfigured={isConfigured}", DebugLogger.Category.Storage);
@@ -460,22 +526,22 @@ namespace NoLazyWorkers.General
       {
         itemCache.Remove(shelf);
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists", DebugLogger.Category.Storage);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
     }
 
     public static Dictionary<PlaceableStorageEntity, int> FindShelvesWithItem(NPC npc, ItemInstance targetItem, int needed, int wanted = 0)
     {
       if (targetItem == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelvesWithItem: Target item is null for {npc.fullName}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelvesWithItem: Target item is null for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
         return new Dictionary<PlaceableStorageEntity, int>();
       }
 
-      ItemKey key = new ItemKey(targetItem);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {key}, needed={needed}, wanted={wanted} for {npc.fullName}", DebugLogger.Category.Storage);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
 
       var result = new Dictionary<PlaceableStorageEntity, int>();
-      if (ShelfCache.TryGetValue(key, out var shelves))
+      Dictionary<PlaceableStorageEntity, ShelfInfo> shelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
+      if (shelves.Count > 0)
       {
         foreach (var shelfInfo in shelves.Values)
         {
@@ -483,28 +549,31 @@ namespace NoLazyWorkers.General
           {
             int assignedQty = wanted > 0 ? Math.Min(shelfInfo.Quantity, wanted) : shelfInfo.Quantity;
             result[shelfInfo.Shelf] = assignedQty;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {key}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}", DebugLogger.Category.Storage);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {targetItem}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
           }
         }
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Found {result.Count} shelves for {key}, totalQty={result.Values.Sum()}", DebugLogger.Category.Storage);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Found {result.Count} shelves for {targetItem}, totalQty={result.Values.Sum()}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
       return result;
     }
 
-    public static PlaceableStorageEntity FindShelfForDelivery(NPC npc, ItemInstance targetItem)
+    public static PlaceableStorageEntity FindShelfForDelivery(NPC npc, ItemInstance targetItem, bool allowAnyShelves = true)
     {
       if (targetItem == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelfForDelivery: Target item is null", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"FindShelfForDelivery: Target item is null",
+            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
         return null;
       }
-
-      ItemKey key = new ItemKey(targetItem);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"FindShelfForDelivery: Finding shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
+          [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
       int quantityToDeliver = targetItem.Quantity;
-
       PlaceableStorageEntity selectedShelf = null;
-      if (ShelfCache.TryGetValue(key, out var itemShelves))
+      Dictionary<PlaceableStorageEntity, ShelfInfo> itemShelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
+      if (itemShelves.Count > 0)
       {
         foreach (var shelfInfo in itemShelves.Values)
         {
@@ -515,21 +584,38 @@ namespace NoLazyWorkers.General
           break;
         }
       }
-
-      if (selectedShelf == null)
+      if (selectedShelf == null && allowAnyShelves)
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"FindShelfForDelivery: No shelves assigned. Checking any shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
+            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
         foreach (var shelf in AnyShelves)
         {
-          if (!shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver)) continue;
-          if (!npc.movement.CanGetTo(shelf)) continue;
+          var fit = shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"FindShelfForDelivery: Shelf={shelf.GUID} CanItemFit:{fit} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
+              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+          if (!fit) continue;
+          var getTo = npc.movement.CanGetTo(shelf);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"FindShelfForDelivery: Shelf={shelf.GUID} CanGetTo:{getTo} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
+              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+          if (!getTo) continue;
           selectedShelf = shelf;
           break;
         }
       }
-
       if (selectedShelf != null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {key}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem}",
+            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"FindShelfForDelivery: No suitable shelf found for {targetItem.ID} (allowAnyShelves={allowAnyShelves})",
+            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
       }
       return selectedShelf;
     }
@@ -539,7 +625,7 @@ namespace NoLazyWorkers.General
       if (shelf == null || targetItem == null)
         return 0;
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", DebugLogger.Category.Storage);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
 
       int qty = 0;
       foreach (var slot in (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()))
@@ -548,7 +634,7 @@ namespace NoLazyWorkers.General
           qty += slot.Quantity;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", DebugLogger.Category.Storage);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
       return qty;
     }
 
@@ -565,6 +651,8 @@ namespace NoLazyWorkers.General
   {
     [SerializeField]
     public ItemFieldUI StorageItemUI;
+    [SerializeField]
+    public QualityFieldUI QualityUI;
     private Button Button;
     private UnityAction OnChanged;
 
@@ -581,27 +669,69 @@ namespace NoLazyWorkers.General
       try
       {
         transform.gameObject.SetActive(true);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"StorageConfigPanel.Bind: Binding {configs.Count} configs",
+            DebugLogger.Category.Storage);
 
+        // Initialize StorageItemUI
         if (StorageItemUI == null)
         {
           var storageItemUITransform = gameObject.transform.Find("StorageItemUI");
-          if (storageItemUITransform != null)
+          if (storageItemUITransform == null)
           {
-            StorageItemUI = storageItemUITransform.gameObject.GetComponent<ItemFieldUI>();
-            if (StorageItemUI == null)
-              StorageItemUI = storageItemUITransform.gameObject.AddComponent<ItemFieldUI>();
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                $"StorageConfigPanel.Bind: StorageItemUI transform not found",
+                DebugLogger.Category.Storage);
+            return;
+          }
+          StorageItemUI = storageItemUITransform.GetComponent<ItemFieldUI>();
+          if (StorageItemUI == null)
+          {
+            StorageItemUI = storageItemUITransform.gameObject.AddComponent<ItemFieldUI>();
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"StorageConfigPanel.Bind: Added ItemFieldUI to StorageItemUI",
+                DebugLogger.Category.Storage);
+          }
+          if (StorageItemUI.gameObject.GetComponent<CanvasRenderer>() == null)
+          {
+            StorageItemUI.gameObject.AddComponent<CanvasRenderer>();
           }
         }
-
         StorageItemUI.gameObject.SetActive(true);
-        if (StorageItemUI.gameObject.GetComponent<CanvasRenderer>() == null)
-          StorageItemUI.gameObject.AddComponent<CanvasRenderer>();
 
-        List<ItemField> itemFieldList = [];
+        // Initialize QualityUI
+        if (QualityUI == null)
+        {
+          var qualityUITransform = gameObject.transform.Find("QualityFieldUI");
+          if (qualityUITransform == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                $"StorageConfigPanel.Bind: QualityFieldUI transform not found",
+                DebugLogger.Category.Storage);
+            return;
+          }
+          QualityUI = qualityUITransform.GetComponent<QualityFieldUI>();
+          if (QualityUI == null)
+          {
+            QualityUI = qualityUITransform.gameObject.AddComponent<QualityFieldUI>();
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"StorageConfigPanel.Bind: Added QualityFieldUI to QualityFieldUI",
+                DebugLogger.Category.Storage);
+          }
+          if (QualityUI.gameObject.GetComponent<CanvasRenderer>() == null)
+          {
+            QualityUI.gameObject.AddComponent<CanvasRenderer>();
+          }
+        }
+        QualityUI.gameObject.SetActive(false);
+
+        // Collect fields and validate configs
+        List<ItemField> itemFieldList = new();
+        List<QualityField> qualityList = new();
         bool hasNone = false, hasAny = false, hasSpecific = false;
         ItemInstance item = null;
         bool isConsistent = true;
-        List<ItemSlot> itemSlots = [];
+        List<ItemSlot> itemSlots = new();
 
         foreach (var config in configs.OfType<StorageConfiguration>())
         {
@@ -610,53 +740,79 @@ namespace NoLazyWorkers.General
           itemField.onItemChanged.AddListener(item => RefreshChanged(item, config));
           itemFieldList.Add(itemField);
           itemSlots.AddRange(config.Storage.StorageEntity.ItemSlots);
+          var qualityfield = config.TargetQuality;
+          qualityfield.onValueChanged.RemoveAllListeners();
+          qualityfield.onValueChanged.AddListener(quality => config.InvokeChanged());
+          qualityList.Add(qualityfield);
 
-          if (config.Mode == StorageMode.None)
-            hasNone = true;
-          else if (config.Mode == StorageMode.Any)
-            hasAny = true;
-          else if (config.Mode == StorageMode.Specific)
+          switch (config.Mode)
           {
-            hasSpecific = true;
-            if (item == null)
-            {
-              item = config.AssignedItem;
-            }
-            else if (item.ID != config.AssignedItem.ID || (item as ProductItemInstance)?.AppliedPackaging?.ID != (config.AssignedItem as ProductItemInstance)?.AppliedPackaging?.ID)
-            {
-              isConsistent = false;
+            case StorageMode.None:
+              hasNone = true;
               break;
-            }
+            case StorageMode.Any:
+              hasAny = true;
+              break;
+            case StorageMode.Specific:
+              hasSpecific = true;
+              if (item == null)
+              {
+                item = config.AssignedItem;
+              }
+              else if (item.ID != config.AssignedItem.ID || (item as ProductItemInstance)?.AppliedPackaging?.ID != (config.AssignedItem as ProductItemInstance)?.AppliedPackaging?.ID)
+              {
+                isConsistent = false;
+              }
+              break;
           }
         }
-        StorageItemUI.Bind(itemFieldList);
 
-        if (hasNone && !hasAny && !hasSpecific)
-          StorageItemUI.SelectionLabel.text = "None";
-        else if (hasAny && !hasNone && !hasSpecific)
-          StorageItemUI.SelectionLabel.text = "Any";
-        else if (hasSpecific && !hasNone && !hasAny && isConsistent)
-        {
-          if (item is ProductItemInstance prodItem && prodItem.AppliedPackaging.name != "unpackaged")
-          {
-            StorageItemUI.SelectionLabel.text = $"{item.Name} ({prodItem.AppliedPackaging.name})" ?? "None";
-            StorageItemUI.IconImg.sprite = GetPackagedSprite(item.definition, prodItem.AppliedPackaging);
-          }
-          else
-            StorageItemUI.SelectionLabel.text = $"{item.Name}" ?? "None";
-        }
-        else
+        StorageItemUI.Bind(itemFieldList);
+        QualityUI.Bind(qualityList);
+
+
+        var qualityUIObj = QualityUI.gameObject;
+        if (!isConsistent)
           StorageItemUI.SelectionLabel.text = "Mixed";
+        else
+        {
+          if (hasNone)
+          {
+            StorageItemUI.SelectionLabel.text = "None";
+          }
+          else if (hasAny)
+          {
+            StorageItemUI.SelectionLabel.text = "Any";
+          }
+          else if (hasSpecific)
+          {
+            if (item is ProductItemInstance prodItem && prodItem.AppliedPackaging != null)
+            {
+              var titleText = qualityUIObj.transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
+              if (titleText != null)
+              {
+                titleText.text = "Quality";
+              }
+              StorageItemUI.IconImg.sprite = GetPackagedSprite(item.definition, prodItem.AppliedPackaging);
+            }
+            StorageItemUI.SelectionLabel.text = item.Definition.Name;
+            QualityUI.gameObject.SetActive(item is ProductItemInstance);
+          }
+        }
 
         Button = StorageItemUI.transform.Find("Selection")?.GetComponent<Button>();
         Button.onClick.RemoveAllListeners();
         Button.onClick.AddListener(() => OpenItemSelectorScreen(itemFieldList, "Assign Item", itemSlots));
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigPanel.Bind: Bound {itemFieldList.Count} items", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"StorageConfigPanel.Bind: Successfully bound {itemFieldList.Count} ItemFields and {qualityList.Count} QualityFields",
+            DebugLogger.Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigPanel.Bind: Failed, error: {e.Message}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"StorageConfigPanel.Bind: Failed, error: {e.Message}\nStackTrace: {e.StackTrace}",
+            DebugLogger.Category.Storage);
       }
     }
 
@@ -726,6 +882,7 @@ namespace NoLazyWorkers.General
             primaryField.SelectedItem == product &&
             (primaryConfig.AssignedItem as ProductItemInstance)?.AppliedPackaging == packaging)
           selectedOption = opt;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageConfigPanel: Options={list}", DebugLogger.Category.Storage);
       }
 
       try
@@ -758,7 +915,6 @@ namespace NoLazyWorkers.General
 
           StorageItemUI.SelectionLabel.text = newMode == StorageMode.Any ? "Any" :
                                               newMode == StorageMode.None ? "None" :
-                                              selectedPackaging != null ? $"{selectedItem?.Name} ({selectedPackaging?.Name})" :
                                               selectedItem?.Name ?? "None";
           StorageItemUI.gameObject.SetActive(true);
 
@@ -776,6 +932,7 @@ namespace NoLazyWorkers.General
 
   public class StorageConfiguration : EntityConfiguration
   {
+    public QualityField TargetQuality { get; private set; }
     public ItemField StorageItem { get; private set; }
     public PlaceableStorageEntity Storage { get; private set; }
     public StorageConfigurableProxy Proxy { get; private set; }
@@ -800,6 +957,13 @@ namespace NoLazyWorkers.General
 
       try
       {
+        TargetQuality = new QualityField(this);
+        TargetQuality.onValueChanged.AddListener(delegate
+        {
+          InvokeChanged();
+        });
+        TargetQuality.SetValue(EQuality.Premium, network: false);
+
         StorageItem = new ItemField(this)
         {
           CanSelectNone = false,
@@ -855,6 +1019,8 @@ namespace NoLazyWorkers.General
           {
             StorageItem.SelectedItem = itemInstance.Definition;
             AssignedItem = itemInstance;
+            if (itemInstance is ProductItemInstance)
+              TargetQuality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), false);
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loaded Item={StorageItem.SelectedItem?.Name}, Packaging={(itemInstance is ProductItemInstance pi ? pi.AppliedPackaging?.Name : "null")} for GUID={Storage.GUID}", DebugLogger.Category.Storage);
           }
           else
@@ -888,8 +1054,6 @@ namespace NoLazyWorkers.General
       StorageItem.onItemChanged?.Invoke(StorageItem.SelectedItem);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"SetModeAndItem: Set Mode={mode}, Item={item?.Name ?? "null"}, Packaging={(item as ProductItemInstance)?.AppliedPackaging?.Name ?? "null"} for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
     }
-
-    public bool IsAnyMode => Mode == StorageMode.Any;
   }
 
   [HarmonyPatch(typeof(PlaceableStorageEntity))]
@@ -935,6 +1099,8 @@ namespace NoLazyWorkers.General
         {
           ItemInstance itemInstance = config.AssignedItem;
           jsonObject["StorageItem"] = itemInstance.GetItemData().GetJson(true);
+          if (itemInstance is ProductItemInstance)
+            jsonObject["Quality"] = config.TargetQuality?.Value.ToString();
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved StorageItem for GUID={__instance.GUID}: {jsonObject["StorageItem"]}", DebugLogger.Category.Storage);
         }
 

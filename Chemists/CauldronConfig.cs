@@ -1,6 +1,8 @@
 using ScheduleOne;
+using ScheduleOne.DevUtilities;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
+using ScheduleOne.NPCs;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using UnityEngine;
@@ -21,7 +23,7 @@ namespace NoLazyWorkers.Chemists
       }
 
       public Cauldron Station => _station;
-      public Vector3 GetAccessPoint() => _station.AccessPoints?.FirstOrDefault()?.position ?? _station.Transform.position;
+      public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public ItemSlot InsertSlot => _station.LiquidSlot;
       public List<ItemSlot> ProductSlots => _station.InputSlots;
       public ItemSlot OutputSlot => _station.OutputSlot;

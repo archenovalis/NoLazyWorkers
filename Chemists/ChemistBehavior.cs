@@ -149,9 +149,9 @@ namespace NoLazyWorkers.Chemists
       ItemField inputItem = station.GetInputItemForProduct()[0];
       if (inputItem?.SelectedItem == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
             $"ValidateState: Input item null for station {station.GUID}, chemist={chemist?.fullName}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.Stacktrace);
+            DebugLogger.Category.Chemist);
         return false;
       }
       ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
@@ -884,7 +884,7 @@ namespace NoLazyWorkers.Chemists
             DebugLogger.Category.Chemist, DebugLogger.Category.Stacktrace);
         return false;
       }
-      float distance = Vector3.Distance(behaviour.Npc.transform.position, station.GetAccessPoint());
+      float distance = Vector3.Distance(behaviour.Npc.transform.position, station.GetAccessPoint(behaviour.Npc));
       bool atStation = distance < 1.5f;
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"IsAtStation: Result={atStation}, Distance={distance:F2}, chemist={behaviour.Npc?.fullName}, station={station.GUID}",
@@ -894,10 +894,12 @@ namespace NoLazyWorkers.Chemists
 
     public static void Cleanup(Behaviour behaviour)
     {
+      if (behaviour == null)
+        return;
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"Cleanup: Entered for {behaviour.Npc?.fullName}",
           DebugLogger.Category.Chemist);
-      if (states.ContainsKey(behaviour))
+      if (states != null && states.ContainsKey(behaviour))
       {
         var state = states[behaviour];
         if (state.WalkToSuppliesRoutine != null) MelonCoroutines.Stop(state.WalkToSuppliesRoutine);

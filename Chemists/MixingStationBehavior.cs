@@ -318,7 +318,7 @@ namespace NoLazyWorkers.Chemists
       }
     }
 
-    [HarmonyPatch("Update")]
+    /* [HarmonyPatch("Update")]
     [HarmonyPrefix]
     static bool UpdatePrefix(StartMixingStationBehaviour __instance)
     {
@@ -352,9 +352,9 @@ namespace NoLazyWorkers.Chemists
         mixingBehaviour.Disable(__instance);
         return false;
       }
-    }
+    } */
 
-    [HarmonyPatch("OnDisable")]
+    /* [HarmonyPatch("OnDisable")]
     [HarmonyPostfix]
     static void OnDisablePostfix(StartMixingStationBehaviour __instance)
     {
@@ -374,6 +374,6 @@ namespace NoLazyWorkers.Chemists
             $"StartMixingStationBehaviourPatch.OnDisable: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
       }
-    }
+    } */
   }
 }
