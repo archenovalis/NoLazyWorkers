@@ -25,15 +25,15 @@ using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
 using static NoLazyWorkers.ConfigurationExtensions;
-using static NoLazyWorkers.General.StorageExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Structures.StorageExtensions;
+using static NoLazyWorkers.Structures.StorageUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
-using NoLazyWorkers.Handlers;
+using NoLazyWorkers.Employees;
 
-namespace NoLazyWorkers.General
+namespace NoLazyWorkers.Structures
 {
   public static class StorageExtensions
   {
@@ -378,6 +378,7 @@ namespace NoLazyWorkers.General
         if (qualityRect != null && itemFieldRect != null)
         {
           qualityRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 75f);
+          itemFieldRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y + 10f);
         }
 
         configPanel.QualityUI = qualityUIObj.GetComponent<QualityFieldUI>();
@@ -637,14 +638,6 @@ namespace NoLazyWorkers.General
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
       return qty;
     }
-
-    public struct ShelfSearchContext
-    {
-      public NPC Npc { get; set; }
-      public ItemInstance TargetItem { get; set; }
-      public int Needed { get; set; }
-      public int Wanted { get; set; }
-    }
   }
 
   public class StorageConfigPanel : ConfigPanel
@@ -740,7 +733,7 @@ namespace NoLazyWorkers.General
           itemField.onItemChanged.AddListener(item => RefreshChanged(item, config));
           itemFieldList.Add(itemField);
           itemSlots.AddRange(config.Storage.StorageEntity.ItemSlots);
-          var qualityfield = config.TargetQuality;
+          var qualityfield = config.Quality;
           qualityfield.onValueChanged.RemoveAllListeners();
           qualityfield.onValueChanged.AddListener(quality => config.InvokeChanged());
           qualityList.Add(qualityfield);
@@ -932,12 +925,12 @@ namespace NoLazyWorkers.General
 
   public class StorageConfiguration : EntityConfiguration
   {
-    public QualityField TargetQuality { get; private set; }
     public ItemField StorageItem { get; private set; }
     public PlaceableStorageEntity Storage { get; private set; }
     public StorageConfigurableProxy Proxy { get; private set; }
     public StorageMode Mode { get; set; }
     public ItemInstance AssignedItem { get; set; }
+    public QualityField Quality { get; private set; }
 
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
@@ -957,12 +950,14 @@ namespace NoLazyWorkers.General
 
       try
       {
-        TargetQuality = new QualityField(this);
-        TargetQuality.onValueChanged.AddListener(delegate
+        Quality = new QualityField(this);
+        Quality.onValueChanged.AddListener(delegate
         {
+          if (AssignedItem is ProductItemInstance prodItem)
+            prodItem.SetQuality(Quality.Value);
           InvokeChanged();
         });
-        TargetQuality.SetValue(EQuality.Premium, network: false);
+        Quality.SetValue(EQuality.Premium, network: false);
 
         StorageItem = new ItemField(this)
         {
@@ -1020,7 +1015,7 @@ namespace NoLazyWorkers.General
             StorageItem.SelectedItem = itemInstance.Definition;
             AssignedItem = itemInstance;
             if (itemInstance is ProductItemInstance)
-              TargetQuality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), false);
+              Quality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), false);
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loaded Item={StorageItem.SelectedItem?.Name}, Packaging={(itemInstance is ProductItemInstance pi ? pi.AppliedPackaging?.Name : "null")} for GUID={Storage.GUID}", DebugLogger.Category.Storage);
           }
           else
@@ -1100,7 +1095,7 @@ namespace NoLazyWorkers.General
           ItemInstance itemInstance = config.AssignedItem;
           jsonObject["StorageItem"] = itemInstance.GetItemData().GetJson(true);
           if (itemInstance is ProductItemInstance)
-            jsonObject["Quality"] = config.TargetQuality?.Value.ToString();
+            jsonObject["Quality"] = config.Quality?.Value.ToString();
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved StorageItem for GUID={__instance.GUID}: {jsonObject["StorageItem"]}", DebugLogger.Category.Storage);
         }
 

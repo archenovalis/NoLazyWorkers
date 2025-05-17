@@ -18,11 +18,12 @@ using System.Collections;
 using System.Reflection;
 
 //using NoLazyWorkers.Handlers;
-using NoLazyWorkers.Chemists;
+using NoLazyWorkers.Stations;
 using NoLazyWorkers.Botanists;
-using NoLazyWorkers.General;
-using static NoLazyWorkers.General.GeneralExtensions;
+using NoLazyWorkers.Employees;
+using static NoLazyWorkers.Employees.EmployeeExtensions;
 using FluffyUnderware.DevTools.Extensions;
+using NoLazyWorkers.Structures;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -37,7 +38,7 @@ namespace NoLazyWorkers
     public static bool Core = true;
     public static bool Settings = false;
     // employees
-    public static bool Chemist = false;
+    public static bool Chemist = true;
     public static bool Botanist = false;
     public static bool Handler = false;
     // generic
@@ -48,7 +49,7 @@ namespace NoLazyWorkers
     public static bool LabOven = false;
     public static bool ChemistryStation = false;
     public static bool MixingStation = true;
-    public static bool PackagingStation = true;
+    public static bool PackagingStation = false;
     //
     public static bool Stacktrace = false;
   }

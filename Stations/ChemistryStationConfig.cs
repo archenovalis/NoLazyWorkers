@@ -5,9 +5,9 @@ using ScheduleOne.NPCs;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using UnityEngine;
-using static NoLazyWorkers.General.GeneralExtensions;
+using static NoLazyWorkers.Stations.StationExtensions;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
   public static class ChemistryStationExtensions
   {
@@ -31,8 +31,8 @@ namespace NoLazyWorkers.Chemists
       public int StartThreshold => 1;
       public int MaxProductQuantity => 20;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
-
       public int GetInputQuantity() => _station.IngredientSlots?.Sum(slot => slot?.Quantity ?? 0) ?? 0;
+      public bool MoveOutputToShelf() => false;
 
       public List<ItemField> GetInputItemForProduct()
       {
@@ -46,6 +46,11 @@ namespace NoLazyWorkers.Chemists
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ChemistryStation.StartOperation: Started cook for station {_station.GUID}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+      }
+
+      public List<ItemInstance> RefillList()
+      {
+        throw new NotImplementedException();
       }
     }
   }

@@ -7,13 +7,14 @@ using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Product;
-using static NoLazyWorkers.Chemists.ChemistBehaviour;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.Chemists.MixingStationExtensions;
+using static NoLazyWorkers.Employees.EmployeeBehaviour;
+using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.MixingStationExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+using NoLazyWorkers.Employees;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
   public static class MixingStationUtilities
   {
@@ -61,7 +62,7 @@ namespace NoLazyWorkers.Chemists
     }
   }
 
-  public class MixingStationBehaviour : ChemistBehaviour
+  public class MixingStationBehaviour : EmployeeBehaviour
   {
     public override IStationAdapter<TStation> GetStation<TStation>(Behaviour behaviour)
     {
@@ -117,7 +118,7 @@ namespace NoLazyWorkers.Chemists
             continue;
           }
 
-          IStationAdapter prodStation = new MixingStationAdapter(station);
+          MixingStationAdapter prodStation = new MixingStationAdapter(station);
           if (((IUsable)station).IsInUse || prodStation.HasActiveOperation)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose,
@@ -183,50 +184,6 @@ namespace NoLazyWorkers.Chemists
         return false;
       }
     }
-
-    [HarmonyPatch("GetMixStationsReadyToMove")]
-    [HarmonyPrefix]
-    static bool GetMixStationsReadyToMovePrefix(Chemist __instance, ref List<MixingStation> __result)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"MixingStationChemistPatch.GetMixStationsReadyToMove: Entered for chemist={__instance?.fullName}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      try
-      {
-        List<MixingStation> list = new();
-        foreach (MixingStation station in __instance.configuration.MixStations)
-        {
-          if (station == null)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
-                $"MixingStationChemistPatch.GetMixStationsReadyToMove: Null station in MixStations for {__instance?.fullName}",
-                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-            continue;
-          }
-          ItemSlot outputSlot = station.OutputSlot;
-          if (outputSlot.Quantity > 0 && FindShelfForDelivery(__instance, outputSlot.ItemInstance) != null)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"MixingStationChemistPatch.GetMixStationsReadyToMove: Station {station.GUID} has output {outputSlot.ItemInstance?.ID}, shelf available",
-                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-            list.Add(station);
-          }
-        }
-        __result = list;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationChemistPatch.GetMixStationsReadyToMove: Found {list.Count} stations for {__instance?.fullName}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-        return false;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"MixingStationChemistPatch.GetMixStationsReadyToMove: Failed for chemist: {__instance?.fullName}, error: {e}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-        __result = new List<MixingStation>();
-        return false;
-      }
-    }
   }
 
   [HarmonyPatch(typeof(StartMixingStationBehaviour))]
@@ -234,7 +191,7 @@ namespace NoLazyWorkers.Chemists
   {
     private static readonly MixingStationBehaviour mixingBehaviour = new MixingStationBehaviour();
 
-    [HarmonyPatch("Awake")]
+    /* [HarmonyPatch("Awake")]
     [HarmonyPostfix]
     static void AwakePostfix(StartMixingStationBehaviour __instance)
     {
@@ -259,7 +216,7 @@ namespace NoLazyWorkers.Chemists
             $"StartMixingStationBehaviourPatch.Awake: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
       }
-    }
+    } */
 
     [HarmonyPatch("StartCook")]
     [HarmonyPrefix]
@@ -317,63 +274,104 @@ namespace NoLazyWorkers.Chemists
         return false;
       }
     }
+  }
 
-    /* [HarmonyPatch("Update")]
+  [HarmonyPatch(typeof(Chemist))]
+  public class ChemistMixingStationBehaviourPatch
+  {
     [HarmonyPrefix]
-    static bool UpdatePrefix(StartMixingStationBehaviour __instance)
+    [HarmonyPatch("GetMixStationsReadyToMove")]
+    static bool GetMixStationsReadyToMovePrefix(Chemist __instance, ref List<MixingStation> __result)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"StartMixingStationBehaviourPatch.Update: Entered for {__instance.chemist?.fullName}",
+          $"GetMixStationsReadyToMove: Checking stations for chemist={__instance?.fullName ?? "null"}, total stations={__instance?.configuration.MixStations.Count ?? 0}",
           DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
       try
       {
-        if (!states.TryGetValue(__instance, out var state))
+        List<MixingStation> list = new();
+        foreach (MixingStation station in __instance.configuration.MixStations)
         {
-          state = new StateData
+          if (station == null)
           {
-            CurrentState = EState.Idle,
-            Fetching = new Dictionary<PlaceableStorageEntity, int>()
-          };
-          states[__instance] = state;
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"StartMixingStationBehaviourPatch.Update: Initialized new state for {__instance.chemist?.fullName}",
-              DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                $"GetMixStationsReadyToMove: Null station in MixStations for chemist={__instance?.fullName ?? "null"}",
+                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
+            continue;
+          }
+
+          ItemSlot outputSlot = station.OutputSlot;
+          if (outputSlot?.Quantity <= 0 || outputSlot.ItemInstance == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"GetMixStationsReadyToMove: Skipping station={station.GUID}, output slot empty or invalid",
+                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+            continue;
+          }
+
+          var outputProduct = outputSlot.ItemInstance as ProductItemInstance;
+
+          TransitRoute route = null;
+          // Check for looping
+          if (MixingRoutes.TryGetValue(station.GUID, out var routes) && routes != null && routes.Any())
+          {
+            MixingRoute matchingRoute = routes.FirstOrDefault(route =>
+                route.Product?.SelectedItem != null && route.Product.SelectedItem == outputProduct.definition);
+            if (matchingRoute != null)
+            {
+              route = new TransitRoute(station, station);
+              __instance.MoveItemBehaviour.Initialize(route, outputSlot.ItemInstance);
+              __instance.MoveItemBehaviour.Enable_Networked(null);
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"GetMixStationsReadyToMove: Initialized MoveItemBehaviour for looping product={outputProduct.Name} in station={station.GUID}",
+                  DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+              continue;
+            }
+            else
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"GetMixStationsReadyToMove: No matching route for output={outputProduct.Name} in station={station.GUID}, checking shelf",
+                  DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+            }
+          }
+          else
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"GetMixStationsReadyToMove: No routes defined for station={station.GUID}, checking shelf",
+                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+          }
+
+          // Fallback to shelf delivery
+          PlaceableStorageEntity shelf = FindShelfForDelivery(__instance, outputSlot.ItemInstance);
+          if (shelf != null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"GetMixStationsReadyToMove: Initialized MoveItemBehaviour for shelf={shelf.GUID}, product={outputProduct.Name}, station={station.GUID}",
+                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+            route = new TransitRoute(station, shelf);
+            __instance.MoveItemBehaviour.Initialize(route, outputSlot.ItemInstance);
+            __instance.MoveItemBehaviour.Enable_Networked(null);
+          }
+          else
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"GetMixStationsReadyToMove: No shelf found for product={outputProduct.Name} in station={station.GUID}",
+                DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+          }
         }
-
-        mixingBehaviour.UpdateMovement(__instance, state);
-        mixingBehaviour.StateHandlers[state.CurrentState](__instance, state);
-        return false;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"StartMixingStationBehaviourPatch.Update: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-        mixingBehaviour.Disable(__instance);
-        return false;
-      }
-    } */
-
-    /* [HarmonyPatch("OnDisable")]
-    [HarmonyPostfix]
-    static void OnDisablePostfix(StartMixingStationBehaviour __instance)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"StartMixingStationBehaviourPatch.OnDisable: Entered for {__instance.chemist?.fullName}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      try
-      {
-        Cleanup(__instance);
+        __result = list;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"StartMixingStationBehaviourPatch.OnDisable: Cleaned up state for {__instance.chemist?.fullName}",
+            $"GetMixStationsReadyToMove: Found {list.Count} stations ready to move for chemist={__instance?.fullName ?? "null"}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+        return false;
       }
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"StartMixingStationBehaviourPatch.OnDisable: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
+            $"GetMixStationsReadyToMove: Failed for chemist: {__instance?.fullName ?? "null"}, error: {e}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
+        __result = new List<MixingStation>();
+        return false;
       }
-    } */
+    }
   }
 }

@@ -9,7 +9,7 @@ using System.Collections;
 using FishNet;
 using HarmonyLib;
 using MelonLoader;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Employees;
 using ScheduleOne;
 using ScheduleOne.Delivery;
 using ScheduleOne.DevUtilities;
@@ -22,10 +22,10 @@ using ScheduleOne.Product;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.Handlers.HandlerExtensions;
-using static NoLazyWorkers.Handlers.HandlerBehaviourUtilities;
-using static NoLazyWorkers.Handlers.HandlerBehaviourExtensions;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.HandlerExtensions;
+using static NoLazyWorkers.Employees.HandlerBehaviourUtilities;
+using static NoLazyWorkers.Employees.HandlerBehaviourExtensions;
 using static NoLazyWorkers.NoLazyUtilities;
 using GameKit.Utilities;
 using Beautify.Demos;
@@ -33,8 +33,9 @@ using FishNet.Object;
 using Pathfinding.Examples;
 using ScheduleOne.NPCs;
 using UnityEngine.InputSystem;
+using NoLazyWorkers.Structures;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers.Employees
 {
   // Class: MoveItemBehaviourExtensions
   // Purpose: Manages slot reservations for MoveItemBehaviour to prevent NPC conflicts during item transfers.
@@ -214,17 +215,9 @@ namespace NoLazyWorkers.Handlers
                 continue;
               }
               var canGetToChecked = false;
-              var itemFields = station.GetInputItemForProduct();
-              foreach (var itemField in itemFields)
+              var items = station.RefillList();
+              foreach (var item in items)
               {
-                if (itemField?.SelectedItem == null || station.GetInputQuantity() >= station.StartThreshold)
-                {
-                  DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-                      $"FindItemsNeedingMovement: Skipping itemField (null or sufficient quantity) for station {station.GUID} for NPC={npc.fullName}",
-                      DebugLogger.Category.Handler);
-                  continue;
-                }
-                var item = itemField.SelectedItem.GetDefaultInstance();
                 var shelves = StorageUtilities.FindShelvesWithItem(npc, item, needed: 1);
                 var source = shelves.Keys.FirstOrDefault(s => GetOutputSlotsContainingTemplateItem(s, item).Count > 0);
                 if (source == null)
@@ -427,7 +420,7 @@ namespace NoLazyWorkers.Handlers
                   }
                   var item = slot.ItemInstance;
 
-                  if (anyShelf.ParentProperty != null && RouteQueueManager.NoDestinationCache.TryGetValue(anyShelf.ParentProperty, out var cache) && cache.Any(i => i.CanStackWith(item)))
+                  if (anyShelf.ParentProperty != null && RouteQueueManager.NoDestinationCache.TryGetValue(anyShelf.ParentProperty, out var cache) && cache.Any(i => i.CanStackWith(item, false)))
                   {
                     DebugLogger.Log(DebugLogger.LogLevel.Verbose,
                         $"FindItemsNeedingMovement: Skipping cached item {item.ID} for property {anyShelf.ParentProperty.name} in shelf {anyShelf.GUID} for NPC={npc.fullName}",
@@ -616,7 +609,7 @@ namespace NoLazyWorkers.Handlers
       _routeQueue.Clear();
       int availableSlots = _packager.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
       var filteredRequests = requests
-          .Where(r => !_failedRoutes.Any(t => t.Key.Item.CanStackWith(r.Item) || Time.time > t.Value.Time + PackagerPatch.RETRY_DELAY))
+          .Where(r => !_failedRoutes.Any(t => t.Key.Item.CanStackWith(r.Item, false) || Time.time > t.Value.Time + PackagerPatch.RETRY_DELAY))
           .OrderByDescending(GetPriority)
           .Take(availableSlots)
           .ToList();
@@ -1537,7 +1530,8 @@ namespace NoLazyWorkers.Handlers
     [HarmonyPatch("Awake")]
     public static bool AwakePrefix(MoveItemBehaviour __instance)
     {
-      ActiveBehaviours[__instance.Npc] = __instance;
+      if (__instance.Npc is Packager)
+        ActiveBehaviours[__instance.Npc] = __instance;
       return true;
     }
 
@@ -1550,26 +1544,29 @@ namespace NoLazyWorkers.Handlers
     [HarmonyPatch("GrabItem")]
     public static bool GrabItemPrefix(MoveItemBehaviour __instance)
     {
-      if (__instance.skipPickup)
+      if (__instance.Npc is Packager)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"GrabItem: Skipping for inventory route for NPC={__instance.Npc.fullName}",
-            DebugLogger.Category.Handler);
-        return true;
+        if (__instance.skipPickup)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"GrabItem: Skipping for inventory route for NPC={__instance.Npc.fullName}",
+              DebugLogger.Category.Handler);
+          return true;
+        }
+        var sourceSlots = GetOutputSlotsContainingTemplateItem(__instance.assignedRoute.Source,
+            __instance.itemToRetrieveTemplate);
+        var availableSlot = sourceSlots.FirstOrDefault(s => !s.IsLocked || s.ActiveLock.LockOwner == __instance.Npc.NetworkObject);
+        if (availableSlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"GrabItem: No available source slot for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
+              DebugLogger.Category.Handler);
+          if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
+            routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
+          return false;
+        }
+        SetReservedSlot(__instance, availableSlot);
       }
-      var sourceSlots = GetOutputSlotsContainingTemplateItem(__instance.assignedRoute.Source,
-          __instance.itemToRetrieveTemplate);
-      var availableSlot = sourceSlots.FirstOrDefault(s => !s.IsLocked || s.ActiveLock.LockOwner == __instance.Npc.NetworkObject);
-      if (availableSlot == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"GrabItem: No available source slot for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
-            DebugLogger.Category.Handler);
-        if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
-          routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
-        return false;
-      }
-      SetReservedSlot(__instance, availableSlot);
       return true;
     }
 
@@ -1582,39 +1579,41 @@ namespace NoLazyWorkers.Handlers
     [HarmonyPatch("TakeItem")]
     public static bool TakeItemPrefix(MoveItemBehaviour __instance)
     {
-      if (__instance.skipPickup)
+      if (__instance.Npc is Packager)
       {
-        ReleaseReservations(__instance);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"TakeItem: Skipping for inventory route, released reservations for NPC={__instance.Npc.fullName}",
-            DebugLogger.Category.Handler);
-        return true;
-      }
+        if (__instance.skipPickup)
+        {
+          ReleaseReservations(__instance);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"TakeItem: Skipping for inventory route, released reservations for NPC={__instance.Npc.fullName}",
+              DebugLogger.Category.Handler);
+          return true;
+        }
 
-      int amountToGrab = __instance.GetAmountToGrab();
-      if (amountToGrab == 0)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"TakeItem: Amount to grab is 0 for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
-            DebugLogger.Category.Handler);
-        ReleaseReservations(__instance);
-        if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
-          routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
-        return false;
-      }
+        int amountToGrab = __instance.GetAmountToGrab();
+        if (amountToGrab == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"TakeItem: Amount to grab is 0 for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
+              DebugLogger.Category.Handler);
+          ReleaseReservations(__instance);
+          if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
+            routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
+          return false;
+        }
 
-      ItemSlot reservedSlot = GetReservedSlot(__instance);
-      if (reservedSlot == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"TakeItem: No reserved slot for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
-            DebugLogger.Category.Handler);
-        ReleaseReservations(__instance);
-        if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
-          routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
-        return false;
+        ItemSlot reservedSlot = GetReservedSlot(__instance);
+        if (reservedSlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"TakeItem: No reserved slot for item {__instance.itemToRetrieveTemplate?.ID} for NPC={__instance.Npc.fullName}",
+              DebugLogger.Category.Handler);
+          ReleaseReservations(__instance);
+          if (PackagerPatch._routeQueues.TryGetValue(__instance.Npc as Packager, out var routeQueueManager))
+            routeQueueManager.HandleFailedDelivery(__instance.itemToRetrieveTemplate);
+          return false;
+        }
       }
-
       return true;
     }
 
@@ -1626,11 +1625,14 @@ namespace NoLazyWorkers.Handlers
     [HarmonyPatch("End")]
     public static void Postfix(MoveItemBehaviour __instance)
     {
-      ActiveBehaviours.Remove(__instance.Npc);
-      ReleaseReservations(__instance);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"End: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}",
-          DebugLogger.Category.Handler);
+      if (__instance.Npc is Packager)
+      {
+        ActiveBehaviours.Remove(__instance.Npc);
+        ReleaseReservations(__instance);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"End: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}",
+            DebugLogger.Category.Handler);
+      }
     }
   }
 

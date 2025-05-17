@@ -5,9 +5,9 @@ using ScheduleOne.NPCs;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using UnityEngine;
-using static NoLazyWorkers.General.GeneralExtensions;
+using static NoLazyWorkers.Stations.StationExtensions;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
   public static class LabOvenExtensions
   {
@@ -33,6 +33,7 @@ namespace NoLazyWorkers.Chemists
       public int MaxProductQuantity => 20;
       public int GetInputQuantity() => _station.IngredientSlot?.Quantity ?? 0;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public bool MoveOutputToShelf() => false;
 
       public List<ItemField> GetInputItemForProduct()
       {
@@ -46,6 +47,11 @@ namespace NoLazyWorkers.Chemists
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"LabOvenAdapter.StartOperation: Started cook for station {_station.GUID}",
             DebugLogger.Category.Chemist, DebugLogger.Category.LabOven);
+      }
+
+      public List<ItemInstance> RefillList()
+      {
+        throw new NotImplementedException();
       }
     }
   }

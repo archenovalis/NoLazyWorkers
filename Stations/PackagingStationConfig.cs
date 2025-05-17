@@ -11,17 +11,18 @@ using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Handlers.PackagingStationExtensions;
-using static NoLazyWorkers.Handlers.PackagingStationUtilities;
-using static NoLazyWorkers.General.GeneralExtensions;
+using static NoLazyWorkers.Employees.PackagingStationExtensions;
+using static NoLazyWorkers.Employees.PackagingStationUtilities;
 using ScheduleOne.NPCs.Behaviour;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using Steamworks;
 using ScheduleOne.Product;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.NPCs;
+using GameKit.Utilities;
+using static NoLazyWorkers.Stations.StationExtensions;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers.Employees
 {
   public class PackagingStationAdapter : IStationAdapter<PackagingStation>
   {
@@ -47,6 +48,23 @@ namespace NoLazyWorkers.Handlers
     public void StartOperation(Behaviour behaviour) => (behaviour as PackagingStationBehaviour).StartPackaging();
     public int MaxProductQuantity => 20;
     public ITransitEntity TransitEntity => _station as ITransitEntity;
+    public List<ItemInstance> RefillList()
+    {
+      List<ItemInstance> items = [];
+      var fields = ItemFields[_station.GUID];
+      var qualities = QualityFields[_station.GUID];
+      for (int i = 0; i < fields.Count; i++)
+      {
+        var item = fields[i].SelectedItem;
+        if (item == null)
+          continue;
+        var prodItem = item.GetDefaultInstance() as ProductItemInstance;
+        prodItem.SetQuality(qualities[i].Value);
+        items.AddUnique(prodItem);
+      }
+      return items;
+    }
+    public bool MoveOutputToShelf() => false;
   }
 
   public static class PackagingStationExtensions
@@ -255,8 +273,8 @@ namespace NoLazyWorkers.Handlers
           var qualRect = qualityUIObj.GetComponent<RectTransform>();
           if (rect != null)
           {
-            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -11 - 104f * i);
-            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -79 - 104f * i);
+            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -15 - 104f * i);
+            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -83 - 104f * i);
           }
 
           foreach (var text in itemFieldUI.GetComponentsInChildren<TextMeshProUGUI>())

@@ -7,17 +7,18 @@ using ScheduleOne.ObjectScripts;
 using Registry = ScheduleOne.Registry;
 
 using FishNet;
-using static NoLazyWorkers.Chemists.ChemistBehaviour;
+using static NoLazyWorkers.Employees.EmployeeBehaviour;
 using ScheduleOne.NPCs.Behaviour;
 using System.Collections;
 using UnityEngine;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.Chemists.CauldronExtensions;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.CauldronExtensions;
+using NoLazyWorkers.Employees;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
-  public class CauldronBehaviour : ChemistBehaviour
+  public class CauldronBehaviour : EmployeeBehaviour
   {
     public override IStationAdapter<TStation> GetStation<TStation>(Behaviour behaviour)
     {

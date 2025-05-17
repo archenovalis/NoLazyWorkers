@@ -2,7 +2,7 @@ using System.Collections;
 using FishNet;
 using HarmonyLib;
 using MelonLoader;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Employees;
 using ScheduleOne;
 using ScheduleOne.Delivery;
 using ScheduleOne.Employees;
@@ -14,11 +14,11 @@ using ScheduleOne.Product;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.Handlers.HandlerExtensions;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.Employees.HandlerExtensions;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers.Employees
 {
   public static class HandlerExtensions
   {

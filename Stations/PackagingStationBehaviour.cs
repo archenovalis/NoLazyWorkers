@@ -1,7 +1,7 @@
 using FishNet;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Employees;
 using ScheduleOne;
 using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
@@ -15,10 +15,10 @@ using ScheduleOne.Product.Packaging;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.Events;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Structures.StorageUtilities;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers.Stations
 {
   [HarmonyPatch(typeof(PackagingStationBehaviour))]
   public class PackagingStationBehaviourPatch

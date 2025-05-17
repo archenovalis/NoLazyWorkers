@@ -18,12 +18,15 @@ using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.General.GeneralExtensions;
 using ScheduleOne.NPCs.Behaviour;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.NPCs;
+using GameKit.Utilities;
+using static NoLazyWorkers.Stations.MixingStationExtensions;
+using ScheduleOne.Employees;
+using static NoLazyWorkers.Stations.StationExtensions;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
   public static class MixingStationExtensions
   {
@@ -55,12 +58,81 @@ namespace NoLazyWorkers.Chemists
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public List<ItemField> GetInputItemForProduct() => [MixingStationUtilities.GetInputItemForProductSlot(this)];
       public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
+
       public void StartOperation(Behaviour behaviour)
       {
         (behaviour as StartMixingStationBehaviour).StartCook();
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}",
             DebugLogger.Category.MixingStation);
+      }
+
+      public List<ItemInstance> RefillList()
+      {
+        List<ItemInstance> items = [];
+        foreach (var route in MixingRoutes[_station.GUID])
+        {
+          if (route.Product.SelectedItem == null)
+            continue;
+          var prodItem = route.Product.SelectedItem.GetDefaultInstance() as ProductItemInstance;
+          prodItem.SetQuality(QualityFields[_station.GUID].Value);
+          items.AddUnique(prodItem);
+        }
+        return items;
+      }
+
+      public bool MoveOutputToShelf()
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"UniqueCompletion: Entered for station={_station.GUID}",
+            DebugLogger.Category.MixingStation);
+
+        if (OutputSlot.Quantity <= 0 || OutputSlot.ItemInstance == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"UniqueCompletion: No items in output slot for station={_station.GUID}",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var outputItem = OutputSlot.ItemInstance;
+        var outputProduct = outputItem.Definition as ProductDefinition;
+        if (outputProduct == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"UniqueCompletion: Output item {outputItem.ID} is not a ProductDefinition for station={_station.GUID}",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        if (!MixingStationExtensions.MixingRoutes.TryGetValue(_station.GUID, out var routes) || routes == null || routes.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"UniqueCompletion: No routes defined for station={_station.GUID}",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var matchingRoute = routes.FirstOrDefault(route =>
+            route.Product?.SelectedItem != null && route.Product.SelectedItem == outputProduct);
+        if (matchingRoute == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"UniqueCompletion: No matching route for output={outputItem.ID} in station={_station.GUID}",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        // Move item to ProductSlot
+        int quantityToLoop = OutputSlot.Quantity;
+
+        var itemToLoop = outputItem.GetCopy(quantityToLoop);
+        ProductSlots[0].InsertItem(itemToLoop);
+        OutputSlot.ChangeQuantity(-quantityToLoop, false);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"UniqueCompletion: Looped {quantityToLoop} of {outputItem.ID} to product slot for station={_station.GUID}",
+            DebugLogger.Category.MixingStation);
+        return true;
       }
     }
 

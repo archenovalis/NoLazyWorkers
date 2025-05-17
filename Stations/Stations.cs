@@ -24,8 +24,8 @@ using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
 using static NoLazyWorkers.ConfigurationExtensions;
-using static NoLazyWorkers.General.StorageExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Structures.StorageExtensions;
+using static NoLazyWorkers.Structures.StorageUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
@@ -33,12 +33,13 @@ using ScheduleOne.Persistence;
 using ScheduleOne.NPCs.Behaviour;
 using UnityEngine;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using NoLazyWorkers.Chemists;
+using NoLazyWorkers.Stations;
 using System.Reflection;
+using NoLazyWorkers.Employees;
 
-namespace NoLazyWorkers.General
+namespace NoLazyWorkers.Stations
 {
-  public static class GeneralExtensions
+  public static class StationExtensions
   {
     public static Dictionary<Property, List<IStationAdapter>> PropertyStations = [];
 
@@ -57,6 +58,8 @@ namespace NoLazyWorkers.General
       List<ItemField> GetInputItemForProduct();
       int MaxProductQuantity { get; }
       ITransitEntity TransitEntity { get; }
+      List<ItemInstance> RefillList();
+      bool MoveOutputToShelf();
     }
 
     public interface IStationAdapter<TStation> : IStationAdapter where TStation : class
@@ -66,7 +69,7 @@ namespace NoLazyWorkers.General
 
     public static class StationTypeRegistry
     {
-      private static readonly Dictionary<Type, (Type StationType, ChemistBehaviour Handler)> _registry = new();
+      private static readonly Dictionary<Type, (Type StationType, EmployeeBehaviour Handler)> _registry = new();
 
       static StationTypeRegistry()
       {
@@ -76,7 +79,7 @@ namespace NoLazyWorkers.General
         Register<StartChemistryStationBehaviour, ChemistryStation>(new ChemistryStationBehaviour());
       }
 
-      public static void Register<TBehaviour, TStation>(ChemistBehaviour handler)
+      public static void Register<TBehaviour, TStation>(EmployeeBehaviour handler)
           where TBehaviour : Behaviour
           where TStation : class
       {
@@ -86,7 +89,7 @@ namespace NoLazyWorkers.General
             DebugLogger.Category.General);
       }
 
-      public static bool TryGetStationTypes(Type behaviourType, out (Type StationType, ChemistBehaviour Handler) types)
+      public static bool TryGetStationTypes(Type behaviourType, out (Type StationType, EmployeeBehaviour Handler) types)
       {
         return _registry.TryGetValue(behaviourType, out types);
       }
@@ -127,7 +130,7 @@ namespace NoLazyWorkers.General
       }
 
       private static IStationAdapter<TStation> GetStationGeneric<TStation>(
-          Behaviour behaviour, ChemistBehaviour handler) where TStation : class
+          Behaviour behaviour, EmployeeBehaviour handler) where TStation : class
       {
         return handler.GetStation<TStation>(behaviour);
       }

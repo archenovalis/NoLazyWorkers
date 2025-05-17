@@ -7,16 +7,17 @@ using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Product;
-using static NoLazyWorkers.Chemists.ChemistBehaviour;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.Chemists.ChemistryStationExtensions;
+using static NoLazyWorkers.Employees.EmployeeBehaviour;
+using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.ChemistryStationExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using static NoLazyWorkers.Chemists.LabOvenExtensions;
+using static NoLazyWorkers.Stations.LabOvenExtensions;
+using NoLazyWorkers.Employees;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Stations
 {
-  public class ChemistryStationBehaviour : ChemistBehaviour
+  public class ChemistryStationBehaviour : EmployeeBehaviour
   {
     public override IStationAdapter<TStation> GetStation<TStation>(Behaviour behaviour)
     {

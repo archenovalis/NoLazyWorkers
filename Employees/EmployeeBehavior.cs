@@ -10,21 +10,25 @@ using ScheduleOne.NPCs;
 using ScheduleOne.ObjectScripts;
 using System.Collections;
 using UnityEngine;
-using static NoLazyWorkers.General.GeneralExtensions;
-using static NoLazyWorkers.Chemists.ChemistUtilities;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.Structures.StorageUtilities;
 
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+using static NoLazyWorkers.Stations.MixingStationExtensions;
+using static NoLazyWorkers.Stations.LabOvenExtensions;
+using static NoLazyWorkers.Stations.ChemistryStationExtensions;
+using static NoLazyWorkers.Stations.CauldronExtensions;
 
-namespace NoLazyWorkers.Chemists
+namespace NoLazyWorkers.Employees
 {
-  public static class ChemistExtensions
+  public static class EmployeeExtensions
   {
 
   }
 
   // TODO implement slot locking
-  public static class ChemistUtilities
+  public static class EmployeeUtilities
   {
     public static bool HasSufficientItems(NPC npc, ItemInstance targetItem, int needed)
     {
@@ -56,7 +60,7 @@ namespace NoLazyWorkers.Chemists
     }
   }
 
-  public abstract class ChemistBehaviour
+  public abstract class EmployeeBehaviour
   {
     public static readonly Dictionary<Chemist, EntityConfiguration> cachedConfigs = new();
     public static readonly Dictionary<Behaviour, StateData> states = new();
@@ -72,7 +76,7 @@ namespace NoLazyWorkers.Chemists
 
     public readonly Dictionary<EState, StateHandler> StateHandlers;
 
-    public ChemistBehaviour()
+    public EmployeeBehaviour()
     {
       StateHandlers = new Dictionary<EState, StateHandler>
             {
@@ -109,7 +113,7 @@ namespace NoLazyWorkers.Chemists
 
     protected void TransitionState(Behaviour behaviour, StateData state, EState newState, string reason)
     {
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
       if (station == null || chemist == null)
       {
@@ -124,7 +128,7 @@ namespace NoLazyWorkers.Chemists
       state.CurrentState = newState;
     }
 
-    public virtual bool ValidateState(Chemist chemist, Behaviour behaviour, StateData state, out bool canStart, out bool canRestock)
+    public virtual bool ValidateState(NPC chemist, Behaviour behaviour, StateData state, out bool canStart, out bool canRestock)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ValidateState: Entered for {chemist?.fullName}, state={state.CurrentState}",
@@ -197,7 +201,7 @@ namespace NoLazyWorkers.Chemists
       return true;
     }
 
-    public virtual bool ValidateFetchState(Chemist chemist, Behaviour behaviour, StateData state)
+    public virtual bool ValidateFetchState(NPC chemist, Behaviour behaviour, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ValidateFetchState: Entered for {chemist?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}",
@@ -224,7 +228,7 @@ namespace NoLazyWorkers.Chemists
       return isValid;
     }
 
-    public virtual bool ValidateInsertState(Chemist chemist, Behaviour behaviour, StateData state)
+    public virtual bool ValidateInsertState(NPC chemist, Behaviour behaviour, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ValidateInsertState: Entered for {chemist?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}",
@@ -252,7 +256,7 @@ namespace NoLazyWorkers.Chemists
       return isValid;
     }
 
-    public virtual bool ValidateOperationState(Chemist chemist, Behaviour behaviour, StateData state)
+    public virtual bool ValidateOperationState(NPC chemist, Behaviour behaviour, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ValidateOperationState: Entered for {chemist?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}",
@@ -289,7 +293,7 @@ namespace NoLazyWorkers.Chemists
       return isValid;
     }
 
-    public virtual bool ValidateCompletedState(Chemist chemist, Behaviour behaviour, StateData state)
+    public virtual bool ValidateCompletedState(NPC chemist, Behaviour behaviour, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"ValidateCompletedState: Entered for {chemist?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}",
@@ -314,7 +318,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"HandleIdle: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
       if (!ValidateState(chemist, behaviour, state, out bool canStart, out bool canRestock))
       {
@@ -363,7 +367,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"HandleGrabbing: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       var curInv = chemist.Inventory._GetItemAmount(state.TargetItem?.ID);
       if (curInv < state.QuantityInventory)
       {
@@ -401,7 +405,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"HandleInserting: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
       var curInv = chemist.Inventory._GetItemAmount(state.TargetItem?.ID); //TODO replace with onchanged listener cache
       if (curInv < state.QuantityInventory)
@@ -456,7 +460,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"HandleStartingOperation: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
 
       if (!IsAtStation(behaviour))
@@ -489,7 +493,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"HandleCompleted: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, operationPending={state.OperationPending}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
       if (state.OperationPending)
       {
@@ -528,7 +532,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"WalkToDestination: Entered for {behaviour.Npc?.fullName}, destination={destination?.Name}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       if (destination == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
@@ -560,7 +564,7 @@ namespace NoLazyWorkers.Chemists
       state.WalkToSuppliesRoutine = (Coroutine)MelonCoroutines.Start(MonitorMovementStart(chemist, initialPosition, state, behaviour));
     }
 
-    private IEnumerator MonitorMovementStart(Chemist chemist, Vector3 initialPosition, StateData state, Behaviour behaviour)
+    private IEnumerator MonitorMovementStart(NPC chemist, Vector3 initialPosition, StateData state, Behaviour behaviour)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"MonitorMovementStart: Entered for {chemist?.fullName}, initialPos={initialPosition}",
@@ -593,7 +597,7 @@ namespace NoLazyWorkers.Chemists
           $"UpdateMovement: Entered for {behaviour.Npc?.fullName}, isMoving={state.IsMoving}, destination={state.Destination?.Name}",
           DebugLogger.Category.Chemist);
       if (!state.IsMoving) return;
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       state.MoveElapsed += Time.deltaTime;
       if (state.MoveElapsed >= state.MoveTimeout)
       {
@@ -656,7 +660,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"InsertItemsFromInventory: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
       if (!ValidateInsertState(chemist, behaviour, state) || station == null)
       {
@@ -698,7 +702,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"GrabItem: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}, invQty={state.QuantityInventory}, qtyWanted={state.QuantityWanted}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       IStationAdapter station = StationHandlerFactory.GetStation(behaviour);
 
       if (!IsAtShelf(behaviour, state))
@@ -784,7 +788,7 @@ namespace NoLazyWorkers.Chemists
           $"IsAtShelf: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}",
           DebugLogger.Category.Chemist);
       if (state.Fetching.Count == 0) return false;
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       var shelf = state.Fetching.First().Key;
       bool atShelf = NavMeshUtility.IsAtTransitEntity(shelf, chemist, 0.4f);
       DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -798,7 +802,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"GrabRoutine: Entered for {behaviour.Npc?.fullName}, state={state.CurrentState}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       if (chemist.Avatar?.Anim != null)
       {
         chemist.Avatar.Anim.ResetTrigger("GrabItem");
@@ -845,7 +849,7 @@ namespace NoLazyWorkers.Chemists
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"Disable: Entered for {behaviour.Npc?.fullName}",
           DebugLogger.Category.Chemist);
-      Chemist chemist = behaviour.Npc as Chemist;
+      NPC chemist = behaviour.Npc as Chemist;
       if (states.TryGetValue(behaviour, out var state))
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -908,203 +912,6 @@ namespace NoLazyWorkers.Chemists
         states.Remove(behaviour);
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"Cleanup: Removed state for {behaviour.Npc?.fullName}",
-            DebugLogger.Category.Chemist);
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(Chemist))]
-  public class ChemistPatch
-  {
-    [HarmonyPatch("Awake")]
-    [HarmonyPostfix]
-    static void AwakePostfix(Chemist __instance)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"ChemistPatch.Awake: Entered for {__instance?.fullName}",
-          DebugLogger.Category.Chemist);
-      try
-      {
-        ChemistBehaviour.Cleanup(__instance.StartCauldronBehaviour);
-        ChemistBehaviour.Cleanup(__instance.StartMixingStationBehaviour);
-        ChemistBehaviour.states[__instance.StartCauldronBehaviour] = new ChemistBehaviour.StateData { CurrentState = ChemistBehaviour.EState.Idle };
-        ChemistBehaviour.states[__instance.StartMixingStationBehaviour] = new ChemistBehaviour.StateData { CurrentState = ChemistBehaviour.EState.Idle };
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"ChemistPatch.Awake: Reinitialized states for {__instance?.fullName}",
-            DebugLogger.Category.Chemist);
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"ChemistPatch.Awake: Failed for chemist: {__instance?.fullName}, error: {e}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.Stacktrace);
-      }
-    }
-
-    [HarmonyPatch("TryStartNewTask")]
-    [HarmonyPrefix]
-    static bool TryStartNewTaskPrefix(Chemist __instance)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"ChemistPatch.TryStartNewTask: Entered for {__instance?.fullName}",
-          DebugLogger.Category.Chemist);
-      if (!InstanceFinder.IsServer)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"ChemistPatch.TryStartNewTask: Skipping, not server for {__instance?.fullName}",
-            DebugLogger.Category.Chemist);
-        return false;
-      }
-      try
-      {
-        List<LabOven> labOvensReadyToFinish = __instance.GetLabOvensReadyToFinish();
-        if (labOvensReadyToFinish.Count > 0)
-        {
-          __instance.FinishLabOven(labOvensReadyToFinish[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Finishing lab oven for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<LabOven> labOvensReadyToStart = __instance.GetLabOvensReadyToStart();
-        if (labOvensReadyToStart.Count > 0)
-        {
-          __instance.StartLabOven(labOvensReadyToStart[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Starting lab oven for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<ChemistryStation> chemistryStationsReadyToStart = __instance.GetChemistryStationsReadyToStart();
-        if (chemistryStationsReadyToStart.Count > 0)
-        {
-          __instance.StartChemistryStation(chemistryStationsReadyToStart[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Starting chemistry station for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<Cauldron> cauldronsReadyToStart = __instance.GetCauldronsReadyToStart();
-        if (cauldronsReadyToStart.Count > 0)
-        {
-          __instance.StartCauldron(cauldronsReadyToStart[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Starting cauldron for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<MixingStation> mixingStationsReadyToStart = __instance.GetMixingStationsReadyToStart();
-        if (mixingStationsReadyToStart.Count > 0)
-        {
-          __instance.StartMixingStation(mixingStationsReadyToStart[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Starting mixing station for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<LabOven> labOvensReadyToMove = __instance.GetLabOvensReadyToMove();
-        if (labOvensReadyToMove.Count > 0)
-        {
-          MoveOutputToShelf(__instance, labOvensReadyToMove[0].OutputSlot.ItemInstance, labOvensReadyToMove[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Moving lab oven output for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<ChemistryStation> chemStationsReadyToMove = __instance.GetChemStationsReadyToMove();
-        if (chemStationsReadyToMove.Count > 0)
-        {
-          MoveOutputToShelf(__instance, chemStationsReadyToMove[0].OutputSlot.ItemInstance, chemStationsReadyToMove[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Moving chemistry station output for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<Cauldron> cauldronsReadyToMove = __instance.GetCauldronsReadyToMove();
-        if (cauldronsReadyToMove.Count > 0)
-        {
-          MoveOutputToShelf(__instance, cauldronsReadyToMove[0].OutputSlot.ItemInstance, cauldronsReadyToMove[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Moving cauldron output for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        List<MixingStation> mixStationsReadyToMove = __instance.GetMixStationsReadyToMove();
-        if (mixStationsReadyToMove.Count > 0)
-        {
-          MoveOutputToShelf(__instance, mixStationsReadyToMove[0].OutputSlot.ItemInstance, mixStationsReadyToMove[0]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"ChemistPatch.TryStartNewTask: Moving mixing station output for {__instance?.fullName}",
-              DebugLogger.Category.Chemist);
-          return false;
-        }
-        __instance.SubmitNoWorkReason("No tasks available.", string.Empty, 0);
-        __instance.SetIdle(true);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"ChemistPatch.TryStartNewTask: No tasks available, setting idle for {__instance?.fullName}",
-            DebugLogger.Category.Chemist);
-        return false;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"ChemistPatch.TryStartNewTask: Failed for chemist: {__instance?.fullName}, error: {e}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.Stacktrace);
-        __instance.SubmitNoWorkReason("Task assignment error.", string.Empty, 0);
-        __instance.SetIdle(true);
-        return false;
-      }
-    }
-
-    private static void MoveOutputToShelf(Chemist chemist, ItemInstance outputItem, ITransitEntity source)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"MoveOutputToShelf: Entered for {chemist?.fullName}, item={outputItem?.ID}",
-          DebugLogger.Category.Chemist);
-      PlaceableStorageEntity shelf = FindShelfForDelivery(chemist, outputItem);
-      if (shelf == null)
-      {
-        chemist.SubmitNoWorkReason($"No shelf for {outputItem.ID}.", string.Empty, 0);
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"MoveOutputToShelf: No shelf found for {outputItem.ID} for {chemist?.fullName}",
-            DebugLogger.Category.Chemist);
-        return;
-      }
-      TransitRoute route = new TransitRoute(source, shelf);
-      if (chemist.MoveItemBehaviour.IsTransitRouteValid(route, outputItem.ID))
-      {
-        chemist.MoveItemBehaviour.Initialize(route, outputItem);
-        chemist.MoveItemBehaviour.Enable_Networked(null);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MoveOutputToShelf: Moving {outputItem.ID} to shelf {shelf.GUID} for {chemist?.fullName}",
-            DebugLogger.Category.Chemist);
-      }
-      else
-      {
-        chemist.SubmitNoWorkReason($"Invalid route to shelf for {outputItem.ID}.", string.Empty, 0);
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"MoveOutputToShelf: Invalid route to shelf {shelf.GUID} for {outputItem.ID} for {chemist?.fullName}",
-            DebugLogger.Category.Chemist);
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(Employee))]
-  public class EmployeePatch
-  {
-    [HarmonyPatch("OnDestroy")]
-    [HarmonyPostfix]
-    static void OnDestroyPostfix(Employee __instance)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"EmployeePatch.OnDestroy: Entered for {__instance?.fullName}",
-          DebugLogger.Category.Chemist);
-      if (__instance is Chemist chemist)
-      {
-        ChemistBehaviour.Cleanup(chemist.StartCauldronBehaviour);
-        ChemistBehaviour.Cleanup(chemist.StartMixingStationBehaviour);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"EmployeePatch.OnDestroy: Cleaned up states for {chemist?.fullName}",
             DebugLogger.Category.Chemist);
       }
     }
