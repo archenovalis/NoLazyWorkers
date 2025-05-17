@@ -24,27 +24,32 @@ using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.ConfigurationExtensions;
+using static NoLazyWorkers.NoLazyWorkersExtensions;
 using static NoLazyWorkers.General.StorageExtensions;
 using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.General.StorageConfigUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
-using NoLazyWorkers.Handlers;
+using NoLazyWorkers.Employees;
+using ScheduleOne.Employees;
+using MelonLoader.ICSharpCode.SharpZipLib.Zip;
+using System.Collections.Concurrent;
+using System.Threading.Tasks;
 
 namespace NoLazyWorkers.General
 {
   public static class StorageExtensions
   {
     public const int StorageEnum = 345543;
-    private static ConfigPanel ConfigPanelTemplate;
-    private static Sprite CrossSprite;
-    public static Dictionary<Guid, StorageConfiguration> Config = [];
-    public static Dictionary<Guid, PlaceableStorageEntity> Storage = [];
-    public static Dictionary<Guid, JObject> PendingConfigData = [];
-    public static List<PlaceableStorageEntity> AnyShelves = [];
-    public static Dictionary<ItemInstance, Dictionary<PlaceableStorageEntity, ShelfInfo>> ShelfCache = new();
+    public static ConfigPanel ConfigPanelTemplate;
+    public static Sprite CrossSprite;
+    public static readonly ConcurrentDictionary<Guid, StorageConfiguration> Config = new();
+    public static readonly ConcurrentDictionary<Guid, PlaceableStorageEntity> Storage = new();
+    public static readonly ConcurrentDictionary<Guid, JObject> PendingConfigData = new();
+    public static readonly ConcurrentBag<PlaceableStorageEntity> AnyShelves = new();
+    public static readonly ConcurrentDictionary<ItemInstance, ConcurrentDictionary<PlaceableStorageEntity, ShelfInfo>> ShelfCache = new();
     public static readonly string[] InstanceIDs = ["smallstoragerack", "mediumstoragerack", "largestoragerack", "safe"];
 
     public enum StorageMode
@@ -65,6 +70,488 @@ namespace NoLazyWorkers.General
       }
     }
 
+    public struct ShelfInfo
+    {
+      public PlaceableStorageEntity Shelf { get; set; }
+      public int Quantity { get; set; }
+      public bool IsConfigured { get; set; }
+
+      public ShelfInfo(PlaceableStorageEntity shelf, int quantity, bool isConfigured)
+      {
+        Shelf = shelf ?? throw new ArgumentNullException(nameof(shelf));
+        Quantity = quantity;
+        IsConfigured = isConfigured;
+      }
+    }
+  }
+
+  public static class StorageUtilities
+  {
+    private static readonly ConcurrentDictionary<(string itemId, string otherId, bool checkQuantities), bool> _stackCache = new();
+    private static readonly ConcurrentDictionary<(string itemId, Property property), KeyValuePair<ScheduleOne.ObjectScripts.PlaceableStorageEntity, int>> _shelfSearchCache = new();
+    private static readonly CancellationTokenSource _cts = new();
+    private static readonly object _noDropOffLock = new object();
+
+    public static void Initialize()
+    {
+      MelonEvents.OnUpdate.Subscribe(OnUpdate);
+    }
+
+    private static void OnUpdate()
+    {
+      if (Time.frameCount % 600 == 0) // Clear cache every ~10 seconds at 60 FPS
+      {
+        _stackCache.Clear();
+        _shelfSearchCache.Clear();
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, "Cleared stack and shelf search caches", DebugLogger.Category.Storage);
+      }
+    }
+
+    public static List<ItemSlot> GetOutputSlotsContainingTemplateItem(ITransitEntity entity, ItemInstance item)
+    {
+      if (entity == null || item == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItemAsync: Invalid input (entity={entity?.GUID}, item={item?.ID})", DebugLogger.Category.Storage);
+        return new List<ItemSlot>();
+      }
+
+      var result = new List<ItemSlot>();
+      foreach (var slot in entity.OutputSlots)
+      {
+        if (slot != null && slot.ItemInstance != null && !slot.IsLocked && slot.Quantity > 0 && CanStackWithMinQuality(slot.ItemInstance, item, false))
+        {
+          result.Add(slot);
+        }
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItemAsync: Found {result.Count} slots for item {item.ID} in {entity.GUID}", DebugLogger.Category.Storage);
+      return result;
+    }
+
+
+    public static bool CanStackWithMinQuality(this ItemInstance item, ItemInstance other, bool checkQuantities = false)
+    {
+      if (item == null || other == null)
+        return false;
+
+      // Use a composite key for caching
+      var cacheKey = (item.ID, other.ID, checkQuantities);
+      bool canStack;
+      if (_stackCache.TryGetValue(cacheKey, out canStack))
+      {
+        return canStack;
+      }
+
+      if (other.ID != item.ID)
+      {
+        _stackCache.TryAdd(cacheKey, false);
+        return false;
+      }
+
+      if (checkQuantities && item.Quantity + other.Quantity > item.StackLimit)
+      {
+        _stackCache.TryAdd(cacheKey, false);
+        return false;
+      }
+
+      if (item is ProductItemInstance && other is ProductItemInstance)
+      {
+        ProductItemInstance productItem = (ProductItemInstance)item;
+        ProductItemInstance otherProduct = (ProductItemInstance)other;
+
+        bool packagingMatch = (otherProduct.AppliedPackaging == null && productItem.AppliedPackaging == null) ||
+                             (otherProduct.AppliedPackaging != null && productItem.AppliedPackaging != null &&
+                              otherProduct.AppliedPackaging.ID == productItem.AppliedPackaging.ID);
+
+        if (!packagingMatch)
+        {
+          _stackCache.TryAdd(cacheKey, false);
+          return false;
+        }
+
+        bool qualityMatch = (item is QualityItemInstance && other is QualityItemInstance)
+            ? ((QualityItemInstance)other).Quality >= ((QualityItemInstance)item).Quality
+            : false;
+
+        canStack = qualityMatch;
+        _stackCache.TryAdd(cacheKey, canStack);
+        return canStack;
+      }
+
+      canStack = false;
+      _stackCache.TryAdd(cacheKey, canStack);
+      return canStack;
+    }
+
+    public static Task<KeyValuePair<ScheduleOne.ObjectScripts.PlaceableStorageEntity, int>> FindShelfWithItemAsync(NPC npc, ItemInstance targetItem, int needed, int wanted = 0)
+    {
+      KeyValuePair<PlaceableStorageEntity, int> defaultResult = new KeyValuePair<PlaceableStorageEntity, int>(null, 0);
+      if (targetItem == null || npc == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, string.Format("FindShelvesWithItemAsync: Invalid input (targetItem={0}, npc={1})", targetItem == null ? "null" : targetItem.ID, npc == null ? "null" : npc.fullName), new[] { DebugLogger.Category.Storage, DebugLogger.Category.Packager });
+        return Task.FromResult(defaultResult);
+      }
+
+      Employee employee = npc as Employee;
+      Property property = employee != null ? employee.AssignedProperty : null;
+      var cacheKey = (targetItem.ID, property);
+
+      if (_shelfSearchCache.TryGetValue(cacheKey, out var cachedResult) && cachedResult.Key != null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, string.Format("FindShelvesWithItemAsync: Cache hit for {0}, shelf={1}, qty={2}", targetItem.Name, cachedResult.Key != null ? cachedResult.Key?.GUID.ToString() : "null", cachedResult.Value), new[] { DebugLogger.Category.Storage, DebugLogger.Category.Packager });
+        return Task.FromResult(cachedResult);
+      }
+
+      return Task.Run(() =>
+      {
+        int assignedQty = 0;
+        PlaceableStorageEntity result = null;
+
+        foreach (KeyValuePair<ItemInstance, ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo>> itemCache in StorageExtensions.ShelfCache)
+        {
+          if (!itemCache.Key.CanStackWithMinQuality(targetItem, false))
+            continue;
+
+          foreach (StorageExtensions.ShelfInfo shelfInfo in itemCache.Value.Values)
+          {
+            int num = wanted > 0 ? Math.Min(shelfInfo.Quantity, wanted) : shelfInfo.Quantity;
+            if (num >= needed && num > assignedQty)
+            {
+              assignedQty = num;
+              result = shelfInfo.Shelf;
+            }
+            if (assignedQty == wanted)
+              break;
+          }
+          if (assignedQty == wanted)
+            break;
+        }
+
+        if (result == null && property != null)
+        {
+          lock (_noDropOffLock)
+          {
+            List<ItemInstance> cache;
+            if (!EmployeeExtensions.NoDropOffCache.TryGetValue(property, out cache))
+            {
+              cache = new List<ItemInstance>();
+              EmployeeExtensions.NoDropOffCache.TryAdd(property, cache);
+            }
+            if (!cache.Any(i => i.ID == targetItem.ID))
+              cache.Add(targetItem);
+          }
+        }
+
+        KeyValuePair<PlaceableStorageEntity, int> finalResult = new KeyValuePair<PlaceableStorageEntity, int>(result, assignedQty);
+        _shelfSearchCache.TryAdd(cacheKey, finalResult);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, string.Format("FindShelvesWithItemAsync: Found shelf={0}, totalQty={1} for {2}", result != null ? result.GUID.ToString() : "null", assignedQty, targetItem.Name), new[] { DebugLogger.Category.Storage, DebugLogger.Category.Packager });
+        return finalResult;
+      }, _cts.Token);
+    }
+
+    public static Task<PlaceableStorageEntity> FindShelfForDeliveryAsync(NPC npc, ItemInstance targetItem, bool allowAnyShelves = true)
+    {
+      if (targetItem == null || npc == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, string.Format("FindShelfForDeliveryAsync: Invalid input (targetItem={0}, npc={1})", targetItem == null ? "null" : targetItem.ID, npc == null ? "null" : npc.fullName), new[] { DebugLogger.Category.Storage, DebugLogger.Category.Packager });
+        return Task.FromResult<PlaceableStorageEntity>(null);
+      }
+
+      int quantityToDeliver = targetItem.Quantity;
+      Employee employee = npc as Employee;
+
+      return Task.Run(() =>
+      {
+        PlaceableStorageEntity selectedShelf = null;
+        ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo> itemShelves;
+        itemShelves = StorageExtensions.ShelfCache.FirstOrDefault(i => i.Key.CanStackWith(targetItem, false)).Value;
+        if (itemShelves == null)
+          itemShelves = new ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo>();
+        bool canFit = false;
+
+        foreach (StorageExtensions.ShelfInfo shelfInfo in itemShelves.Values)
+        {
+          if (!shelfInfo.IsConfigured)
+            continue;
+
+          if (!shelfInfo.Shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver))
+            continue;
+
+          canFit = true;
+          if (npc.movement.CanGetTo(shelfInfo.Shelf))
+          {
+            selectedShelf = shelfInfo.Shelf;
+            break;
+          }
+        }
+
+        if (!canFit && employee != null && employee.AssignedProperty != null)
+        {
+          EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, targetItem);
+        }
+
+        if (selectedShelf == null && allowAnyShelves)
+        {
+          foreach (PlaceableStorageEntity shelf in StorageExtensions.AnyShelves)
+          {
+            if (shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver) && npc.movement.CanGetTo(shelf))
+            {
+              selectedShelf = shelf;
+              break;
+            }
+          }
+        }
+
+        if (selectedShelf == null && employee != null && employee.AssignedProperty != null)
+        {
+          lock (_noDropOffLock)
+          {
+            List<ItemInstance> cache;
+            if (!EmployeeExtensions.NoDropOffCache.TryGetValue(employee.AssignedProperty, out cache))
+            {
+              cache = new List<ItemInstance>();
+              EmployeeExtensions.NoDropOffCache.TryAdd(employee.AssignedProperty, cache);
+            }
+            if (!cache.Any(i => i.ID == targetItem.ID))
+              cache.Add(targetItem);
+          }
+        }
+
+        if (selectedShelf != null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info, string.Format("FindShelfForDeliveryAsync: Selected shelf {0} for {1} of {2}", selectedShelf.GUID, quantityToDeliver, targetItem.ID), new[] { DebugLogger.Category.Storage, DebugLogger.Category.Packager });
+        }
+        return selectedShelf;
+      }, _cts.Token);
+    }
+
+    public static int GetItemQuantityInShelf(PlaceableStorageEntity shelf, ItemInstance targetItem)
+    {
+      if (shelf == null || targetItem == null)
+        return 0;
+
+      int qty = 0;
+      foreach (ItemSlot slot in shelf.OutputSlots)
+      {
+        if (slot != null && slot.ItemInstance != null && slot.ItemInstance.ID.ToLower() == targetItem.ID.ToLower())
+          qty += slot.Quantity;
+      }
+      return qty;
+    }
+
+    public static Task UpdateShelfCacheAsync(PlaceableStorageEntity shelf)
+    {
+      if (shelf == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "UpdateShelfCacheAsync: Shelf is null", DebugLogger.Category.Storage);
+        return Task.FromResult<object>(null);
+      }
+
+      ItemSlot[] outputSlots = shelf.OutputSlots.ToArray();
+      Guid shelfGuid = shelf.GUID;
+
+      return Task.Run(() =>
+      {
+        Dictionary<ItemInstance, int> itemQuantities = new Dictionary<ItemInstance, int>();
+        foreach (ItemSlot slot in outputSlots)
+        {
+          if (slot == null || slot.ItemInstance == null || slot.Quantity <= 0)
+            continue;
+          int currentQty;
+          itemQuantities.TryGetValue(slot.ItemInstance, out currentQty);
+          itemQuantities[slot.ItemInstance] = currentQty + slot.Quantity;
+        }
+
+        foreach (KeyValuePair<ItemInstance, int> kvp in itemQuantities)
+        {
+          ItemInstance key = kvp.Key;
+          int quantity = kvp.Value;
+
+          ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo> shelfDict;
+          if (!StorageExtensions.ShelfCache.TryGetValue(key, out shelfDict))
+          {
+            shelfDict = new ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo>();
+            StorageExtensions.ShelfCache.TryAdd(key, shelfDict);
+          }
+
+          bool isConfigured;
+          StorageConfiguration config;
+          isConfigured = StorageExtensions.Config.TryGetValue(shelfGuid, out config) &&
+                          config.Mode == StorageExtensions.StorageMode.Specific &&
+                          config.AssignedItem != null &&
+                          config.AssignedItem == key;
+
+          shelfDict[shelf] = new StorageExtensions.ShelfInfo(shelf, quantity, isConfigured);
+        }
+
+        List<ItemInstance> keysToRemove = new List<ItemInstance>();
+        foreach (KeyValuePair<ItemInstance, ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo>> itemCache in StorageExtensions.ShelfCache)
+        {
+          if (itemCache.Value.ContainsKey(shelf) && !itemQuantities.ContainsKey(itemCache.Key))
+          {
+            StorageExtensions.ShelfInfo dummy;
+            itemCache.Value.TryRemove(shelf, out dummy);
+          }
+          if (itemCache.Value.Count == 0)
+          {
+            keysToRemove.Add(itemCache.Key);
+          }
+        }
+
+        foreach (ItemInstance key in keysToRemove)
+        {
+          ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo> dummy;
+          StorageExtensions.ShelfCache.TryRemove(key, out dummy);
+        }
+
+        // Clear shelf search cache for this property
+        if (shelf.ParentProperty != null)
+        {
+          Property property = shelf.ParentProperty;
+          var cacheKeysToRemove = _shelfSearchCache.Keys.Where(k => k.property == property).ToList();
+          foreach (var key in cacheKeysToRemove)
+          {
+            KeyValuePair<PlaceableStorageEntity, int> dummy;
+            _shelfSearchCache.TryRemove(key, out dummy);
+          }
+        }
+      }, _cts.Token);
+    }
+
+    public static Task UpdateShelfConfigurationAsync(PlaceableStorageEntity shelf, ItemInstance assignedItem)
+    {
+      if (shelf == null || shelf.GUID == Guid.Empty)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "UpdateShelfConfigurationAsync: Invalid shelf", DebugLogger.Category.Storage);
+        return Task.FromResult<object>(null);
+      }
+
+      if (!StorageExtensions.Storage.ContainsKey(shelf.GUID))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, string.Format("UpdateShelfConfigurationAsync: Shelf {0} not found", shelf.GUID), DebugLogger.Category.Storage);
+        return Task.FromResult<object>(null);
+      }
+
+      StorageConfiguration config;
+      if (!StorageExtensions.Config.TryGetValue(shelf.GUID, out config))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, string.Format("UpdateShelfConfigurationAsync: No config for shelf {0}", shelf.GUID), DebugLogger.Category.Storage);
+        return Task.FromResult<object>(null);
+      }
+
+      if (shelf.ParentProperty == null)
+      {
+        return (Task)MelonCoroutines.Start(ResolveParentPropertyCoroutine(shelf, assignedItem));
+      }
+
+      return UpdateShelfConfigurationInternal(shelf, assignedItem, config);
+    }
+
+    private static System.Collections.IEnumerator ResolveParentPropertyCoroutine(PlaceableStorageEntity shelf, ItemInstance assignedItem)
+    {
+      shelf.ParentProperty = shelf.GetProperty(shelf.transform);
+      if (shelf.ParentProperty == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, string.Format("UpdateShelfConfigurationAsync: Failed to resolve ParentProperty for shelf {0}", shelf.GUID), DebugLogger.Category.Storage);
+        yield break;
+      }
+
+      StorageConfiguration config;
+      if (StorageExtensions.Config.TryGetValue(shelf.GUID, out config))
+      {
+        yield return UpdateShelfConfigurationInternal(shelf, assignedItem, config);
+      }
+    }
+
+    private static Task UpdateShelfConfigurationInternal(PlaceableStorageEntity shelf, ItemInstance assignedItem, StorageConfiguration config)
+    {
+      return Task.Run(() =>
+      {
+        lock (_noDropOffLock)
+        {
+          List<ItemInstance> cache;
+          if (!EmployeeExtensions.NoDropOffCache.TryGetValue(shelf.ParentProperty, out cache))
+          {
+            cache = new List<ItemInstance>();
+            EmployeeExtensions.NoDropOffCache.TryAdd(shelf.ParentProperty, cache);
+          }
+
+          RemoveShelfFromLists(shelf);
+          if (config.Mode == StorageExtensions.StorageMode.Any)
+          {
+            StorageExtensions.AnyShelves.Add(shelf);
+          }
+          else if (config.Mode == StorageExtensions.StorageMode.Specific && assignedItem != null)
+          {
+            ItemInstance cacheKey = null;
+            foreach (ItemInstance key in StorageExtensions.ShelfCache.Keys)
+            {
+              if (key.CanStackWith(assignedItem, false))
+              {
+                cacheKey = key;
+                break;
+              }
+            }
+            if (cacheKey == null)
+              cacheKey = assignedItem;
+
+            ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo> shelfDict;
+            if (!StorageExtensions.ShelfCache.TryGetValue(cacheKey, out shelfDict))
+            {
+              shelfDict = new ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo>();
+              StorageExtensions.ShelfCache.TryAdd(cacheKey, shelfDict);
+            }
+
+            lock (cache)
+            {
+              for (int i = cache.Count - 1; i >= 0; i--)
+              {
+                if (cache[i].CanStackWith(assignedItem, false))
+                  cache.RemoveAt(i);
+              }
+            }
+
+            int quantity = GetItemQuantityInShelf(shelf, assignedItem);
+            shelfDict[shelf] = new StorageExtensions.ShelfInfo(shelf, quantity, true);
+          }
+        }
+
+        // Clear shelf search cache for this property
+        if (shelf.ParentProperty != null)
+        {
+          var property = shelf.ParentProperty;
+          var cacheKeysToRemove = _shelfSearchCache.Keys.Where(k => k.property == property).ToList();
+          foreach (var key in cacheKeysToRemove)
+          {
+            KeyValuePair<PlaceableStorageEntity, int> dummy;
+            _shelfSearchCache.TryRemove(key, out dummy);
+          }
+        }
+
+        MelonCoroutines.Start(UpdateShelfCacheCoroutine(shelf));
+      }, _cts.Token);
+    }
+
+    private static System.Collections.IEnumerator UpdateShelfCacheCoroutine(PlaceableStorageEntity shelf)
+    {
+      yield return UpdateShelfCacheAsync(shelf);
+    }
+
+    public static void RemoveShelfFromLists(PlaceableStorageEntity shelf)
+    {
+      if (shelf == null)
+        return;
+
+      while (StorageExtensions.AnyShelves.TryTake(out _)) { }
+      foreach (ConcurrentDictionary<PlaceableStorageEntity, StorageExtensions.ShelfInfo> itemCache in StorageExtensions.ShelfCache.Values)
+      {
+        StorageExtensions.ShelfInfo dummy;
+        itemCache.TryRemove(shelf, out dummy);
+      }
+    }
+  }
+
+  public static class StorageConfigUtilities
+  {
     public static void InitializeStorageModule()
     {
       DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStorageModule: Starting", DebugLogger.Category.Storage);
@@ -136,7 +623,7 @@ namespace NoLazyWorkers.General
       yield return false;
     }
 
-    private static void CacheCrossSprite()
+    public static void CacheCrossSprite()
     {
       CrossSprite = GetCrossSprite();
       if (CrossSprite == null)
@@ -378,6 +865,7 @@ namespace NoLazyWorkers.General
         if (qualityRect != null && itemFieldRect != null)
         {
           qualityRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 75f);
+          itemFieldRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y + 10f);
         }
 
         configPanel.QualityUI = qualityUIObj.GetComponent<QualityFieldUI>();
@@ -409,244 +897,6 @@ namespace NoLazyWorkers.General
     }
   }
 
-  public static class StorageUtilities
-  {
-    public struct ShelfInfo
-    {
-      public PlaceableStorageEntity Shelf { get; set; }
-      public int Quantity { get; set; }
-      public bool IsConfigured { get; set; }
-
-      public ShelfInfo(PlaceableStorageEntity shelf, int quantity, bool isConfigured)
-      {
-        Shelf = shelf ?? throw new ArgumentNullException(nameof(shelf));
-        Quantity = quantity;
-        IsConfigured = isConfigured;
-      }
-    }
-
-    public static void UpdateShelfConfiguration(PlaceableStorageEntity shelf, ItemInstance assignedItem)
-    {
-      if (shelf == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: Shelf is null", DebugLogger.Category.Storage);
-        return;
-      }
-
-      if (!Config.TryGetValue(shelf.GUID, out var config))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: No config for shelf {shelf.GUID}", DebugLogger.Category.Storage);
-        return;
-      }
-
-      // Remove shelf from all lists
-      RemoveShelfFromLists(shelf);
-
-      if (config.Mode == StorageMode.Any)
-      {
-        AnyShelves.Add(shelf);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to AnyShelves, count={AnyShelves.Count}", DebugLogger.Category.Storage);
-      }
-      else if (config.Mode == StorageMode.Specific && assignedItem != null)
-      {
-        if (!ShelfCache.Keys.Any(i => i.CanStackWith(assignedItem, false)))
-          ShelfCache[assignedItem] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
-        RouteQueueManager.NoDestinationCache[config.Storage.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
-        int quantity = GetItemQuantityInShelf(shelf, assignedItem);
-        ShelfCache[assignedItem][shelf] = new ShelfInfo(shelf, quantity, true);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {assignedItem}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
-      }
-
-      // Update quantities for non-configured shelves
-      UpdateShelfCache(shelf);
-    }
-
-    public static void UpdateShelfCache(PlaceableStorageEntity shelf)
-    {
-      if (shelf == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfCache: Shelf is null", DebugLogger.Category.Storage);
-        return;
-      }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfCache: Updating for shelf {shelf.GUID}", DebugLogger.Category.Storage);
-
-      // Update quantities for all items in shelf
-      var slots = (shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>());
-      var itemQuantities = new Dictionary<ItemInstance, int>();
-
-      foreach (var slot in slots)
-      {
-        if (slot?.ItemInstance == null || slot.Quantity <= 0)
-          continue;
-        itemQuantities[slot.ItemInstance] = itemQuantities.GetValueOrDefault(slot.ItemInstance, 0) + slot.Quantity;
-      }
-
-      // Update ShelfCache with current quantities
-      foreach (var kvp in itemQuantities)
-      {
-        var key = kvp.Key;
-        int quantity = kvp.Value;
-
-        if (!ShelfCache.ContainsKey(key))
-          ShelfCache[key] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
-
-        bool isConfigured = Config.TryGetValue(shelf.GUID, out var config) &&
-                            config.Mode == StorageMode.Specific &&
-                            config.AssignedItem != null &&
-                            config.AssignedItem == key;
-
-        ShelfCache[key][shelf] = new ShelfInfo(shelf, quantity, isConfigured);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfCache: Updated shelf {shelf.GUID} for {key}, quantity={quantity}, isConfigured={isConfigured}", DebugLogger.Category.Storage);
-      }
-
-      // Remove shelf from keys where it has no items
-      foreach (var itemCache in ShelfCache.ToList())
-      {
-        if (itemCache.Value.ContainsKey(shelf) && !itemQuantities.ContainsKey(itemCache.Key))
-        {
-          itemCache.Value.Remove(shelf);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfCache: Removed shelf {shelf.GUID} from {itemCache.Key} (no items)", DebugLogger.Category.Storage);
-        }
-        if (itemCache.Value.Count == 0)
-        {
-          ShelfCache.Remove(itemCache.Key);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfCache: Removed empty key {itemCache.Key}", DebugLogger.Category.Storage);
-        }
-      }
-    }
-
-    public static void RemoveShelfFromLists(PlaceableStorageEntity shelf)
-    {
-      if (shelf == null)
-        return;
-
-      AnyShelves.Remove(shelf);
-      foreach (var itemCache in ShelfCache.Values)
-      {
-        itemCache.Remove(shelf);
-      }
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-    }
-
-    public static Dictionary<PlaceableStorageEntity, int> FindShelvesWithItem(NPC npc, ItemInstance targetItem, int needed, int wanted = 0)
-    {
-      if (targetItem == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelvesWithItem: Target item is null for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-        return new Dictionary<PlaceableStorageEntity, int>();
-      }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-
-      var result = new Dictionary<PlaceableStorageEntity, int>();
-      Dictionary<PlaceableStorageEntity, ShelfInfo> shelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
-      if (shelves.Count > 0)
-      {
-        foreach (var shelfInfo in shelves.Values)
-        {
-          if (shelfInfo.Quantity >= needed)
-          {
-            int assignedQty = wanted > 0 ? Math.Min(shelfInfo.Quantity, wanted) : shelfInfo.Quantity;
-            result[shelfInfo.Shelf] = assignedQty;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {targetItem}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-          }
-        }
-      }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Found {result.Count} shelves for {targetItem}, totalQty={result.Values.Sum()}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-      return result;
-    }
-
-    public static PlaceableStorageEntity FindShelfForDelivery(NPC npc, ItemInstance targetItem, bool allowAnyShelves = true)
-    {
-      if (targetItem == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"FindShelfForDelivery: Target item is null",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-        return null;
-      }
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"FindShelfForDelivery: Finding shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-          [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-      int quantityToDeliver = targetItem.Quantity;
-      PlaceableStorageEntity selectedShelf = null;
-      Dictionary<PlaceableStorageEntity, ShelfInfo> itemShelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
-      if (itemShelves.Count > 0)
-      {
-        foreach (var shelfInfo in itemShelves.Values)
-        {
-          if (!shelfInfo.IsConfigured) continue;
-          if (!shelfInfo.Shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver)) continue;
-          if (!npc.movement.CanGetTo(shelfInfo.Shelf)) continue;
-          selectedShelf = shelfInfo.Shelf;
-          break;
-        }
-      }
-      if (selectedShelf == null && allowAnyShelves)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"FindShelfForDelivery: No shelves assigned. Checking any shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-        foreach (var shelf in AnyShelves)
-        {
-          var fit = shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"FindShelfForDelivery: Shelf={shelf.GUID} CanItemFit:{fit} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-          if (!fit) continue;
-          var getTo = npc.movement.CanGetTo(shelf);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"FindShelfForDelivery: Shelf={shelf.GUID} CanGetTo:{getTo} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-          if (!getTo) continue;
-          selectedShelf = shelf;
-          break;
-        }
-      }
-      if (selectedShelf != null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-      }
-      else
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"FindShelfForDelivery: No suitable shelf found for {targetItem.ID} (allowAnyShelves={allowAnyShelves})",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-      }
-      return selectedShelf;
-    }
-
-    public static int GetItemQuantityInShelf(PlaceableStorageEntity shelf, ItemInstance targetItem)
-    {
-      if (shelf == null || targetItem == null)
-        return 0;
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-
-      int qty = 0;
-      foreach (var slot in (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()))
-      {
-        if (slot?.ItemInstance != null && slot.ItemInstance.ID.ToLower() == targetItem.ID.ToLower())
-          qty += slot.Quantity;
-      }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
-      return qty;
-    }
-
-    public struct ShelfSearchContext
-    {
-      public NPC Npc { get; set; }
-      public ItemInstance TargetItem { get; set; }
-      public int Needed { get; set; }
-      public int Wanted { get; set; }
-    }
-  }
-
   public class StorageConfigPanel : ConfigPanel
   {
     [SerializeField]
@@ -654,15 +904,6 @@ namespace NoLazyWorkers.General
     [SerializeField]
     public QualityFieldUI QualityUI;
     private Button Button;
-    private UnityAction OnChanged;
-
-    private void RefreshChanged(ItemDefinition item, StorageConfiguration config)
-    {
-      OnChanged?.Invoke();
-      var worldSpaceUI = (StorageUIElement)config.Proxy.WorldspaceUI;
-      worldSpaceUI.RefreshUI();
-      InvokeChanged(config);
-    }
 
     public override void Bind(List<EntityConfiguration> configs)
     {
@@ -735,15 +976,9 @@ namespace NoLazyWorkers.General
 
         foreach (var config in configs.OfType<StorageConfiguration>())
         {
-          var itemField = config.StorageItem;
-          itemField.onItemChanged.RemoveAllListeners();
-          itemField.onItemChanged.AddListener(item => RefreshChanged(item, config));
-          itemFieldList.Add(itemField);
+          itemFieldList.Add(config.StorageItem);
           itemSlots.AddRange(config.Storage.StorageEntity.ItemSlots);
-          var qualityfield = config.TargetQuality;
-          qualityfield.onValueChanged.RemoveAllListeners();
-          qualityfield.onValueChanged.AddListener(quality => config.InvokeChanged());
-          qualityList.Add(qualityfield);
+          qualityList.Add(config.Quality);
 
           switch (config.Mode)
           {
@@ -932,12 +1167,12 @@ namespace NoLazyWorkers.General
 
   public class StorageConfiguration : EntityConfiguration
   {
-    public QualityField TargetQuality { get; private set; }
     public ItemField StorageItem { get; private set; }
     public PlaceableStorageEntity Storage { get; private set; }
     public StorageConfigurableProxy Proxy { get; private set; }
-    public StorageMode Mode { get; set; }
+    public StorageExtensions.StorageMode Mode { get; set; }
     public ItemInstance AssignedItem { get; set; }
+    public QualityField Quality { get; private set; }
 
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
@@ -953,62 +1188,89 @@ namespace NoLazyWorkers.General
       replicator.Configuration = this;
       Proxy = configurable as StorageConfigurableProxy;
       Storage = storage;
-      Storage.StorageEntity.onContentsChanged.AddListener(() => UpdateShelfCache(Storage));
+
+      // Add event listener for content changes
+      Storage.StorageEntity.onContentsChanged.AddListener(OnContentsChanged);
 
       try
       {
-        TargetQuality = new QualityField(this);
-        TargetQuality.onValueChanged.AddListener(delegate
+        Quality = new QualityField(this);
+        Quality.onValueChanged.AddListener(quality =>
         {
+          if (AssignedItem is ProductItemInstance prodItem)
+            prodItem.SetQuality(quality);
           InvokeChanged();
         });
-        TargetQuality.SetValue(EQuality.Premium, network: false);
+        Quality.SetValue(EQuality.Premium, network: false);
 
         StorageItem = new ItemField(this)
         {
           CanSelectNone = false,
           Options = []
         };
-        StorageItem.onItemChanged.AddListener(_ => UpdateShelfConfiguration(Storage, AssignedItem));
-        Config[storage.GUID] = this;
+        StorageItem.onItemChanged.AddListener(_ =>
+        {
+          MelonCoroutines.Start(UpdateShelfConfigurationCoroutine(Storage, AssignedItem));
+          RefreshChanged();
+        });
+        StorageExtensions.Config[storage.GUID] = this;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfiguration: Initialized for GUID: {storage.GUID}", DebugLogger.Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration: Failed to initialize StorageItem for GUID: {storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration: Failed to initialize for GUID: {storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
         throw;
       }
+    }
+
+    private void OnContentsChanged()
+    {
+      MelonCoroutines.Start(UpdateShelfCacheCoroutine(Storage));
+    }
+
+    private System.Collections.IEnumerator UpdateShelfCacheCoroutine(PlaceableStorageEntity shelf)
+    {
+      yield return StorageUtilities.UpdateShelfCacheAsync(shelf);
+    }
+
+    private System.Collections.IEnumerator UpdateShelfConfigurationCoroutine(PlaceableStorageEntity shelf, ItemInstance assignedItem)
+    {
+      yield return StorageUtilities.UpdateShelfConfigurationAsync(shelf, assignedItem);
+    }
+
+    private void RefreshChanged()
+    {
+      var worldSpaceUI = (StorageUIElement)Proxy.WorldspaceUI;
+      worldSpaceUI.RefreshUI();
+      InvokeChanged();
     }
 
     public void Load(JObject jsonObject)
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loading for GUID={Storage.GUID}, JSON={jsonObject.ToString()}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loading for GUID={Storage.GUID}", DebugLogger.Category.Storage);
 
         if (jsonObject["StorageMode"] != null)
         {
           var str = jsonObject["StorageMode"].ToString();
           try
           {
-            Mode = (StorageMode)Enum.Parse(typeof(StorageMode), str);
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Set Mode={Mode} for GUID={Storage.GUID}", DebugLogger.Category.Storage);
-            if (Mode == StorageMode.Any)
+            Mode = (StorageExtensions.StorageMode)Enum.Parse(typeof(StorageExtensions.StorageMode), str);
+            if (Mode == StorageExtensions.StorageMode.Any)
             {
-              AnyShelves.Add(Storage);
-              DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Added shelf {Storage.GUID} to AnyShelves, count={AnyShelves.Count}", DebugLogger.Category.Storage);
+              StorageExtensions.AnyShelves.Add(Storage);
             }
           }
           catch (Exception e)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageConfiguration.Load: Invalid StorageMode '{str}' for GUID={Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
-            Mode = StorageMode.None;
+            Mode = StorageExtensions.StorageMode.None;
           }
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageConfiguration.Load: StorageMode missing for GUID={Storage.GUID}", DebugLogger.Category.Storage);
-          Mode = StorageMode.None;
+          Mode = StorageExtensions.StorageMode.None;
         }
 
         if (jsonObject["StorageItem"] != null)
@@ -1019,40 +1281,43 @@ namespace NoLazyWorkers.General
           {
             StorageItem.SelectedItem = itemInstance.Definition;
             AssignedItem = itemInstance;
-            if (itemInstance is ProductItemInstance)
-              TargetQuality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), false);
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loaded Item={StorageItem.SelectedItem?.Name}, Packaging={(itemInstance is ProductItemInstance pi ? pi.AppliedPackaging?.Name : "null")} for GUID={Storage.GUID}", DebugLogger.Category.Storage);
+            if (itemInstance is ProductItemInstance && jsonObject["Quality"] != null)
+              Quality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"].ToString()), false);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageConfiguration.Load: Failed to deserialize StorageItem for GUID={Storage.GUID}, JSON={itemInstanceJson}", DebugLogger.Category.Storage);
             StorageItem.SelectedItem = null;
             AssignedItem = null;
           }
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: StorageItem missing for GUID={Storage.GUID}", DebugLogger.Category.Storage);
           StorageItem.SelectedItem = null;
           AssignedItem = null;
         }
 
-        UpdateShelfConfiguration(Storage, AssignedItem);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfiguration.Load: Completed for GUID={Storage.GUID}, Mode={Mode}, Item={StorageItem.SelectedItem?.Name ?? "null"}, ShelfCache count={ShelfCache.Count}", DebugLogger.Category.Storage);
+        MelonCoroutines.Start(UpdateShelfConfigurationCoroutine(Storage, AssignedItem));
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}\nStackTrace: {e.StackTrace}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
       }
     }
 
-    public void SetModeAndItem(StorageMode mode, ItemInstance item)
+    public void SetModeAndItem(StorageExtensions.StorageMode mode, ItemInstance item)
     {
       Mode = mode;
-      StorageItem.SelectedItem = mode == StorageMode.Specific ? item?.Definition : null;
-      AssignedItem = mode == StorageMode.Specific ? item : null;
+      StorageItem.SelectedItem = mode == StorageExtensions.StorageMode.Specific ? item?.Definition : null;
+      AssignedItem = mode == StorageExtensions.StorageMode.Specific ? item : null;
       StorageItem.onItemChanged?.Invoke(StorageItem.SelectedItem);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"SetModeAndItem: Set Mode={mode}, Item={item?.Name ?? "null"}, Packaging={(item as ProductItemInstance)?.AppliedPackaging?.Name ?? "null"} for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+    }
+
+    // Cleanup to prevent memory leaks
+    public void Dispose()
+    {
+      Storage.StorageEntity.onContentsChanged.RemoveListener(OnContentsChanged);
+      StorageExtensions.Config.TryRemove(Storage.GUID, out _);
+      StorageUtilities.RemoveShelfFromLists(Storage);
     }
   }
 
@@ -1100,7 +1365,7 @@ namespace NoLazyWorkers.General
           ItemInstance itemInstance = config.AssignedItem;
           jsonObject["StorageItem"] = itemInstance.GetItemData().GetJson(true);
           if (itemInstance is ProductItemInstance)
-            jsonObject["Quality"] = config.TargetQuality?.Value.ToString();
+            jsonObject["Quality"] = config.Quality?.Value.ToString();
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved StorageItem for GUID={__instance.GUID}: {jsonObject["StorageItem"]}", DebugLogger.Category.Storage);
         }
 
@@ -1200,7 +1465,7 @@ namespace NoLazyWorkers.General
 
       configReplicator.NetworkInitializeIfDisabled();
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: NetworkInitializeIfDisabled for ConfigurationReplicator on {Storage.GUID}", DebugLogger.Category.Storage);
-      StartCoroutine(InitializeConfiguration());
+      MelonCoroutines.Start(InitializeConfiguration());
     }
 
     private IEnumerator InitializeConfiguration()
@@ -1221,7 +1486,7 @@ namespace NoLazyWorkers.General
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigurableProxy: Failed to create StorageConfiguration for GUID: {Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
       }
-      yield return StartCoroutine(LoadConfigurationWhenReady());
+      yield return MelonCoroutines.Start(LoadConfigurationWhenReady());
     }
 
     private IEnumerator LoadConfigurationWhenReady()
@@ -1257,14 +1522,14 @@ namespace NoLazyWorkers.General
           if (WorldspaceUI != null)
             ((StorageUIElement)WorldspaceUI).RefreshUI();
           // Ensure shelf is added to lists
-          UpdateShelfConfiguration(Storage, configuration.AssignedItem);
+          _ = UpdateShelfConfigurationAsync(Storage, configuration.AssignedItem);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadConfigurationWhenReady: Loaded configuration for GUID: {Storage.GUID}, Mode={configuration.Mode}, Item={configuration.StorageItem?.SelectedItem?.Name ?? "null"}, SpecificShelves count={ShelfCache.Count}", DebugLogger.Category.Storage);
         }
         catch (Exception e)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadConfigurationWhenReady: Failed to load configuration for GUID: {Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
         }
-        PendingConfigData.Remove(Storage.GUID);
+        PendingConfigData.Remove(Storage.GUID, out _);
       }
       else
       {

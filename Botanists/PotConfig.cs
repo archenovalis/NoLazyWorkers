@@ -88,7 +88,7 @@ namespace NoLazyWorkers.Botanists
 
     public static void SupplyOnObjectChangedInvoke(BuildableItem item, PotConfiguration __instance, Pot pot, ObjectField Supply)
     {
-      ConfigurationExtensions.InvokeChanged(__instance);
+      __instance.InvokeChanged();
       SourceChanged(__instance, item);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"SupplyOnObjectChangedInvoke: Supply changed for pot {pot?.GUID.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.GUID.ToString() ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
     }
@@ -286,11 +286,10 @@ namespace NoLazyWorkers.Botanists
   [HarmonyPatch(typeof(PotConfigPanel), "Bind")]
   public class PotConfigPanelBindPatch
   {
-    static void Postfix(PotConfigPanel __instance, List<EntityConfiguration> configs)
+    static void BindPostfix(PotConfigPanel __instance, List<EntityConfiguration> configs)
     {
       try
       {
-
         // Destination UI update
         foreach (TextMeshProUGUI child in __instance.DestinationUI.GetComponentsInChildren<TextMeshProUGUI>())
           if (child.gameObject.name == "Description") { child.gameObject.SetActive(false); break; }
@@ -312,11 +311,11 @@ namespace NoLazyWorkers.Botanists
           Guid guid = config.Pot.GUID;
           if (PotExtensions.Supply.TryGetValue(guid, out ObjectField supply))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
           }
           PotExtensions.Supply[guid] = supply ?? new(config);
           supplyList.Add(PotExtensions.Supply[guid]);
@@ -341,7 +340,7 @@ namespace NoLazyWorkers.Botanists
     private static void SupplySourceChanged(PotConfiguration config, Pot pot, BuildableItem item)
     {
       PotExtensions.SourceChanged(config, item);
-      ConfigurationExtensions.InvokeChanged(config);
+      config.InvokeChanged();
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Supply changed for pot {pot.GUID}, newSupply={PotExtensions.Supply[pot.GUID].SelectedObject?.GUID.ToString() ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
     }
 
@@ -387,6 +386,13 @@ namespace NoLazyWorkers.Botanists
           DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotLoaderPatch: No valid PotConfiguration for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
           return;
         }
+
+        /* // Clear hidden destination
+        if (config.Destination.SelectedObject != null)
+        {
+          config.Destination.SelectedObject = null;
+          config.DestinationRoute = null;
+        } */
 
         if (!PotExtensions.Config.ContainsKey(guid))
         {

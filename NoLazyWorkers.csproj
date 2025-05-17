@@ -283,7 +283,7 @@
 		<Reference Include="UnityEngine.ContentLoadModule">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\UnityEngine.ContentLoadModule.dll</HintPath>
 		</Reference>
-		<Reference Include="UnityEngine.CoreModule">
+		<Reference Include="UnityEngine.CoreModule" Publicize="true">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
 		</Reference>
 		<Reference Include="UnityEngine.CrashReportingModule">

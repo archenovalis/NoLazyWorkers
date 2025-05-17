@@ -1,18 +1,26 @@
-# employees
+# todo
 
-## handlers
+add none and any choice to packaging station options
+
+## employees
+
+### packagers
 
 move items from any shelf to assigned shelf
 move items from loading dock to assigned/any shelf
 move product from any/assigned shelf to stations/rack
 package product and move to assigned/any shelf
 
-- if packaging station is assigned jars and less than 5 unpackaged product are in the station, then handler will get baggies and package them into baggies
+- if packaging station is assigned jars and less than 5 unpackaged product are in the station, then packager will get baggies and package them into baggies
 move packaged product to assigned/any shelf
 
-## botanists
+### botanists
 
 get pot supplies from any/assigned shelf
 deliver harvest to assigned/any shelf
 start the dry process
 deliver dried product to destination
+
+## bugs
+
+packager only grabbed 4 from a shelf when taking product to a packaging station, 16 were available. he then stood in front of the packaging station doing nothing. since there are now 4 in the station, he should have tried to switch the jars (used when product >= 5) for baggies. since there are no baggies, should have tried to add more of the same product.

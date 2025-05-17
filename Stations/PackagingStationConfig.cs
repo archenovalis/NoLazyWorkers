@@ -11,49 +11,190 @@ using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Handlers.PackagingStationExtensions;
-using static NoLazyWorkers.Handlers.PackagingStationUtilities;
-using static NoLazyWorkers.General.GeneralExtensions;
+using static NoLazyWorkers.Employees.PackagingStationExtensions;
+using static NoLazyWorkers.Employees.PackagingStationUtilities;
+using static NoLazyWorkers.Employees.PackagingStationConfigUtilities;
 using ScheduleOne.NPCs.Behaviour;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using Steamworks;
 using ScheduleOne.Product;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.NPCs;
+using GameKit.Utilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using ScheduleOne.Employees;
 
-namespace NoLazyWorkers.Handlers
+namespace NoLazyWorkers.Employees
 {
-  public class PackagingStationAdapter : IStationAdapter<PackagingStation>
-  {
-    private readonly PackagingStation _station;
-
-    public PackagingStationAdapter(PackagingStation station)
-    {
-      _station = station ?? throw new ArgumentNullException(nameof(station));
-    }
-
-    public PackagingStation Station => _station;
-
-    public Guid GUID => _station.GUID;
-    public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
-    public ItemSlot InsertSlot => _station.InputSlots.FirstOrDefault();
-    public List<ItemSlot> ProductSlots => _station.OutputSlots;
-    public ItemSlot OutputSlot => _station.OutputSlots.FirstOrDefault();
-    public bool IsInUse => (_station as IUsable).IsInUse;
-    public bool HasActiveOperation => false;
-    public int StartThreshold => 1;
-    public int GetInputQuantity() => _station.InputSlots.Sum(s => s.Quantity);
-    public List<ItemField> GetInputItemForProduct() => ItemFields[GUID];
-    public void StartOperation(Behaviour behaviour) => (behaviour as PackagingStationBehaviour).StartPackaging();
-    public int MaxProductQuantity => 20;
-    public ITransitEntity TransitEntity => _station as ITransitEntity;
-  }
-
   public static class PackagingStationExtensions
   {
+    public static int MAXOPTIONS = 5;
     public static Dictionary<Guid, List<ItemField>> ItemFields { get; } = new();
     public static Dictionary<Guid, List<QualityField>> QualityFields { get; } = new();
-    public static Dictionary<Guid, PackagingStationConfiguration> Config { get; } = new();
+
+    public class PackagingStationAdapter : IStationAdapter
+    {
+      private readonly PackagingStation _station;
+      public PackagingStation Station => _station;
+      public Guid GUID => _station.GUID;
+      public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
+      public ItemSlot InsertSlot => _station.PackagingSlot;
+      public List<ItemSlot> ProductSlots => new List<ItemSlot> { _station.ProductSlot };
+      public ItemSlot OutputSlot => _station.OutputSlot;
+      public bool IsInUse => (_station as IUsable).IsInUse;
+      public bool HasActiveOperation => false;
+      public int StartThreshold => 1;
+      public int GetInputQuantity() => _station.InputSlots.Sum(s => s.Quantity);
+      public List<ItemField> GetInputItemForProduct() => ItemFields[GUID];
+      public void StartOperation(Employee employee) => (employee as Packager)?.PackagingBehaviour.StartPackaging();
+      public int MaxProductQuantity => 20;
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public List<ItemInstance> RefillList() => PackagingStationUtilities.GetRefillList(_station);
+      public bool CanRefill(ItemInstance item) => RefillList().Any(i => i.CanStackWith(item, false));
+      public bool MoveOutputToShelf() => false;
+      public Type TypeOf => _station.GetType();
+
+      public PackagingStationAdapter(PackagingStation station)
+      {
+        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        {
+          PropertyStations[station.ParentProperty] = new List<IStationAdapter>();
+          propertyStations = PropertyStations[station.ParentProperty];
+        }
+        propertyStations.Add(this);
+        _station = station ?? throw new ArgumentNullException(nameof(station));
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagingStationAdapter: Initialized for station {station.GUID}", DebugLogger.Category.Packager);
+      }
+    }
+  }
+
+  public static class PackagingStationUtilities
+  {
+    public static List<ItemInstance> GetRefillList(PackagingStation station)
+    {
+      List<ItemInstance> items = [];
+      var fields = ItemFields[station.GUID];
+      var qualities = QualityFields[station.GUID];
+      for (int i = 0; i < fields.Count; i++)
+      {
+        var item = fields[i].SelectedItem;
+        if (item == null)
+          continue;
+        var prodItem = item.GetDefaultInstance() as ProductItemInstance;
+        prodItem.SetQuality(qualities[i].Value);
+        items.AddUnique(prodItem);
+      }
+      return items;
+    }
+  }
+
+  public static class PackagingStationConfigUtilities
+  {
+
+    public static void RegisterConfig(PackagingStation station, PackagingStationConfiguration config)
+    {
+      if (station == null || config == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterConfig: Station or config is null", DebugLogger.Category.PackagingStation);
+        return;
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"PackagingExtensions.RegisterConfig: Registered config for station {station.GUID}", DebugLogger.Category.PackagingStation);
+    }
+
+    public static void Cleanup(PackagingStation station)
+    {
+      if (station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.PackagingStation);
+        return;
+      }
+      ItemFields.Remove(station.GUID);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"PackagingExtensions.Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.PackagingStation);
+    }
+
+    public static void InitializeItemFields(PackagingStation station, PackagingStationConfiguration config)
+    {
+      try
+      {
+        if (station == null || config == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeItemFields: Station or Configuration is null", DebugLogger.Category.PackagingStation);
+          return;
+        }
+        Guid guid = station.GUID;
+        if (!StationAdapters.TryGetValue(guid, out var adapter))
+        {
+          adapter = new PackagingStationAdapter(station);
+          StationAdapters[guid] = adapter;
+        }
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.PackagingStation);
+
+        // Ensure StationRefills is initialized
+        if (!StationRefills.ContainsKey(guid))
+          StationRefills[guid] = new List<ItemInstance>(MAXOPTIONS + 1);
+        while (StationRefills[guid].Count < MAXOPTIONS + 1)
+          StationRefills[guid].Add(null);
+
+        var itemFields = new List<ItemField>();
+        var qualityFields = new List<QualityField>();
+
+        // Create fields up to min of MAXOPTIONS + 1 and station.ItemFields.Count
+        int fieldCount = MAXOPTIONS + 1;
+        for (int i = 0; i < fieldCount; i++)
+        {
+          var targetQuality = new QualityField(config);
+          targetQuality.onValueChanged.RemoveAllListeners();
+          targetQuality.onValueChanged.AddListener(quality =>
+          {
+            try
+            {
+              if (i < StationRefills[guid].Count && StationRefills[guid][i] is ProductItemInstance prodItem)
+              {
+                prodItem.SetQuality(quality);
+                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set quality {quality} for index {i} in station {guid}", DebugLogger.Category.PackagingStation);
+              }
+              config.InvokeChanged();
+            }
+            catch (Exception e)
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed to set quality for index {i} in station {guid}, error: {e}", DebugLogger.Category.PackagingStation);
+            }
+          });
+          qualityFields.Add(targetQuality);
+
+          var itemField = new ItemField(config) { CanSelectNone = false };
+          itemField.onItemChanged.RemoveAllListeners();
+          itemField.onItemChanged.AddListener(item =>
+          {
+            try
+            {
+              if (i < StationRefills[guid].Count)
+              {
+                StationRefills[guid][i] = item?.GetDefaultInstance();
+                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i} in station {guid}", DebugLogger.Category.PackagingStation);
+              }
+              config.InvokeChanged();
+            }
+            catch (Exception e)
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed to set item for index {i} in station {guid}, error: {e}", DebugLogger.Category.PackagingStation);
+            }
+          });
+          itemFields.Add(itemField);
+        }
+
+        // Register fields
+        QualityFields[guid] = qualityFields;
+        RegisterItemFields(station, itemFields);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Initialized {itemFields.Count} ItemFields for station {guid}", DebugLogger.Category.PackagingStation);
+      }
+      catch (Exception e)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.PackagingStation);
+      }
+    }
 
     public static void RegisterItemFields(PackagingStation station, List<ItemField> itemFields)
     {
@@ -67,84 +208,6 @@ namespace NoLazyWorkers.Handlers
           $"PackagingExtensions.RegisterItemFields: Registered {itemFields.Count} ItemFields for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
 
-    public static void RegisterConfig(PackagingStation station, PackagingStationConfiguration config)
-    {
-      if (station == null || config == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterConfig: Station or config is null", DebugLogger.Category.PackagingStation);
-        return;
-      }
-      Config[station.GUID] = config;
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"PackagingExtensions.RegisterConfig: Registered config for station {station.GUID}", DebugLogger.Category.PackagingStation);
-    }
-
-    public static void Cleanup(PackagingStation station)
-    {
-      if (station == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.PackagingStation);
-        return;
-      }
-      ItemFields.Remove(station.GUID);
-      Config.Remove(station.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"PackagingExtensions.Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.PackagingStation);
-    }
-  }
-
-  public static class PackagingStationUtilities
-  {
-    public static void InitializeItemFields(PackagingStation station, PackagingStationConfiguration config)
-    {
-      try
-      {
-        if (station == null || config == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeItemFields: Station or Configuration is null", DebugLogger.Category.PackagingStation);
-          return;
-        }
-
-        Guid guid = station.GUID;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.PackagingStation);
-
-        var itemFields = new List<ItemField>();
-        var qualityFields = new List<QualityField>();
-        for (int i = 0; i < 6; i++)
-        {
-          var targetQuality = new QualityField(config);
-          targetQuality.onValueChanged.RemoveAllListeners();
-          targetQuality.onValueChanged.AddListener(delegate
-          {
-            config.InvokeChanged();
-          });
-          qualityFields.Add(targetQuality);
-
-          var itemField = new ItemField(config)
-          {
-            CanSelectNone = true
-          };
-          itemField.onItemChanged.RemoveAllListeners();
-          itemField.onItemChanged.AddListener(delegate
-          {
-            config.InvokeChanged();
-          });
-          itemFields.Add(itemField);
-        }
-        QualityFields[station.GUID] = qualityFields;
-
-        RegisterItemFields(station, itemFields);
-
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeItemFields: Initialized 6 ItemFields for station {guid}", DebugLogger.Category.PackagingStation);
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"InitializeItemFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.PackagingStation);
-      }
-    }
   }
 
   [HarmonyPatch(typeof(PackagingStationConfigPanel))]
@@ -175,7 +238,11 @@ namespace NoLazyWorkers.Handlers
           templateUI = potPanel.GetComponentInChildren<ItemFieldUI>();
         }
 
-        var favorites = new List<ItemDefinition>();
+        var favorites = new List<ItemDefinition>
+        {
+          new ItemDefinition() { Name = "None", ID = "None" },
+          new ItemDefinition() { Name = "Any", ID = "Any" }
+        };
         if (ProductManager.FavouritedProducts != null)
         {
           foreach (var item in ProductManager.FavouritedProducts)
@@ -244,6 +311,7 @@ namespace NoLazyWorkers.Handlers
             itemFieldUI = uiObj.AddComponent<ItemFieldUI>();
             itemFieldUI.gameObject.AddComponent<CanvasRenderer>();
           }
+          itemFieldUI.ShowNoneAsAny = false;
           itemFieldUI.gameObject.SetActive(true);
 
 
@@ -255,8 +323,8 @@ namespace NoLazyWorkers.Handlers
           var qualRect = qualityUIObj.GetComponent<RectTransform>();
           if (rect != null)
           {
-            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -11 - 104f * i);
-            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -79 - 104f * i);
+            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -15 - 104f * i);
+            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, -83 - 104f * i);
           }
 
           foreach (var text in itemFieldUI.GetComponentsInChildren<TextMeshProUGUI>())
@@ -331,10 +399,20 @@ namespace NoLazyWorkers.Handlers
       }
     }
 
+    [HarmonyPrefix]
+    [HarmonyPatch("ShouldSave")]
+    static bool ShouldSavePrefix(PackagingStationConfiguration __instance, ref bool __result)
+    {
+      __result = true;
+      return false;
+    }
+
     [HarmonyPostfix]
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(PackagingStationConfiguration __instance, ref string __result)
     {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Starting station {__instance.Station.GUID}", DebugLogger.Category.PackagingStation);
       try
       {
         if (__instance.Station == null) return;
@@ -353,6 +431,8 @@ namespace NoLazyWorkers.Handlers
           }
           json["ItemFields"] = itemFieldsData;
         }
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"PackagingStationConfigurationPatch.GetSaveStringPostfix: station {__instance.Station.GUID} itemfields: {json["ItemFields"].ToString(Newtonsoft.Json.Formatting.Indented)}", DebugLogger.Category.PackagingStation);
         JArray qualityFieldsArray = [];
         if (QualityFields.TryGetValue(__instance.Station.GUID, out var fields) && fields.Any())
         {
@@ -368,6 +448,8 @@ namespace NoLazyWorkers.Handlers
           }
         }
         json["Qualities"] = qualityFieldsArray;
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"PackagingStationConfigurationPatch.GetSaveStringPostfix: station {__instance.Station.GUID} itemfields: {json["Qualities"].ToString(Newtonsoft.Json.Formatting.Indented)}", DebugLogger.Category.PackagingStation);
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -436,6 +518,13 @@ namespace NoLazyWorkers.Handlers
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"PackagingStationLoaderPatch.LoadPostfix: No valid PackagingStationConfiguration for station {station.GUID}", DebugLogger.Category.PackagingStation);
           return;
+        }
+
+        // Clear hidden destination
+        if (config.Destination.SelectedObject != null)
+        {
+          config.Destination.SelectedObject = null;
+          config.DestinationRoute = null;
         }
 
         Guid guid = station.GUID;

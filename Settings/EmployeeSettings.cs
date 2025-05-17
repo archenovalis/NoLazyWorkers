@@ -289,7 +289,7 @@ namespace NoLazyWorkers.Settings
       }
 
       int attempts = 0;
-      const int maxAttempts = 50; // ~1 second at 50 FPS
+      const int maxAttempts = 10;
 
       while (attempts < maxAttempts)
       {
