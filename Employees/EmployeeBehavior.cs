@@ -373,7 +373,8 @@ namespace NoLazyWorkers.Employees
     {
       if (Adapter?.HandlePlanning(behaviour, state) == true) return;
       state.ActiveRoutes.Clear();
-      TransitionState(behaviour, state, EState.Operating, "No routes planned by adapter");
+      DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandlePlanning: No routes planned for NPC {Npc.fullName}, transitioning to Idle", DebugLogger.Category.AllEmployees);
+      TransitionState(behaviour, state, EState.Idle, "No routes planned by adapter");
     }
 
     protected virtual void HandleMoving(Behaviour behaviour, StateData state)
@@ -506,10 +507,11 @@ namespace NoLazyWorkers.Employees
       TransitionState(behaviour, state, EState.Completed, "Operation started");
     }
 
+
     protected virtual void HandleCompleted(Behaviour behaviour, StateData state)
     {
-      // Default: disable
-      Disable(behaviour);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation complete for NPC {Npc.fullName}, transitioning to Idle", DebugLogger.Category.AllEmployees);
+      TransitionState(behaviour, state, EState.Idle, "Operation complete"); // Fixed: return to Idle
     }
 
     protected virtual void MoveTo(Behaviour behaviour, StateData state, ITransitEntity destination)
@@ -598,25 +600,21 @@ namespace NoLazyWorkers.Employees
   [HarmonyPatch(typeof(MoveItemBehaviour))]
   public static class MoveItemBehaviourPatch
   {
-    [HarmonyPrefix]
+    [HarmonyPostfix]
     [HarmonyPatch("Awake")]
-    public static bool AwakePrefix(MoveItemBehaviour __instance)
+    public static void AwakePostfix(MoveItemBehaviour __instance)
     {
-      if (__instance.Npc is Packager || __instance.Npc is Chemist)
-        ActiveMoveItemBehaviours[__instance.Npc.GUID] = __instance;
-      return true;
+      ActiveMoveItemBehaviours[__instance.Npc.GUID] = __instance;
     }
 
     [HarmonyPostfix]
     [HarmonyPatch("End")]
-    public static void Postfix(MoveItemBehaviour __instance)
+    public static void EndPostfix(MoveItemBehaviour __instance)
     {
-      if (__instance.Npc is Packager || __instance.Npc is Chemist)
-      {
-        ActiveMoveItemBehaviours.Remove(__instance.Npc.GUID);
-        EmployeeUtilities.ReleaseReservations(__instance);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"End: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}", DebugLogger.Category.AllEmployees);
-      }
+      ActiveMoveItemBehaviours.Remove(__instance.Npc.GUID);
+      EmployeeUtilities.ReleaseReservations(__instance);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"End: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}", DebugLogger.Category.AllEmployees);
+
     }
   }
 }

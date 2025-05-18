@@ -591,10 +591,11 @@ namespace NoLazyWorkers.Stations
         }
       }
       route.Product.Options = options;
+
       List<ItemField> itemFields = new();
-      foreach (var routeField in RoutesLists[index])
+      foreach (var routeList in RoutesLists)
       {
-        itemFields.Add(routeField.Product);
+        itemFields.Add(routeList[index].Product);
       }
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteListFieldUI: ProductClicked {route.Product.SelectedItem?.Name ?? "null"} | Options count={options.Count}",
@@ -615,9 +616,9 @@ namespace NoLazyWorkers.Stations
       MixingRoute route = RoutesLists[0][index];
 
       List<ItemField> itemFields = new();
-      foreach (var routeField in RoutesLists[index])
+      foreach (var routeList in RoutesLists)
       {
-        itemFields.Add(routeField.MixerItem);
+        itemFields.Add(routeList[index].MixerItem);
       }
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteEntryUI: EntryMixerClicked {route.MixerItem.SelectedItem?.name} | {route.MixerItem.Options.Count}",

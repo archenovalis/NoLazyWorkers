@@ -428,21 +428,38 @@ namespace NoLazyWorkers.Structures
 
     public static void UpdateShelfConfiguration(PlaceableStorageEntity shelf, ItemInstance assignedItem)
     {
-      if (shelf == null)
+      if (shelf == null || shelf.GUID == Guid.Empty)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: Shelf is null", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: Shelf is null or has empty GUID", DebugLogger.Category.Storage);
         return;
       }
-
+      if (!Storage.ContainsKey(shelf.GUID))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: Shelf {shelf.GUID} not found in Storage dictionary", DebugLogger.Category.Storage);
+        return;
+      }
       if (!Config.TryGetValue(shelf.GUID, out var config))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: No config for shelf {shelf.GUID}", DebugLogger.Category.Storage);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: No config for shelf {shelf.GUID}, creating default", DebugLogger.Category.Storage);
         return;
       }
+      if (shelf.ParentProperty == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateShelfConfiguration: ParentProperty is null for shelf {shelf.GUID}, resolving", DebugLogger.Category.Storage);
+        shelf.ParentProperty = shelf.GetProperty(shelf.transform);
+        if (shelf.ParentProperty == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateShelfConfiguration: Failed to resolve ParentProperty for shelf {shelf.GUID}", DebugLogger.Category.Storage);
+          return;
+        }
+      }
+      if (!EmployeeExtensions.NoDestinationCache.ContainsKey(shelf.ParentProperty))
+      {
+        EmployeeExtensions.NoDestinationCache[shelf.ParentProperty] = new List<ItemInstance>();
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateShelfConfiguration: Initialized NoDestinationCache for property {shelf.ParentProperty}", DebugLogger.Category.Storage);
+      }
 
-      // Remove shelf from all lists
       RemoveShelfFromLists(shelf);
-
       if (config.Mode == StorageMode.Any)
       {
         AnyShelves.Add(shelf);
@@ -450,15 +467,15 @@ namespace NoLazyWorkers.Structures
       }
       else if (config.Mode == StorageMode.Specific && assignedItem != null)
       {
-        if (!ShelfCache.Keys.Any(i => i.CanStackWith(assignedItem, false)))
-          ShelfCache[assignedItem] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
-        EmployeeExtensions.NoDestinationCache[config.Storage.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
+        var cacheKey = ShelfCache.Keys.FirstOrDefault(i => i.CanStackWith(assignedItem, false)) ?? assignedItem;
+        if (!ShelfCache.ContainsKey(cacheKey))
+          ShelfCache[cacheKey] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
+        EmployeeExtensions.NoDestinationCache[shelf.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
         int quantity = GetItemQuantityInShelf(shelf, assignedItem);
-        ShelfCache[assignedItem][shelf] = new ShelfInfo(shelf, quantity, true);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {assignedItem}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
+        ShelfCache[cacheKey][shelf] = new ShelfInfo(shelf, quantity, true);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {assignedItem.ID}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
       }
 
-      // Update quantities for non-configured shelves
       UpdateShelfCache(shelf);
     }
 

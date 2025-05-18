@@ -15,6 +15,7 @@ using ScheduleOne.Product.Packaging;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.Events;
+using static NoLazyWorkers.Employees.PackagingStationExtensions;
 using static NoLazyWorkers.Stations.StationExtensions;
 using static NoLazyWorkers.Structures.StorageUtilities;
 
@@ -33,21 +34,18 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("IsStationReady")]
     static bool IsStationReadyPrefix(PackagingStationBehaviour __instance, PackagingStation station, ref bool __result)
     {
-      if (station == null || !PackagingStationExtensions.Config.TryGetValue(station.GUID, out var config))
+      if (station == null || Config.TryGetValue(station.GUID, out var config))
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: Invalid station or configuration for {station?.GUID}", DebugLogger.Category.Packager);
         __result = false;
         return false;
       }
-
-      var adapter = new PackagingStationAdapter(station);
-      var npc = __instance.Npc as Packager;
-      if (npc == null)
+      if (!StationAdapters.TryGetValue(station.GUID, out var adapter))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: NPC is not a Packager for station {station.GUID}", DebugLogger.Category.Packager);
-        __result = false;
-        return false;
+        adapter = new PackagingStationAdapter(station);
+        StationAdapters[station.GUID] = adapter;
       }
+      var npc = __instance.Npc as Packager;
 
       bool hasProducts = adapter.ProductSlots.Any(s => s.ItemInstance != null && s.Quantity > 0 &&
                                                       s.ItemInstance.ID != JAR_ITEM_ID && s.ItemInstance.ID != BAGGIE_ITEM_ID);

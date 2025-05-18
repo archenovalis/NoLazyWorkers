@@ -24,6 +24,9 @@ using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using FluffyUnderware.DevTools.Extensions;
 using NoLazyWorkers.Structures;
+using ScheduleOne.NPCs.Behaviour;
+using FishNet.Object;
+using ScheduleOne.NPCs;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -34,7 +37,7 @@ namespace NoLazyWorkers
   {
     public static bool Enabled = true;
     public static int Level = 4;
-    public static bool All = false; // enables all but stacktrace logs
+    public static bool All = true; // enables all but stacktrace logs
     public static bool Core = true;
     public static bool Settings = false;
     // employees
@@ -842,6 +845,41 @@ namespace NoLazyWorkers
       {
         RecentUpdates.Remove(key);
       }
+    }
+  }
+
+  [HarmonyPatch(typeof(MoveItemBehaviour))]
+  public class MoveItemBehaviourTestPatch
+  {
+    [HarmonyPrefix]
+    [HarmonyPatch("IsDestinationValid")]
+    public static bool IsDestinationValidPrefix(MoveItemBehaviour __instance, TransitRoute route, ItemInstance item, ref bool __result)
+    {
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 0");
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1: {__instance?.Npc?.name}");
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1:  | {__instance?.Npc?.NetworkObject?.name}");
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1:  | {route?.Destination?.GUID}");
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1:  | {route?.Destination?.InputSlots?.Count}");
+      if (route.Destination.GetInputCapacityForItem(item, __instance.Npc) == 0)
+      {
+        MelonLogger.Warning("[Test] [MoveItemBehaviourTestPatch] Destination has no capacity for item!");
+        __result = false;
+        return false;
+      }
+      if (!__instance.CanGetToDestination(route))
+      {
+        MelonLogger.Warning("[Test] [MoveItemBehaviourTestPatch] Cannot get to destination!");
+        __result = false;
+        return false;
+      }
+      if (!__instance.CanGetToSource(route))
+      {
+        MelonLogger.Warning("[Test] [MoveItemBehaviourTestPatch] Cannot get to source!");
+        __result = false;
+        return false;
+      }
+      __result = true;
+      return false;
     }
   }
 }
