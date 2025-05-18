@@ -15,31 +15,38 @@ using static NoLazyWorkers.Structures.StorageUtilities;
 
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
-using static NoLazyWorkers.Stations.LabOvenExtensions;
-using static NoLazyWorkers.Stations.ChemistryStationExtensions;
-using static NoLazyWorkers.Stations.CauldronExtensions;
+using static NoLazyWorkers.Employees.EmployeeUtilities;
 using NoLazyWorkers.Employees;
+using static NoLazyWorkers.Employees.EmployeeExtensions;
 
 namespace NoLazyWorkers.Employees
 {
-  /* [HarmonyPatch(typeof(Employee))]
-  public class EmployeePatch
+  public class ChemistBehaviour : EmployeeBehaviour
   {
-    [HarmonyPatch("OnDestroy")]
-    [HarmonyPostfix]
-    static void OnDestroyPostfix(Employee __instance)
+    public ChemistBehaviour(Behaviour behaviour, IStationAdapter station, IEmployeeAdapter employee) : base(behaviour.Npc, employee)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"EmployeePatch.OnDestroy: Entered for {__instance?.fullName}",
-          DebugLogger.Category.Chemist);
-      if (__instance is Chemist chemist)
+      RegisterStationBehaviour(behaviour, station);
+    }
+
+    protected override void HandleCompleted(Behaviour behaviour, StateData state)
+    {
+      if (state.Station.HasActiveOperation) return;
+      if (state.Station.OutputSlot.Quantity > 0)
       {
-        EmployeeBehaviour.Cleanup(chemist.StartCauldronBehaviour);
-        EmployeeBehaviour.Cleanup(chemist.StartMixingStationBehaviour);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"EmployeePatch.OnDestroy: Cleaned up states for {chemist?.fullName}",
-            DebugLogger.Category.Chemist);
+        var item = state.Station.OutputSlot.ItemInstance;
+        var destination = FindPackagingStation(Adapter, item) ?? FindShelfForDelivery(Npc, item);
+        if (destination != null)
+        {
+          var slots = destination.ReserveInputSlotsForItem(item, Npc.NetworkObject);
+          var request = new TransferRequest(item, state.Station.OutputSlot.Quantity, Npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null), state.Station.TransitEntity, new List<ItemSlot> { state.Station.OutputSlot }, destination, slots);
+          state.ActiveRoutes.Add(new PrioritizedRoute(request, PRIORITY_STATION_REFILL));
+          TransitionState(behaviour, state, EState.Grabbing, "Output ready for delivery");
+        }
+      }
+      else
+      {
+        TransitionState(behaviour, state, EState.Idle, "Operation complete");
       }
     }
-  } */
+  }
 }

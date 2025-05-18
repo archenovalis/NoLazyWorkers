@@ -11,50 +11,51 @@ using static NoLazyWorkers.Stations.StationExtensions;
 
 namespace NoLazyWorkers.Stations
 {
-  public static class CauldronExtensions
-  {
-    public class CauldronAdapter : IStationAdapter
+  /*   public static class CauldronExtensions
     {
-      private readonly Cauldron _station;
-
-      public CauldronAdapter(Cauldron station)
+      public class CauldronAdapter : IStationAdapter
       {
-        _station = station;
-      }
+        private readonly Cauldron _station;
 
-      public Cauldron Station => _station;
-      public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
-      public ItemSlot InsertSlot => _station.LiquidSlot;
-      public List<ItemSlot> ProductSlots => _station.InputSlots;
-      public ItemSlot OutputSlot => _station.OutputSlot;
-      public bool IsInUse => _station.isOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
-      public bool HasActiveOperation => _station.RemainingCookTime > 0;
-      public int StartThreshold => Cauldron.COCA_LEAF_REQUIRED;
-      public Guid GUID => _station.GUID;
-      public int MaxProductQuantity => 60;
-      public int GetInputQuantity() => _station.LiquidSlot?.Quantity ?? 0;
-      public void StartOperation() => _station.onCookStart.Invoke();
-      public ITransitEntity TransitEntity => _station as ITransitEntity;
-      public bool MoveOutputToShelf() => false;
+        public CauldronAdapter(Cauldron station)
+        {
+          _station = station;
+        }
 
-      public List<ItemField> GetInputItemForProduct()
-      {
-        return [new ItemField(_station.cauldronConfiguration) { SelectedItem = Registry.GetItem("gasoline") },
-                        new ItemField(_station.cauldronConfiguration) { SelectedItem = Registry.GetItem("cocaleaf") }];
-      }
+        public Cauldron Station => _station;
+        public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
+        public ItemSlot InsertSlot => _station.LiquidSlot;
+        public List<ItemSlot> ProductSlots => _station.InputSlots;
+        public ItemSlot OutputSlot => _station.OutputSlot;
+        public bool IsInUse => _station.isOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
+        public bool HasActiveOperation => _station.RemainingCookTime > 0;
+        public int StartThreshold => Cauldron.COCA_LEAF_REQUIRED;
+        public Guid GUID => _station.GUID;
+        public int MaxProductQuantity => 60;
+        public int GetInputQuantity() => _station.LiquidSlot?.Quantity ?? 0;
+        public void StartOperation() => _station.onCookStart.Invoke();
+        public ITransitEntity TransitEntity => _station as ITransitEntity;
+        public bool MoveOutputToShelf() => false;
 
-      public void StartOperation(ScheduleOne.NPCs.Behaviour.Behaviour behaviour)
-      {
-        (behaviour as StartCauldronBehaviour).BeginCauldron();
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"CauldronAdapter.StartOperation: Started cook for station {_station.GUID}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      }
+        public List<ItemField> GetInputItemForProduct()
+        {
+          return [new ItemField(_station.cauldronConfiguration) { SelectedItem = Registry.GetItem("gasoline") },
+                          new ItemField(_station.cauldronConfiguration) { SelectedItem = Registry.GetItem("cocaleaf") }];
+        }
 
-      public List<ItemInstance> RefillList()
-      {
-        throw new NotImplementedException();
+        public void StartOperation(ScheduleOne.NPCs.Behaviour.Behaviour behaviour)
+        {
+          (behaviour as StartCauldronBehaviour).BeginCauldron();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"CauldronAdapter.StartOperation: Started cook for station {_station.GUID}",
+              DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
+        }
+
+        public List<ItemInstance> RefillList()
+        {
+          throw new NotImplementedException();
+        }
       }
     }
-  }
+   */
 }

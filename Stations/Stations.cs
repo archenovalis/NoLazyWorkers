@@ -42,6 +42,8 @@ namespace NoLazyWorkers.Stations
   public static class StationExtensions
   {
     public static Dictionary<Property, List<IStationAdapter>> PropertyStations = [];
+    public static Dictionary<Guid, IStationAdapter> StationAdapters = [];
+    public static Dictionary<Guid, List<ItemInstance>> StationRefills = [];
 
     public interface IStationAdapter
     {
@@ -59,8 +61,8 @@ namespace NoLazyWorkers.Stations
       int MaxProductQuantity { get; }
       ITransitEntity TransitEntity { get; }
       List<ItemInstance> RefillList();
+      bool CanRefill(ItemInstance item);
       bool MoveOutputToShelf();
-      bool CanAcceptItem(ItemInstance item);
     }
   }
 }

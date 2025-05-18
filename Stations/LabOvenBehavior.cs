@@ -8,7 +8,6 @@ using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Stations.LabOvenExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using NoLazyWorkers.Employees;
 

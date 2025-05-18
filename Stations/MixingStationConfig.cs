@@ -30,6 +30,8 @@ namespace NoLazyWorkers.Stations
 {
   public static class MixingStationExtensions
   {
+    public static int MAXROUTES = 11;
+    public static float MAXTHRESHOLD = 20f;
     public static Dictionary<Guid, MixingStationConfiguration> Config = [];
     public static Dictionary<Guid, List<MixingRoute>> MixingRoutes = [];
     public static GameObject MixingRouteListTemplate { get; set; }
@@ -41,6 +43,7 @@ namespace NoLazyWorkers.Stations
 
       public MixingStationAdapter(MixingStation station)
       {
+        StationAdapters[station.GUID] = this;
         _station = station;
       }
       public MixingStation Station => _station;
@@ -80,6 +83,10 @@ namespace NoLazyWorkers.Stations
         }
         return items;
       }
+      public bool CanRefill(ItemInstance item)
+      {
+        throw new NotImplementedException();
+      }
 
       public bool MoveOutputToShelf()
       {
@@ -105,7 +112,7 @@ namespace NoLazyWorkers.Stations
           return false;
         }
 
-        if (!MixingStationExtensions.MixingRoutes.TryGetValue(_station.GUID, out var routes) || routes == null || routes.Count == 0)
+        if (!MixingRoutes.TryGetValue(_station.GUID, out var routes) || routes == null || routes.Count == 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"UniqueCompletion: No routes defined for station={_station.GUID}",
@@ -241,7 +248,7 @@ namespace NoLazyWorkers.Stations
             $"InitializeStaticRouteListTemplate: addNewLabel?.text: {addNewLabel?.text}",
             DebugLogger.Category.MixingStation);
 
-        for (int i = 0; i < MixingRouteListFieldUI.MaxRoutes; i++)
+        for (int i = 0; i <= MAXROUTES; i++)
         {
           Transform entry = contentsTransform.Find($"Entry ({i})") ?? (i == 0 ? contentsTransform.Find("Entry") : null);
           DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -323,14 +330,13 @@ namespace NoLazyWorkers.Stations
     public MixingRouteEntryUI[] RouteEntries;
     public RectTransform MultiEditBlocker;
     public Button AddButton;
-    public static readonly int MaxRoutes = 12;
     private List<List<MixingRoute>> RoutesLists;
     private List<MixingStationConfiguration> Configs;
     private UnityAction OnChanged;
 
     private void Start()
     {
-      if (MixingStationExtensions.MixingRouteListTemplate != null)
+      if (MixingRouteListTemplate != null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             "MixingStationConfigPanelBindPatch: MixingRouteListTemplate already initialized, skipping",
@@ -338,8 +344,8 @@ namespace NoLazyWorkers.Stations
       }
       else
       {
-        MixingStationExtensions.InitializeStaticRouteListTemplate();
-        if (MixingStationExtensions.MixingRouteListTemplate == null)
+        InitializeStaticRouteListTemplate();
+        if (MixingRouteListTemplate == null)
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               "MixingRouteListFieldUI: Failed to initialize MixingRouteListTemplate",
               DebugLogger.Category.MixingStation);
@@ -505,7 +511,7 @@ namespace NoLazyWorkers.Stations
 
       if (AddButton != null)
       {
-        bool canAdd = RoutesLists.All(list => list.Count < MaxRoutes);
+        bool canAdd = RoutesLists.All(list => list.Count < MAXROUTES);
         AddButton.gameObject.SetActive(canAdd);
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"MixingRouteListFieldUI: Refresh(): AddButton active={AddButton.gameObject.activeSelf}",
@@ -518,12 +524,13 @@ namespace NoLazyWorkers.Stations
 
     private void AddClicked()
     {
-      if (RoutesLists.All(list => list.Count < MaxRoutes))
+      if (RoutesLists.All(list => list.Count <= MAXROUTES))
       {
         for (int i = 0; i < RoutesLists.Count; i++)
         {
           if (Configs.ElementAtOrDefault(i) != null)
           {
+            StationRefills[Configs[i].station.GUID].Add(null);
             MixingRoute route = new(Configs[i]);
             RoutesLists[i].Add(route);
             DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -542,23 +549,16 @@ namespace NoLazyWorkers.Stations
 
     private void EntryDeleteClicked(int index)
     {
-      bool anyRemoved = false;
-      foreach (var routes in RoutesLists)
+      foreach (var route in RoutesLists)
       {
-        if (index >= 0 && index < routes.Count)
-        {
-          routes.RemoveAt(index);
-          anyRemoved = true;
-        }
+        route.RemoveAt(index);
       }
-      if (anyRemoved)
+      foreach (var config in Configs)
       {
+        StationRefills[config.station.GUID].RemoveAt(index);
         Refresh();
         OnChanged?.Invoke();
-        foreach (var config in Configs)
-        {
-          ConfigurationExtensions.InvokeChanged(config);
-        }
+        ConfigurationExtensions.InvokeChanged(config);
       }
     }
 
@@ -590,12 +590,16 @@ namespace NoLazyWorkers.Stations
             options.Add(item);
         }
       }
-
       route.Product.Options = options;
+      List<ItemField> itemFields = new();
+      foreach (var routeField in RoutesLists[index])
+      {
+        itemFields.Add(routeField.Product);
+      }
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteListFieldUI: ProductClicked {route.Product.SelectedItem?.Name ?? "null"} | Options count={options.Count}",
           DebugLogger.Category.MixingStation);
-      MixingRouteEntryUI.OpenItemSelectorScreen(route.Product, "Favorites");
+      MixingRouteEntryUI.OpenItemSelectorScreen(index, Configs, itemFields, "Favorites");
     }
 
     private void EntryMixerClicked(int index)
@@ -609,10 +613,16 @@ namespace NoLazyWorkers.Stations
       }
 
       MixingRoute route = RoutesLists[0][index];
+
+      List<ItemField> itemFields = new();
+      foreach (var routeField in RoutesLists[index])
+      {
+        itemFields.Add(routeField.MixerItem);
+      }
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteEntryUI: EntryMixerClicked {route.MixerItem.SelectedItem?.name} | {route.MixerItem.Options.Count}",
           DebugLogger.Category.MixingStation);
-      MixingRouteEntryUI.OpenItemSelectorScreen(route.MixerItem, "Mixers");
+      MixingRouteEntryUI.OpenItemSelectorScreen(index, Configs, itemFields, "Mixers");
     }
   }
 
@@ -695,13 +705,13 @@ namespace NoLazyWorkers.Stations
     public void MixerClicked() { onMixerClicked.Invoke(); }
     public void DeleteClicked() { onDeleteClicked.Invoke(); }
 
-    public static void OpenItemSelectorScreen(ItemField itemField, string fieldName)
+    public static void OpenItemSelectorScreen(int index, List<MixingStationConfiguration> configs, List<ItemField> itemFields, string fieldName)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteEntryUI: OpenItemSelectorScreen for {fieldName}",
           DebugLogger.Category.MixingStation);
 
-      if (itemField == null)
+      if (itemFields == null || itemFields.Count == 0)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning,
             "MixingRouteEntryUI: OpenItemSelectorScreen called with null itemField",
@@ -712,11 +722,11 @@ namespace NoLazyWorkers.Stations
       List<ItemSelector.Option> list = [];
       ItemSelector.Option selectedOption = null;
 
-      if (itemField.CanSelectNone)
+      if (itemFields[0].CanSelectNone)
       {
         ItemSelector.Option none = new("None", null);
         list.Add(none);
-        if (itemField.SelectedItem == null)
+        if (itemFields[0].SelectedItem == null)
           selectedOption = list[0];
       }
       else
@@ -728,7 +738,7 @@ namespace NoLazyWorkers.Stations
         }
       }
 
-      var options = itemField.Options ?? [];
+      var options = itemFields[0].Options ?? [];
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteEntryUI: OpenItemSelectorScreen, Options count={options.Count}",
           DebugLogger.Category.MixingStation);
@@ -744,7 +754,7 @@ namespace NoLazyWorkers.Stations
         }
         var opt = new ItemSelector.Option(option.Name, option);
         list.Add(opt);
-        if (itemField.SelectedItem == option)
+        if (itemFields[0].SelectedItem == option)
           selectedOption = opt;
       }
 
@@ -753,8 +763,17 @@ namespace NoLazyWorkers.Stations
         DebugLogger.Log(DebugLogger.LogLevel.Info,
                   $"MixingRouteEntryUI: ItemSelectorScreen selected {selected?.Item?.Name ?? "null"} for {fieldName}",
                   DebugLogger.Category.MixingStation);
-        itemField.SelectedItem = selected.Item;
-        itemField.onItemChanged?.Invoke(selected.Item);
+        foreach (var itemField in itemFields)
+        {
+          itemField.SelectedItem = selected.Item;
+          itemField.onItemChanged?.Invoke(selected.Item);
+        }
+        if (selected.Item.GetDefaultInstance() is ProductItemInstance prodItem)
+          foreach (var config in configs)
+          {
+            prodItem.SetQuality(QualityFields[config.station.GUID].Value);
+            StationRefills[config.station.GUID][index] = prodItem;
+          }
       }));
       Singleton<ManagementInterface>.Instance.ItemSelectorScreen.Open();
     }
@@ -832,22 +851,22 @@ namespace NoLazyWorkers.Stations
         if (__instance == null || station == null)
           return;
         Guid guid = station.GUID;
-        __instance.StartThrehold.MaxValue = 20f;
-
+        __instance.StartThrehold.MaxValue = MAXTHRESHOLD;
+        StationRefills[station.GUID] = new();
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"MixingStationConfigurationPatch: Initializing for station: {station?.GUID.ToString() ?? "null"}, configHash={__instance.GetHashCode()}",
             DebugLogger.Category.MixingStation);
 
-        if (!MixingStationExtensions.Config.ContainsKey(guid) || MixingStationExtensions.Config[guid] == null)
+        if (!Config.ContainsKey(guid) || Config[guid] == null)
         {
-          MixingStationExtensions.Config[guid] = __instance;
+          Config[guid] = __instance;
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               "MixingStationConfigurationPatch: Initialized MixingConfig",
               DebugLogger.Category.MixingStation);
         }
-        if (!MixingStationExtensions.MixingRoutes.ContainsKey(guid) || MixingStationExtensions.MixingRoutes[guid] == null)
+        if (!MixingRoutes.ContainsKey(guid) || MixingRoutes[guid] == null)
         {
-          MixingStationExtensions.MixingRoutes[guid] = [];
+          MixingRoutes[guid] = [];
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               "MixingStationConfigurationPatch: Initialized MixingRoutes",
               DebugLogger.Category.MixingStation);
@@ -876,7 +895,7 @@ namespace NoLazyWorkers.Stations
         Guid guid = __instance.station.GUID;
 
         JArray mixingRoutesArray = [];
-        if (MixingStationExtensions.MixingRoutes.TryGetValue(guid, out var routes) && routes.Any())
+        if (MixingRoutes.TryGetValue(guid, out var routes) && routes.Any())
         {
           foreach (var route in routes)
           {
@@ -902,7 +921,7 @@ namespace NoLazyWorkers.Stations
         if (mixingRoutesArray.Count > 0)
           jsonObject["MixingRoutes"] = mixingRoutesArray;
 
-        if (MixingStationExtensions.QualityFields.TryGetValue(guid, out var field))
+        if (QualityFields.TryGetValue(guid, out var field))
           jsonObject["Quality"] = field.Value.ToString();
         __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
 
@@ -942,10 +961,10 @@ namespace NoLazyWorkers.Stations
         if (__instance.station == null || __instance.station.gameObject == null)
         {
           Guid guid = __instance.station.GUID;
-          MixingStationExtensions.MixingRoutes.Remove(guid);
-          foreach (var pair in MixingStationExtensions.Config.Where(p => p.Value == __instance).ToList())
+          MixingRoutes.Remove(guid);
+          foreach (var pair in Config.Where(p => p.Value == __instance).ToList())
           {
-            MixingStationExtensions.Config.Remove(pair.Key);
+            Config.Remove(pair.Key);
           }
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"MixingStationConfigurationDestroyPatch: Removed station {guid} from dictionaries",
@@ -994,14 +1013,14 @@ namespace NoLazyWorkers.Stations
           return;
         }
 
-        if (MixingStationExtensions.MixingRouteListTemplate == null)
+        if (MixingRouteListTemplate == null)
         {
-          MixingStationExtensions.InitializeStaticRouteListTemplate();
+          InitializeStaticRouteListTemplate();
         }
 
         __instance.DestinationUI.gameObject.SetActive(false);
 
-        GameObject routeListUIObj = Object.Instantiate(MixingStationExtensions.MixingRouteListTemplate, __instance.transform, false);
+        GameObject routeListUIObj = Object.Instantiate(MixingRouteListTemplate, __instance.transform, false);
         routeListUIObj.name = "RouteListFieldUI";
         routeListUIObj.SetActive(true);
         var customRouteListUI = routeListUIObj.GetComponent<MixingRouteListFieldUI>();
@@ -1025,15 +1044,15 @@ namespace NoLazyWorkers.Stations
         foreach (var config in configs.OfType<MixingStationConfiguration>())
         {
           Guid guid = config.station.GUID;
-          config.StartThrehold.MaxValue = 20f;
+          config.StartThrehold.MaxValue = MAXTHRESHOLD;
 
-          if (!MixingStationExtensions.MixingRoutes.ContainsKey(guid))
-            MixingStationExtensions.MixingRoutes[guid] = [];
-          routesLists.Add(MixingStationExtensions.MixingRoutes[guid]);
+          if (!MixingRoutes.ContainsKey(guid))
+            MixingRoutes[guid] = [];
+          routesLists.Add(MixingRoutes[guid]);
           configList.Add(config);
-          if (!MixingStationExtensions.QualityFields.ContainsKey(guid))
-            MixingStationExtensions.QualityFields[guid] = new QualityField(config);
-          qualityList.Add(MixingStationExtensions.QualityFields[guid]);
+          if (!QualityFields.ContainsKey(guid))
+            QualityFields[guid] = new QualityField(config);
+          qualityList.Add(QualityFields[guid]);
         }
         customRouteListUI.Bind(routesLists, configList, () => configs.ForEach(c => ConfigurationExtensions.InvokeChanged(c)));
         qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityList);
@@ -1114,9 +1133,9 @@ namespace NoLazyWorkers.Stations
               DebugLogger.Category.MixingStation);
           return;
         }
-        if (!MixingStationExtensions.Config.ContainsKey(guid))
+        if (!Config.ContainsKey(guid))
         {
-          MixingStationExtensions.Config[guid] = config;
+          Config[guid] = config;
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"MixingStationLoaderPatch: Registered MixingConfig for station: {guid}",
               DebugLogger.Category.MixingStation);
@@ -1155,19 +1174,22 @@ namespace NoLazyWorkers.Stations
                 $"MixingStationLoaderPatch: Loaded route Product={route.Product.SelectedItem?.Name ?? "null"}, MixerItem={route.MixerItem.SelectedItem?.Name ?? "null"} for station={guid}",
                 DebugLogger.Category.MixingStation);
           }
-          MixingStationExtensions.MixingRoutes[guid] = routes;
+          MixingRoutes[guid] = routes;
 
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"MixingStationLoaderPatch: Loaded {routes.Count} MixingRoutes for station={guid}",
               DebugLogger.Category.MixingStation);
 
           var targetQuality = new QualityField(config);
-          targetQuality.onValueChanged.AddListener(delegate
+          targetQuality.onValueChanged.AddListener(quality =>
           {
+            foreach (var item in StationRefills[station.GUID])
+              if (item is ProductItemInstance prodItem)
+                prodItem.SetQuality(quality);
             config.InvokeChanged();
           });
           targetQuality.SetValue(Enum.Parse<EQuality>(jsonObject["Quality"]?.ToString()), network: false);
-          MixingStationExtensions.QualityFields[guid] = targetQuality;
+          QualityFields[guid] = targetQuality;
         }
         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
         DebugLogger.Log(DebugLogger.LogLevel.Info,

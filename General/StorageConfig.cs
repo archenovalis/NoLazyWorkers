@@ -452,7 +452,7 @@ namespace NoLazyWorkers.Structures
       {
         if (!ShelfCache.Keys.Any(i => i.CanStackWith(assignedItem, false)))
           ShelfCache[assignedItem] = new Dictionary<PlaceableStorageEntity, ShelfInfo>();
-        RouteQueueManager.NoDestinationCache[config.Storage.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
+        EmployeeExtensions.NoDestinationCache[config.Storage.ParentProperty].RemoveAll(i => i.CanStackWith(assignedItem, false));
         int quantity = GetItemQuantityInShelf(shelf, assignedItem);
         ShelfCache[assignedItem][shelf] = new ShelfInfo(shelf, quantity, true);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateShelfConfiguration: Added shelf {shelf.GUID} to ShelfCache for {assignedItem}, quantity={quantity}, isConfigured=true", DebugLogger.Category.Storage);
@@ -541,10 +541,10 @@ namespace NoLazyWorkers.Structures
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
 
       var result = new Dictionary<PlaceableStorageEntity, int>();
-      Dictionary<PlaceableStorageEntity, ShelfInfo> shelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
-      if (shelves.Count > 0)
+      var pair = ShelfCache.FirstOrDefault(i => i.Key.CanStackWith(targetItem, false));
+      if (pair.Value?.Keys != null)
       {
-        foreach (var shelfInfo in shelves.Values)
+        foreach (var shelfInfo in pair.Value.Values)
         {
           if (shelfInfo.Quantity >= needed)
           {
@@ -728,15 +728,9 @@ namespace NoLazyWorkers.Structures
 
         foreach (var config in configs.OfType<StorageConfiguration>())
         {
-          var itemField = config.StorageItem;
-          itemField.onItemChanged.RemoveAllListeners();
-          itemField.onItemChanged.AddListener(item => RefreshChanged(item, config));
-          itemFieldList.Add(itemField);
+          itemFieldList.Add(config.StorageItem);
           itemSlots.AddRange(config.Storage.StorageEntity.ItemSlots);
-          var qualityfield = config.Quality;
-          qualityfield.onValueChanged.RemoveAllListeners();
-          qualityfield.onValueChanged.AddListener(quality => config.InvokeChanged());
-          qualityList.Add(qualityfield);
+          qualityList.Add(config.Quality);
 
           switch (config.Mode)
           {
@@ -951,10 +945,10 @@ namespace NoLazyWorkers.Structures
       try
       {
         Quality = new QualityField(this);
-        Quality.onValueChanged.AddListener(delegate
+        Quality.onValueChanged.AddListener(quality =>
         {
           if (AssignedItem is ProductItemInstance prodItem)
-            prodItem.SetQuality(Quality.Value);
+            prodItem.SetQuality(quality);
           InvokeChanged();
         });
         Quality.SetValue(EQuality.Premium, network: false);

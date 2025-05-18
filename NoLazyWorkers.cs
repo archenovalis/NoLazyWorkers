@@ -17,7 +17,7 @@ using UnityEngine.UI;
 using System.Collections;
 using System.Reflection;
 
-//using NoLazyWorkers.Handlers;
+//using NoLazyWorkers.Packagers;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Employees;
@@ -41,7 +41,7 @@ namespace NoLazyWorkers
     public static bool AllEmployees = false;
     public static bool Chemist = true;
     public static bool Botanist = false;
-    public static bool Handler = false;
+    public static bool Packager = false;
     // generic
     public static bool Storage = true;
     public static bool General = false;
@@ -86,7 +86,7 @@ namespace NoLazyWorkers
         { Category.AllEmployees, () => DebugLogs.AllEmployees },
         { Category.Chemist, () => DebugLogs.Chemist },
         { Category.Botanist, () => DebugLogs.Botanist },
-        { Category.Packager, () => DebugLogs.Handler },
+        { Category.Packager, () => DebugLogs.Packager },
         { Category.Storage, () => DebugLogs.Storage },
         { Category.Pot, () => DebugLogs.Pot },
         { Category.LabOven, () => DebugLogs.LabOven },

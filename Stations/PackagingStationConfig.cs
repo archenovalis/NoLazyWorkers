@@ -21,6 +21,7 @@ using ScheduleOne.DevUtilities;
 using ScheduleOne.NPCs;
 using GameKit.Utilities;
 using static NoLazyWorkers.Stations.StationExtensions;
+using ScheduleOne.Employees;
 
 namespace NoLazyWorkers.Employees
 {
@@ -64,11 +65,19 @@ namespace NoLazyWorkers.Employees
       }
       return items;
     }
+    public bool CanRefill(ItemInstance item)
+    {
+      if (RefillList().Any(i => i.CanStackWith(item, false)))
+        return true;
+      return false;
+    }
+
     public bool MoveOutputToShelf() => false;
   }
 
   public static class PackagingStationExtensions
   {
+    public static int MAXOPTIONS = 5;
     public static Dictionary<Guid, List<ItemField>> ItemFields { get; } = new();
     public static Dictionary<Guid, List<QualityField>> QualityFields { get; } = new();
     public static Dictionary<Guid, PackagingStationConfiguration> Config { get; } = new();
@@ -127,14 +136,17 @@ namespace NoLazyWorkers.Employees
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.PackagingStation);
 
+        StationRefills[station.GUID] = new(MAXOPTIONS);
         var itemFields = new List<ItemField>();
         var qualityFields = new List<QualityField>();
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i <= MAXOPTIONS; i++)
         {
           var targetQuality = new QualityField(config);
           targetQuality.onValueChanged.RemoveAllListeners();
-          targetQuality.onValueChanged.AddListener(delegate
+          targetQuality.onValueChanged.AddListener(quality =>
           {
+            if (StationRefills[station.GUID][i] is ProductItemInstance prodItem)
+              prodItem.SetQuality(quality);
             config.InvokeChanged();
           });
           qualityFields.Add(targetQuality);
@@ -144,8 +156,9 @@ namespace NoLazyWorkers.Employees
             CanSelectNone = true
           };
           itemField.onItemChanged.RemoveAllListeners();
-          itemField.onItemChanged.AddListener(delegate
+          itemField.onItemChanged.AddListener(item =>
           {
+            StationRefills[station.GUID][i] = item.GetDefaultInstance();
             config.InvokeChanged();
           });
           itemFields.Add(itemField);

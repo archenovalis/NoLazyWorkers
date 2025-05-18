@@ -13,7 +13,6 @@ using System.Collections;
 using UnityEngine;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Stations.CauldronExtensions;
 using NoLazyWorkers.Employees;
 
 namespace NoLazyWorkers.Stations
