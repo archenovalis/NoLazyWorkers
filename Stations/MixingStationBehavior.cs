@@ -13,6 +13,8 @@ using static NoLazyWorkers.Stations.StationExtensions;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using NoLazyWorkers.Employees;
+using ScheduleOne.NPCs;
+using static NoLazyWorkers.Employees.ChemistExtensions;
 
 namespace NoLazyWorkers.Stations
 {
@@ -64,7 +66,11 @@ namespace NoLazyWorkers.Stations
 
   public class MixingStationBehaviour : EmployeeBehaviour
   {
-    public override IStationAdapter<TStation> GetStation<TStation>(Behaviour behaviour)
+    public MixingStationBehaviour(NPC npc, IChemistAdapter adapter = null) : base(npc, adapter)
+    {
+    }
+
+    public override IStationAdapter GetStation(Behaviour behaviour)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"GetStation: Entered for behaviour={behaviour?.Npc?.fullName}, type={behaviour?.GetType().Name}",
@@ -76,7 +82,7 @@ namespace NoLazyWorkers.Stations
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"GetStation: Returning MixingStationAdapter for station={stationBehaviour.targetStation.GUID}, chemist={behaviour.Npc?.fullName}",
               DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-          return new MixingStationAdapter(stationBehaviour.targetStation) as IStationAdapter<TStation>;
+          return new MixingStationAdapter(stationBehaviour.targetStation) as IStationAdapter;
         }
         DebugLogger.Log(DebugLogger.LogLevel.Error,
             $"GetStation: Type mismatch for {behaviour?.Npc?.fullName}, expected TStation=MixingStation, got TStation={typeof(TStation).Name}",
@@ -180,7 +186,7 @@ namespace NoLazyWorkers.Stations
         DebugLogger.Log(DebugLogger.LogLevel.Error,
             $"MixingStationChemistPatch.GetMixingStationsReadyToStart: Failed for chemist: {__instance?.name}, error: {e}",
             DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-        __result = new List<MixingStation>();
+        __result = new List();
         return false;
       }
     }
@@ -240,7 +246,7 @@ namespace NoLazyWorkers.Stations
               DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
         }
 
-        IStationAdapter station = mixingBehaviour.GetStation<MixingStation>(__instance);
+        IStationAdapter station = mixingBehaviour.GetStation(__instance);
         if (station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,

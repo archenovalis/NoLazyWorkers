@@ -24,7 +24,7 @@ using static NoLazyWorkers.Stations.StationExtensions;
 
 namespace NoLazyWorkers.Employees
 {
-  public class PackagingStationAdapter : IStationAdapter<PackagingStation>
+  public class PackagingStationAdapter : IStationAdapter
   {
     private readonly PackagingStation _station;
 

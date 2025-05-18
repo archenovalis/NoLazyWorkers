@@ -11,7 +11,7 @@ namespace NoLazyWorkers.Stations
 {
   public static class LabOvenExtensions
   {
-    public class LabOvenAdapter : IStationAdapter<LabOven>
+    public class LabOvenAdapter : IStationAdapter
     {
       private readonly LabOven _station;
 

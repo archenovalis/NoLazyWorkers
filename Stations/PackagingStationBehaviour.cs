@@ -35,7 +35,7 @@ namespace NoLazyWorkers.Stations
     {
       if (station == null || !PackagingStationExtensions.Config.TryGetValue(station.GUID, out var config))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: Invalid station or configuration for {station?.GUID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: Invalid station or configuration for {station?.GUID}", DebugLogger.Category.Packager);
         __result = false;
         return false;
       }
@@ -44,7 +44,7 @@ namespace NoLazyWorkers.Stations
       var npc = __instance.Npc as Packager;
       if (npc == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: NPC is not a Packager for station {station.GUID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: NPC is not a Packager for station {station.GUID}", DebugLogger.Category.Packager);
         __result = false;
         return false;
       }
@@ -78,12 +78,12 @@ namespace NoLazyWorkers.Stations
         return false;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: Failed to initiate packaging retrieval for station {station.GUID}", DebugLogger.Category.Handler);
+      DebugLogger.Log(DebugLogger.LogLevel.Warning, $"IsStationReadyPrefix: Failed to initiate packaging retrieval for station {station.GUID}", DebugLogger.Category.Packager);
       __result = false;
       return false;
     }
 
-    private static bool CheckPackagingAvailability(IStationAdapter<PackagingStation> adapter, Packager npc, out string requiredPackagingId)
+    private static bool CheckPackagingAvailability(IStationAdapter adapter, Packager npc, out string requiredPackagingId)
     {
       int productCount = adapter.ProductSlots
           .Where(s => s.ItemInstance != null && s.ItemInstance.ID != JAR_ITEM_ID && s.ItemInstance.ID != BAGGIE_ITEM_ID)
@@ -109,7 +109,7 @@ namespace NoLazyWorkers.Stations
       return false;
     }
 
-    private static bool CheckBaggieUnpackaging(IStationAdapter<PackagingStation> adapter, Packager npc)
+    private static bool CheckBaggieUnpackaging(IStationAdapter adapter, Packager npc)
     {
       var baggieSlot = adapter.InsertSlot;
       if (baggieSlot == null || baggieSlot.Quantity < BAGGIE_UNPACKAGE_THRESHOLD || baggieSlot.ItemInstance.ID != BAGGIE_ITEM_ID)
@@ -139,14 +139,14 @@ namespace NoLazyWorkers.Stations
             npc.MoveItemBehaviour.Initialize(route, baggieItem, BAGGIE_UNPACKAGE_THRESHOLD, true);
             npc.MoveItemBehaviour.Enable_Networked(null);
             DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"CheckBaggieUnpackaging: Unpackaged {BAGGIE_UNPACKAGE_THRESHOLD} baggies, returning to shelf {shelf.GUID}", DebugLogger.Category.Handler);
+                $"CheckBaggieUnpackaging: Unpackaged {BAGGIE_UNPACKAGE_THRESHOLD} baggies, returning to shelf {shelf.GUID}", DebugLogger.Category.Packager);
           }
         }
       }
       return unpackCount > 0;
     }
 
-    private static bool InitiatePackagingRetrieval(IStationAdapter<PackagingStation> adapter, Packager npc, string packagingItemId)
+    private static bool InitiatePackagingRetrieval(IStationAdapter adapter, Packager npc, string packagingItemId)
     {
       var packagingItem = Registry.GetItem(packagingItemId).GetDefaultInstance();
       var shelves = FindShelvesWithItem(npc, packagingItem, needed: 1);
@@ -154,7 +154,7 @@ namespace NoLazyWorkers.Stations
                                              (s as ITransitEntity).GetFirstSlotContainingTemplateItem(packagingItem, ITransitEntity.ESlotType.Output) != null);
       if (shelf == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitiatePackagingRetrieval: No shelf found with {packagingItemId} for station {adapter.GUID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitiatePackagingRetrieval: No shelf found with {packagingItemId} for station {adapter.GUID}", DebugLogger.Category.Packager);
         return false;
       }
 
@@ -178,7 +178,7 @@ namespace NoLazyWorkers.Stations
       npc.MoveItemBehaviour.Initialize(route, packagingItem, quantity, false);
       npc.MoveItemBehaviour.Enable_Networked(null);
       DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"InitiatePackagingRetrieval: Packager fetching {quantity} {packagingItemId} from shelf {shelf.GUID} to station {adapter.GUID}", DebugLogger.Category.Handler);
+          $"InitiatePackagingRetrieval: Packager fetching {quantity} {packagingItemId} from shelf {shelf.GUID} to station {adapter.GUID}", DebugLogger.Category.Packager);
       return true;
     }
 
@@ -194,7 +194,7 @@ namespace NoLazyWorkers.Stations
 
       if (outputSlot?.ItemInstance == null || outputSlot.Quantity <= 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: No packaged item found in output slot for station {__instance.Station.GUID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: No packaged item found in output slot for station {__instance.Station.GUID}", DebugLogger.Category.Packager);
         return;
       }
 
@@ -207,14 +207,14 @@ namespace NoLazyWorkers.Stations
 
       if (shelf == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: No suitable shelf found for packaged item {packagedItem.ID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: No suitable shelf found for packaged item {packagedItem.ID}", DebugLogger.Category.Packager);
         return;
       }
 
       var deliverySlots = (shelf as ITransitEntity).ReserveInputSlotsForItem(packagedItem, npc.NetworkObject);
       if (deliverySlots == null || deliverySlots.Count == 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: Failed to reserve slots on shelf {shelf.GUID} for {packagedItem.ID}", DebugLogger.Category.Handler);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BeginPackagingPostfix: Failed to reserve slots on shelf {shelf.GUID} for {packagedItem.ID}", DebugLogger.Category.Packager);
         return;
       }
 
@@ -222,7 +222,7 @@ namespace NoLazyWorkers.Stations
       npc.MoveItemBehaviour.Initialize(route, packagedItem, quantity, true);
       npc.MoveItemBehaviour.Enable_Networked(null);
       DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"BeginPackagingPostfix: Delivering {quantity} of packaged item {packagedItem.ID} to shelf {shelf.GUID}", DebugLogger.Category.Handler);
+          $"BeginPackagingPostfix: Delivering {quantity} of packaged item {packagedItem.ID} to shelf {shelf.GUID}", DebugLogger.Category.Packager);
 
       outputSlot.ChangeQuantity(-quantity, false);
       _isFetchingPackaging.Remove(adapter.GUID);

@@ -527,18 +527,18 @@ namespace NoLazyWorkers.Structures
       {
         itemCache.Remove(shelf);
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"RemoveShelfFromLists: Removed shelf {shelf.GUID} from all lists", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
     }
 
     public static Dictionary<PlaceableStorageEntity, int> FindShelvesWithItem(NPC npc, ItemInstance targetItem, int needed, int wanted = 0)
     {
       if (targetItem == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelvesWithItem: Target item is null for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FindShelvesWithItem: Target item is null for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
         return new Dictionary<PlaceableStorageEntity, int>();
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
 
       var result = new Dictionary<PlaceableStorageEntity, int>();
       Dictionary<PlaceableStorageEntity, ShelfInfo> shelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
@@ -550,12 +550,12 @@ namespace NoLazyWorkers.Structures
           {
             int assignedQty = wanted > 0 ? Math.Min(shelfInfo.Quantity, wanted) : shelfInfo.Quantity;
             result[shelfInfo.Shelf] = assignedQty;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {targetItem}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelvesWithItem: Found shelf {shelfInfo.Shelf.GUID} with {shelfInfo.Quantity} of {targetItem}, assigned {assignedQty}, isConfigured={shelfInfo.IsConfigured}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
           }
         }
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Found {result.Count} shelves for {targetItem}, totalQty={result.Values.Sum()}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Found {result.Count} shelves for {targetItem}, totalQty={result.Values.Sum()}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       return result;
     }
 
@@ -565,15 +565,15 @@ namespace NoLazyWorkers.Structures
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"FindShelfForDelivery: Target item is null",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
         return null;
       }
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"FindShelfForDelivery: Finding shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-          [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+          [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       int quantityToDeliver = targetItem.Quantity;
       PlaceableStorageEntity selectedShelf = null;
-      Dictionary<PlaceableStorageEntity, ShelfInfo> itemShelves = ShelfCache.First(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
+      Dictionary<PlaceableStorageEntity, ShelfInfo> itemShelves = ShelfCache.FirstOrDefault(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
       if (itemShelves.Count > 0)
       {
         foreach (var shelfInfo in itemShelves.Values)
@@ -589,18 +589,18 @@ namespace NoLazyWorkers.Structures
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"FindShelfForDelivery: No shelves assigned. Checking any shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
         foreach (var shelf in AnyShelves)
         {
           var fit = shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver);
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"FindShelfForDelivery: Shelf={shelf.GUID} CanItemFit:{fit} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+              [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
           if (!fit) continue;
           var getTo = npc.movement.CanGetTo(shelf);
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"FindShelfForDelivery: Shelf={shelf.GUID} CanGetTo:{getTo} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+              [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
           if (!getTo) continue;
           selectedShelf = shelf;
           break;
@@ -610,13 +610,13 @@ namespace NoLazyWorkers.Structures
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       }
       else
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"FindShelfForDelivery: No suitable shelf found for {targetItem.ID} (allowAnyShelves={allowAnyShelves})",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       }
       return selectedShelf;
     }
@@ -626,7 +626,7 @@ namespace NoLazyWorkers.Structures
       if (shelf == null || targetItem == null)
         return 0;
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Checking shelf {shelf.GUID} for {targetItem.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
 
       int qty = 0;
       foreach (var slot in (shelf.OutputSlots ?? Enumerable.Empty<ItemSlot>()).Concat(shelf.InputSlots ?? Enumerable.Empty<ItemSlot>()))
@@ -635,7 +635,7 @@ namespace NoLazyWorkers.Structures
           qty += slot.Quantity;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Handler]);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       return qty;
     }
   }

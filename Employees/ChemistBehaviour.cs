@@ -11,7 +11,6 @@ using ScheduleOne.ObjectScripts;
 using System.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
 using static NoLazyWorkers.Structures.StorageUtilities;
 
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
@@ -23,7 +22,7 @@ using NoLazyWorkers.Employees;
 
 namespace NoLazyWorkers.Employees
 {
-  [HarmonyPatch(typeof(Employee))]
+  /* [HarmonyPatch(typeof(Employee))]
   public class EmployeePatch
   {
     [HarmonyPatch("OnDestroy")]
@@ -42,5 +41,5 @@ namespace NoLazyWorkers.Employees
             DebugLogger.Category.Chemist);
       }
     }
-  }
+  } */
 }

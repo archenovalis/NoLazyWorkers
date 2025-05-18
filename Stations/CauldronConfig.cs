@@ -13,7 +13,7 @@ namespace NoLazyWorkers.Stations
 {
   public static class CauldronExtensions
   {
-    public class CauldronAdapter : IStationAdapter<Cauldron>
+    public class CauldronAdapter : IStationAdapter
     {
       private readonly Cauldron _station;
 

@@ -38,6 +38,7 @@ namespace NoLazyWorkers
     public static bool Core = true;
     public static bool Settings = false;
     // employees
+    public static bool AllEmployees = false;
     public static bool Chemist = true;
     public static bool Botanist = false;
     public static bool Handler = false;
@@ -62,9 +63,10 @@ namespace NoLazyWorkers
       None,
       Core,
       Settings,
+      AllEmployees,
       Chemist,
       Botanist,
-      Handler,
+      Packager,
       Storage,
       Pot,
       LabOven,
@@ -81,9 +83,10 @@ namespace NoLazyWorkers
     {
         { Category.Core, () => DebugLogs.Core },
         { Category.Settings, () => DebugLogs.Settings },
+        { Category.AllEmployees, () => DebugLogs.AllEmployees },
         { Category.Chemist, () => DebugLogs.Chemist },
         { Category.Botanist, () => DebugLogs.Botanist },
-        { Category.Handler, () => DebugLogs.Handler },
+        { Category.Packager, () => DebugLogs.Handler },
         { Category.Storage, () => DebugLogs.Storage },
         { Category.Pot, () => DebugLogs.Pot },
         { Category.LabOven, () => DebugLogs.LabOven },

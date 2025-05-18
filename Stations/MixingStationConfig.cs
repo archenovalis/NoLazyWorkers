@@ -35,7 +35,7 @@ namespace NoLazyWorkers.Stations
     public static GameObject MixingRouteListTemplate { get; set; }
     public static Dictionary<Guid, QualityField> QualityFields = [];
 
-    public class MixingStationAdapter : IStationAdapter<MixingStation>
+    public class MixingStationAdapter : IStationAdapter
     {
       private readonly MixingStation _station;
 

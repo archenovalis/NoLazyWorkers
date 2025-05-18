@@ -18,35 +18,6 @@ using NoLazyWorkers.Employees;
 
 namespace NoLazyWorkers.Stations
 {
-  public class CauldronBehaviour : EmployeeBehaviour
-  {
-    public override IStationAdapter<TStation> GetStation<TStation>(Behaviour behaviour)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"GetStation: Entered for behaviour={behaviour?.Npc?.fullName}, type={behaviour?.GetType().Name}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-
-      if (behaviour is StartCauldronBehaviour stationBehaviour && stationBehaviour.Station != null)
-      {
-        if (typeof(TStation) == typeof(Cauldron))
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"GetStation: Returning CauldronAdapter for station={stationBehaviour.Station.GUID}, chemist={behaviour.Npc?.fullName}",
-              DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-          return new CauldronAdapter(stationBehaviour.Station) as IStationAdapter<TStation>;
-        }
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"GetStation: Type mismatch for {behaviour?.Npc?.fullName}, expected TStation=Cauldron, got TStation={typeof(TStation).Name}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-        return null;
-      }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Error,
-          $"GetStation: Invalid behaviour or null target station for {behaviour?.Npc?.fullName}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      return null;
-    }
-  }
 
   /* public override void PrepareToFetchItems(Behaviour behaviour, StateData state)
   {

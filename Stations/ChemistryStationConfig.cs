@@ -11,7 +11,7 @@ namespace NoLazyWorkers.Stations
 {
   public static class ChemistryStationExtensions
   {
-    public class ChemistryStationAdapter : IStationAdapter<ChemistryStation>
+    public class ChemistryStationAdapter : IStationAdapter
     {
       private readonly ChemistryStation _station;
 
