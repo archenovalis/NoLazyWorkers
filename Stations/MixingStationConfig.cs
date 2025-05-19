@@ -23,8 +23,11 @@ using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.NPCs;
 using GameKit.Utilities;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
+using static NoLazyWorkers.Stations.MixingStationUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.EmployeeExtensions;
+using static NoLazyWorkers.Structures.StorageUtilities;
 
 namespace NoLazyWorkers.Stations
 {
@@ -142,7 +145,10 @@ namespace NoLazyWorkers.Stations
         return true;
       }
     }
+  }
 
+  public static class MixingStationUtilities
+  {
     public static void RestoreConfigurations()
     {
       MixingStation[] mixingStations = Object.FindObjectsOfType<MixingStation>();
@@ -307,6 +313,133 @@ namespace NoLazyWorkers.Stations
             $"InitializeStaticRouteListTemplate: Failed to initialize MixingRouteListTemplate, error: {e}",
             DebugLogger.Category.MixingStation);
       }
+    }
+
+    public static bool ValidateStationState(Chemist chemist, IStationAdapter stationAdapter, out bool canStart, out bool canRestock)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Entered for chemist={chemist?.fullName ?? "null"}, type={stationAdapter.TypeOf}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
+      canStart = false;
+      canRestock = false;
+      bool hasSufficient = false;
+
+      if (chemist == null || stationAdapter == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Invalid chemist or station adapter, chemist={chemist?.fullName ?? "null"}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      if (stationAdapter.IsInUse || stationAdapter.HasActiveOperation || stationAdapter.OutputSlot.Quantity > 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Station in use, active, or has output for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      var inputItems = stationAdapter.GetInputItemForProduct();
+      if (inputItems == null || inputItems.Count == 0 || inputItems[0]?.SelectedItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Input item null or empty for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      ItemField inputItem = inputItems[0];
+      ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
+      if (targetItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Target item null for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      int threshold = stationAdapter.StartThreshold;
+      int desiredQty = Math.Min(stationAdapter.MaxProductQuantity, stationAdapter.ProductSlots.Sum(s => s.Quantity));
+      int invQty = chemist.Inventory._GetItemAmount(targetItem.ID);
+      int inputQty = stationAdapter.GetInputQuantity();
+
+      if (desiredQty < threshold)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Below threshold and cannot restock for station={stationAdapter.GUID}, inputQty={inputQty}, threshold={threshold}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      var state = new StateData
+      {
+        TargetItem = targetItem,
+        QuantityInventory = invQty,
+        QuantityNeeded = Math.Max(0, threshold - inputQty),
+        QuantityWanted = Math.Max(0, desiredQty - inputQty)
+      };
+
+      if (inputQty >= threshold && desiredQty >= threshold)
+      {
+        if (inputQty >= desiredQty)
+        {
+          canStart = true;
+        }
+        else
+        {
+          var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+          hasSufficient = shelves?.Values?.Sum() > 0;
+          if (!hasSufficient)
+          {
+            canStart = true;
+          }
+          else
+          {
+            canRestock = true;
+            return true;
+          }
+        }
+      }
+      else
+      {
+        var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+        canRestock = shelves?.Values?.FirstOrDefault() > 0;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Completed for chemist={chemist.fullName}, station={stationAdapter.GUID}, canStart={canStart}, canRestock={canRestock}, invQty={invQty}, inputQty={inputQty}, desiredQty={desiredQty}, threshold={threshold}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}", DebugLogger.Category.MixingStation);
+      return canStart || canRestock;
+    }
+
+    public static ItemField GetInputItemForProductSlot(IStationAdapter station)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"GetInputItemForProductSlot: Entered for station={station?.GUID}",
+          DebugLogger.Category.MixingStation);
+      if (station == null || !(station is MixingStationAdapter mixingAdapter))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"GetInputItemForProductSlot: Invalid or null station, GUID={station?.GUID}",
+            DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
+        return null;
+      }
+      MixingStation mixingStation = mixingAdapter?.Station;
+      var productInSlot = mixingStation.ProductSlot.ItemInstance?.Definition as ProductDefinition;
+      if (productInSlot == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"GetInputItemForProductSlot: Product slot item is not a ProductDefinition for station={mixingStation.GUID}",
+            DebugLogger.Category.MixingStation);
+        return null;
+      }
+      if (!MixingRoutes.TryGetValue(mixingStation.GUID, out var routes) || routes == null || routes.Count == 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"GetInputItemForProductSlot: No routes defined for station={mixingStation.GUID}",
+            DebugLogger.Category.MixingStation);
+        return null;
+      }
+      var matchingRoute = routes.FirstOrDefault(route =>
+          route.Product?.SelectedItem != null && route.Product.SelectedItem == productInSlot);
+      if (matchingRoute == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"GetInputItemForProductSlot: No route matches product={productInSlot.Name} for station={mixingStation.GUID}",
+            DebugLogger.Category.MixingStation);
+        return null;
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"GetInputItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={mixingStation.GUID}",
+          DebugLogger.Category.MixingStation);
+      return matchingRoute.MixerItem;
     }
   }
 
@@ -945,7 +1078,7 @@ namespace NoLazyWorkers.Stations
         // Save quality
         if (QualityFields.TryGetValue(guid, out var field) && field != null)
         {
-          jsonObject["Quality"] = field.Value.ToString();
+          jsonObject["Min Quality"] = field.Value.ToString();
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Saved quality={field.Value} for station={guid}", DebugLogger.Category.MixingStation);
         }
         else

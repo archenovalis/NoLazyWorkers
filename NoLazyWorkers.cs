@@ -188,8 +188,8 @@ namespace NoLazyWorkers
         var configure = new Settings.Configure();
         MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
         DebugLogger.Log(DebugLogger.LogLevel.Info, "Applied Fixer and Misc settings on main scene load.", DebugLogger.Category.Core);
-        MixingStationExtensions.InitializeStaticRouteListTemplate();
-        StorageExtensions.InitializeStorageModule();
+        MixingStationUtilities.InitializeStaticRouteListTemplate();
+        StorageUtilities.InitializeStorageModule();
       }
     }
 
@@ -685,7 +685,7 @@ namespace NoLazyWorkers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info, "onLoadComplete fired, restoring configurations", DebugLogger.Category.Core);
           PotExtensions.RestoreConfigurations();
-          MixingStationExtensions.RestoreConfigurations();
+          MixingStationUtilities.RestoreConfigurations();
           //StorageExtensions.RestoreConfigurations();
         });
       }

@@ -32,14 +32,15 @@ using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
 using NoLazyWorkers.Employees;
+using ScheduleOne.Employees;
 
 namespace NoLazyWorkers.Structures
 {
   public static class StorageExtensions
   {
     public const int StorageEnum = 345543;
-    private static ConfigPanel ConfigPanelTemplate;
-    private static Sprite CrossSprite;
+    public static ConfigPanel ConfigPanelTemplate;
+    public static Sprite CrossSprite;
     public static Dictionary<Guid, StorageConfiguration> Config = [];
     public static Dictionary<Guid, PlaceableStorageEntity> Storage = [];
     public static Dictionary<Guid, JObject> PendingConfigData = [];
@@ -63,6 +64,37 @@ namespace NoLazyWorkers.Structures
       {
         PackagingDefinition = packagingDefinition;
       }
+    }
+
+    public struct ShelfInfo
+    {
+      public PlaceableStorageEntity Shelf { get; set; }
+      public int Quantity { get; set; }
+      public bool IsConfigured { get; set; }
+
+      public ShelfInfo(PlaceableStorageEntity shelf, int quantity, bool isConfigured)
+      {
+        Shelf = shelf ?? throw new ArgumentNullException(nameof(shelf));
+        Quantity = quantity;
+        IsConfigured = isConfigured;
+      }
+    }
+  }
+
+  public static class StorageUtilities
+  {
+    public static List<ItemSlot> GetOutputSlotsContainingTemplateItem(ITransitEntity entity, ItemInstance item)
+    {
+      if (entity == null || item == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItem: Invalid input (entity={entity?.GUID}, item={item?.ID})", DebugLogger.Category.Packager);
+        return new List<ItemSlot>();
+      }
+      var matchingSlots = entity.OutputSlots
+          .Where(slot => slot != null && slot.ItemInstance != null && !slot.IsLocked && slot.Quantity > 0 && slot.ItemInstance.CanStackWithMinQuality(item, false))
+          .ToList();
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItem: Found {matchingSlots.Count} slots for item {item.ID} in {entity.GUID}", DebugLogger.Category.Packager);
+      return matchingSlots;
     }
 
     public static void InitializeStorageModule()
@@ -408,22 +440,77 @@ namespace NoLazyWorkers.Structures
         return null;
       }
     }
-  }
 
-  public static class StorageUtilities
-  {
-    public struct ShelfInfo
+    // Method: CanStackWithMinQuality
+    // Purpose: Checks if two items can stack, treating the first item's quality as a minimum threshold.
+    // Parameters:
+    //   - item: The reference item (template).
+    //   - other: The item to compare against.
+    //   - checkQuantities: Whether to check stack limit.
+    // Returns: True if items can stack, false otherwise.
+    public static bool CanStackWithMinQuality(this ItemInstance item, ItemInstance other, bool checkQuantities = true)
     {
-      public PlaceableStorageEntity Shelf { get; set; }
-      public int Quantity { get; set; }
-      public bool IsConfigured { get; set; }
-
-      public ShelfInfo(PlaceableStorageEntity shelf, int quantity, bool isConfigured)
+      if (item == null || other == null)
       {
-        Shelf = shelf ?? throw new ArgumentNullException(nameof(shelf));
-        Quantity = quantity;
-        IsConfigured = isConfigured;
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Null item or other", DebugLogger.Category.Packager);
+        return false;
       }
+      // Check ID
+      if (other.ID != item.ID)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: ID mismatch, item={item.ID}, other={other.ID}", DebugLogger.Category.Packager);
+        return false;
+      }
+      // Quantity check
+      if (checkQuantities && item.Quantity + other.Quantity > item.StackLimit)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Stack limit exceeded, item={item.ID}", DebugLogger.Category.Packager);
+        return false;
+      }
+      if (item is ProductItemInstance productItem)
+      {
+        if (!(other is ProductItemInstance))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Other is not ProductItemInstance, item={item.ID}", DebugLogger.Category.Packager);
+          return false;
+        }
+        var otherProduct = other as ProductItemInstance;
+        // Check packaging
+        if (otherProduct.AppliedPackaging != null)
+        {
+          if (productItem.AppliedPackaging == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Other has packaging, item does not, item={item.ID}", DebugLogger.Category.Packager);
+            return false;
+          }
+          if (otherProduct.AppliedPackaging.ID != productItem.AppliedPackaging.ID)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Packaging ID mismatch, item={item.ID}", DebugLogger.Category.Packager);
+            return false;
+          }
+        }
+        else if (productItem.AppliedPackaging != null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Item has packaging, other does not, item={item.ID}", DebugLogger.Category.Packager);
+          return false;
+        }
+        // Quality check: other must have equal or higher quality
+        if (other is QualityItemInstance otherQuality && item is QualityItemInstance itemQuality)
+        {
+          if (otherQuality.Quality < itemQuality.Quality)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Quality too low, item={item.ID}, itemQuality={itemQuality.Quality}, otherQuality={otherQuality.Quality}", DebugLogger.Category.Packager);
+            return false;
+          }
+        }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Quality check skipped, item={item.ID}", DebugLogger.Category.Packager);
+          return false; // Both must implement QualityItemInstance
+        }
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CanStackWithMinQuality: Items can stack, item={item.ID}, other={other.ID}", DebugLogger.Category.Packager);
+      return true;
     }
 
     public static void UpdateShelfConfiguration(PlaceableStorageEntity shelf, ItemInstance assignedItem)
@@ -558,7 +645,7 @@ namespace NoLazyWorkers.Structures
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelvesWithItem: Searching for {targetItem}, needed={needed}, wanted={wanted} for {npc.fullName}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
 
       var result = new Dictionary<PlaceableStorageEntity, int>();
-      var pair = ShelfCache.FirstOrDefault(i => i.Key.CanStackWith(targetItem, false));
+      var pair = ShelfCache.FirstOrDefault(i => i.Key.CanStackWithMinQuality(targetItem, false));
       if (pair.Value?.Keys != null)
       {
         foreach (var shelfInfo in pair.Value.Values)
@@ -580,23 +667,25 @@ namespace NoLazyWorkers.Structures
     {
       if (targetItem == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"FindShelfForDelivery: Target item is null",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelfForDelivery: Target item is null", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
         return null;
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"FindShelfForDelivery: Finding shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-          [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: Finding shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       int quantityToDeliver = targetItem.Quantity;
       PlaceableStorageEntity selectedShelf = null;
       Dictionary<PlaceableStorageEntity, ShelfInfo> itemShelves = ShelfCache.FirstOrDefault(i => i.Key.CanStackWith(targetItem, false)).Value ?? new();
+      var employee = npc as Employee;
       if (itemShelves.Count > 0)
       {
         foreach (var shelfInfo in itemShelves.Values)
         {
           if (!shelfInfo.IsConfigured) continue;
-          if (!shelfInfo.Shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver)) continue;
+          if (!shelfInfo.Shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver))
+          {
+            EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, targetItem);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: Shelf {shelfInfo.Shelf.GUID} has no space for {targetItem.ID}, timed out", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+            continue;
+          }
           if (!npc.movement.CanGetTo(shelfInfo.Shelf)) continue;
           selectedShelf = shelfInfo.Shelf;
           break;
@@ -604,20 +693,19 @@ namespace NoLazyWorkers.Structures
       }
       if (selectedShelf == null && allowAnyShelves)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"FindShelfForDelivery: No shelves assigned. Checking any shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: No shelves assigned. Checking any shelves for item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
         foreach (var shelf in AnyShelves)
         {
           var fit = shelf.StorageEntity.CanItemFit(targetItem, quantityToDeliver);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"FindShelfForDelivery: Shelf={shelf.GUID} CanItemFit:{fit} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
-          if (!fit) continue;
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: Shelf={shelf.GUID} CanItemFit:{fit} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+          if (!fit)
+          {
+            EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, targetItem);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: Any shelf {shelf.GUID} has no space for {targetItem.ID}, timed out", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+            continue;
+          }
           var getTo = npc.movement.CanGetTo(shelf);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"FindShelfForDelivery: Shelf={shelf.GUID} CanGetTo:{getTo} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}",
-              [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: Shelf={shelf.GUID} CanGetTo:{getTo} item={(targetItem as ProductItemInstance)?.Quality} {targetItem.ID} {targetItem.Quantity} {(targetItem as ProductItemInstance)?.AppliedPackaging?.ID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
           if (!getTo) continue;
           selectedShelf = shelf;
           break;
@@ -625,15 +713,11 @@ namespace NoLazyWorkers.Structures
       }
       if (selectedShelf != null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem}",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindShelfForDelivery: Selected shelf {selectedShelf.GUID} for {quantityToDeliver} of {targetItem}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"FindShelfForDelivery: No suitable shelf found for {targetItem.ID} (allowAnyShelves={allowAnyShelves})",
-            [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindShelfForDelivery: No suitable shelf found for {targetItem.ID} (allowAnyShelves={allowAnyShelves})", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       }
       return selectedShelf;
     }

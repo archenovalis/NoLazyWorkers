@@ -97,7 +97,7 @@ namespace NoLazyWorkers.Employees
       public ITransitEntity Destination;
       public List<ItemSlot> DeliverySlots;
       public int Priority;
-      public TransitRoute TransitRoute;
+      public AdvancedTransitRoute TransitRoute;
 
       public PrioritizedRoute(TransferRequest request, int priority)
       {
@@ -109,6 +109,7 @@ namespace NoLazyWorkers.Employees
         Destination = request.DeliveryLocation;
         DeliverySlots = request.DeliverySlots;
         Priority = priority;
+        TransitRoute = request.PickupLocation != null ? new AdvancedTransitRoute(request.PickupLocation, request.DeliveryLocation) : null;
       }
     }
 
@@ -131,7 +132,7 @@ namespace NoLazyWorkers.Employees
       public ITransitEntity DeliveryLocation { get; }
       public List<ItemSlot> DeliverySlots { get; }
 
-      public TransferRequest(ItemInstance item, int quantity, ItemSlot inventorySlot, ITransitEntity pickupLocation, List<ItemSlot> pickupSlots,
+      public TransferRequest(NPC npc, ItemInstance item, int quantity, ItemSlot inventorySlot, ITransitEntity pickupLocation, List<ItemSlot> pickupSlots,
           ITransitEntity deliveryLocation, List<ItemSlot> deliverySlots)
       {
         Item = item ?? throw new ArgumentNullException(nameof(item));
@@ -175,6 +176,9 @@ namespace NoLazyWorkers.Employees
               DebugLogger.Category.Packager);
           throw new ArgumentException("No valid delivery slots");
         }
+
+        inventorySlot.ApplyLock(npc.NetworkObject, "Route inventory lock");
+        deliverySlots.ApplyLocks(npc, "Route delivery lock");
       }
     }
 
@@ -185,6 +189,8 @@ namespace NoLazyWorkers.Employees
       StationAdapterBehaviours.Clear();
       ActiveBehaviours.Clear();
       EmployeeAdapters.Clear();
+      NoDestinationCache.Clear();
+      TimedOutItems.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Info, "EmployeeExtensions: Cleared all dictionaries", DebugLogger.Category.AllEmployees);
     }
 
@@ -194,9 +200,36 @@ namespace NoLazyWorkers.Employees
     public static Dictionary<Guid, EmployeeBehaviour> ActiveBehaviours = new();
     public static Dictionary<MoveItemBehaviour, ItemSlot> ReservedSlots = new();
     public static Dictionary<Property, List<ItemInstance>> NoDestinationCache = new();
+    public static Dictionary<Property, Dictionary<ItemInstance, float>> TimedOutItems = new();
+
   }
   public static class EmployeeUtilities
   {
+    public static bool IsItemTimedOut(Property property, ItemInstance item)
+    {
+      if (!TimedOutItems.TryGetValue(property, out var timedOutItems))
+        return false;
+      var key = timedOutItems.Keys.FirstOrDefault(i => i.CanStackWith(item, false));
+      if (key == null)
+        return false;
+      if (Time.time >= timedOutItems[key])
+      {
+        timedOutItems.Remove(key);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"IsItemTimedOut: Removed expired timeout for item {item.ID} in property {property}", DebugLogger.Category.Packager);
+        return false;
+      }
+      return true;
+    }
+
+    public static void AddItemTimeout(Property property, ItemInstance item)
+    {
+      if (!TimedOutItems.ContainsKey(property))
+        TimedOutItems[property] = new Dictionary<ItemInstance, float>();
+      var key = TimedOutItems[property].Keys.FirstOrDefault(i => i.CanStackWith(item, false)) ?? item;
+      TimedOutItems[property][key] = Time.time + 30f;
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"AddItemTimeout: Timed out item {item.ID} for 30s in property {property}", DebugLogger.Category.Packager);
+    }
+
     public static void RegisterEmployeeAdapter(NPC npc, IEmployeeAdapter adapter)
     {
       EmployeeAdapters[npc.GUID] = adapter;
@@ -222,20 +255,6 @@ namespace NoLazyWorkers.Employees
       if (employee == null || item == null) return null;
       return PropertyStations.GetValueOrDefault(employee.AssignedProperty)
           .FirstOrDefault(s => s is PackagingStation p && !s.IsInUse && s.CanRefill(item))?.TransitEntity;
-    }
-
-    public static List<ItemSlot> GetOutputSlotsContainingTemplateItem(ITransitEntity entity, ItemInstance item)
-    {
-      if (entity == null || item == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItem: Invalid input (entity={entity?.GUID}, item={item?.ID})", DebugLogger.Category.Packager);
-        return new List<ItemSlot>();
-      }
-      var matchingSlots = entity.OutputSlots
-          .Where(slot => slot != null && slot.ItemInstance != null && slot.ItemInstance.CanStackWith(item, false) && slot.Quantity > 0 && !slot.IsLocked)
-          .ToList();
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItem: Found {matchingSlots.Count} slots for item {item.ID} in {entity.GUID}", DebugLogger.Category.Packager);
-      return matchingSlots;
     }
 
     public static void ApplyLocks(this List<ItemSlot> slots, NPC npc, string reason)
@@ -378,6 +397,7 @@ namespace NoLazyWorkers.Employees
 
     protected virtual void HandleIdle(Behaviour behaviour, StateData state)
     {
+      (behaviour.Npc as Employee).SetIdle(true);
       state.Station = StationUtilities.GetStation(behaviour);
       if (state.Station == null)
       {
@@ -405,8 +425,7 @@ namespace NoLazyWorkers.Employees
           }
         }
       }
-
-      TransitionState(behaviour, state, EState.Planning, "Start route planning");
+      //TransitionState(behaviour, state, EState.Planning, "Start route planning");
     }
 
     public virtual void HandlePlanning(Behaviour behaviour, StateData state)
@@ -414,7 +433,6 @@ namespace NoLazyWorkers.Employees
       if (Adapter?.HandlePlanning(behaviour, state) == true) return;
       state.ActiveRoutes.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandlePlanning: No routes planned for NPC {Npc.fullName}, transitioning to Idle", DebugLogger.Category.AllEmployees);
-      (behaviour.Npc as Employee).ShouldIdle();
     }
 
     protected virtual void HandleMoving(Behaviour behaviour, StateData state)
@@ -455,7 +473,6 @@ namespace NoLazyWorkers.Employees
       }
 
       state.PickupSlots = route.PickupSlots;
-      state.PickupSlots.ApplyLocks(Npc, "Pickup lock");
       int remaining = route.Quantity;
       foreach (var slot in state.PickupSlots)
       {
@@ -463,13 +480,16 @@ namespace NoLazyWorkers.Employees
           continue;
         int amount = Mathf.Min(slot.Quantity, remaining);
         if (amount <= 0) continue;
+        slot.RemoveLock();
         slot.ChangeQuantity(-amount);
+        route.InventorySlot.RemoveLock();
         route.InventorySlot.InsertItem(route.Item.GetCopy(amount));
+        slot.ApplyLock(behaviour.Npc.NetworkObject, "Grabbing");
+        route.InventorySlot.ApplyLock(behaviour.Npc.NetworkObject, "Grabbing");
         remaining -= amount;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleGrabbing: Picked up {amount} of {route.Item.ID} from slot {slot.GetHashCode()}", DebugLogger.Category.AllEmployees);
         if (remaining <= 0) break;
       }
-      state.PickupSlots.RemoveLock();
       state.QuantityInventory += route.Quantity - remaining;
 
       if (remaining > 0)
@@ -479,7 +499,6 @@ namespace NoLazyWorkers.Employees
         return;
       }
 
-      state.ActiveRoutes.Remove(route);
       TransitionState(behaviour, state, EState.Inserting, "Items picked up");
       MoveTo(behaviour, state, route.Destination);
     }
@@ -501,25 +520,26 @@ namespace NoLazyWorkers.Employees
       }
 
       state.DeliverySlots = route.DeliverySlots;
-      state.DeliverySlots.ApplyLocks(Npc, "Delivery lock");
       int remaining = state.QuantityInventory;
       foreach (var slot in state.DeliverySlots)
       {
         int capacity = slot.GetCapacityForItem(route.Item);
         int amount = Mathf.Min(remaining, capacity);
         if (amount <= 0) continue;
+        slot.RemoveLock();
         slot.InsertItem(route.Item.GetCopy(amount));
+        route.InventorySlot.RemoveLock();
         route.InventorySlot.ChangeQuantity(-amount);
         remaining -= amount;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInserting: Delivered {amount} of {route.Item.ID} to slot {slot.GetHashCode()}", DebugLogger.Category.AllEmployees);
         if (remaining <= 0) break;
       }
-      state.DeliverySlots.RemoveLock();
       state.QuantityInventory = remaining;
 
       if (remaining > 0)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleInserting: Could not deliver {remaining} items", DebugLogger.Category.AllEmployees);
+        state.ActiveRoutes.Remove(route);
         HandleFailedRoute(behaviour, state, route, "Insufficient slot capacity");
         return;
       }
@@ -551,7 +571,7 @@ namespace NoLazyWorkers.Employees
     protected virtual void HandleCompleted(Behaviour behaviour, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation complete for NPC {Npc.fullName}, transitioning to Idle", DebugLogger.Category.AllEmployees);
-      TransitionState(behaviour, state, EState.Idle, "Operation complete"); // Fixed: return to Idle
+      TransitionState(behaviour, state, EState.Idle, "Operation complete");
     }
 
     protected virtual void MoveTo(Behaviour behaviour, StateData state, ITransitEntity destination)
@@ -612,7 +632,6 @@ namespace NoLazyWorkers.Employees
 
     public virtual void AddRoutes(Behaviour behaviour, StateData state, List<TransferRequest> requests)
     {
-      state.ActiveRoutes.Clear();
       int availableSlots = behaviour.Npc.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
       var filteredRequests = requests
           .Where(r => !FailedRoutes.Any(t => t.Key.Item.CanStackWith(r.Item, false) && Time.time <= t.Value.Time + RETRY_DELAY))
@@ -622,9 +641,7 @@ namespace NoLazyWorkers.Employees
 
       foreach (var request in filteredRequests)
       {
-        int priority = GetPriority(request);
-        request.PickupSlots?.ApplyLocks(behaviour.Npc, "Route pickup lock");
-        request.DeliverySlots.ApplyLocks(behaviour.Npc, "Route destination lock");
+        int priority = GetPriority(request); ;
         state.ActiveRoutes.Add(new PrioritizedRoute(request, priority));
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"AddRoutes: Added route for {request.Item.ID} (qty={request.Quantity})", DebugLogger.Category.AllEmployees);
       }

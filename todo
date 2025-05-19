@@ -1,6 +1,6 @@
 # employees
 
-fix packaging behaviour binding to adapter
+add none and any choice to packaging station options
 chemist stuck in front of mixing station that only has product, found mixer item, should be grabbing, need route from shelf to station?
 test saving
 

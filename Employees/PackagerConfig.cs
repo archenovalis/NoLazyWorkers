@@ -27,6 +27,33 @@ using ScheduleOne.EntityFramework;
 
 namespace NoLazyWorkers.Employees
 {
+  public static class PackagerExtensions
+  {
+    public class PackagerAdapter : IEmployeeAdapter
+    {
+      private readonly Packager _packager;
+
+      public PackagerAdapter(Packager packager)
+      {
+        _packager = packager ?? throw new ArgumentNullException(nameof(packager));
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Packager);
+      }
+
+      public Property AssignedProperty => _packager.AssignedProperty;
+      public NpcSubType SubType => NpcSubType.Packager;
+
+      public bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_packager, this, npc, station, out employeeBehaviour);
+      public bool HandleIdle(Behaviour behaviour, StateData state) => false;
+      public bool HandlePlanning(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Planning(behaviour, state);
+      public bool HandleMoving(Behaviour behaviour, StateData state) => false;
+      public bool HandleGrabbing(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Grabbing(behaviour, state);
+      public bool HandleInserting(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Inserting(behaviour, state);
+      public bool HandleOperating(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Operating(behaviour, state);
+      public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
+      public bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item) => GetPackagerBehaviour(_packager).InventoryItem(behaviour, state, item);
+    }
+  }
+
   public static class PackagerUtilities
   {
     public static bool RetrieveBehaviour(Packager packager, PackagerAdapter employee, NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour)
@@ -53,15 +80,23 @@ namespace NoLazyWorkers.Employees
         EmployeeAdapters[npc.GUID] = adapter;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created adapter for NPC {npc.fullName}", DebugLogger.Category.Packager);
       }
-      if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
-      {
-        stationAdapter = new PackagingStationAdapter(packagingStation);
-        StationAdapters[station.GUID] = stationAdapter;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created station adapter for station {station.GUID}", DebugLogger.Category.Packager);
-      }
       var packagerBehaviour = ActiveBehaviours.TryGetValue(npc.GUID, out var beh) ? beh as PackagerBehaviour : null;
       if (packagerBehaviour == null)
       {
+        if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
+        {
+
+          if (station is PackagingStation)
+            stationAdapter = new PackagingStationAdapter(station as PackagingStation);
+          /* else if (station is ChemistryStation)
+            stationAdapter = new ChemistryStationAdapter(station as ChemistryStation);
+          else if (station is LabOven)
+            stationAdapter = new LabOvenAdapter(station as LabOven);
+          else if (station is Cauldron)
+            stationAdapter = new CauldronAdapter(station as Cauldron); */
+          StationAdapters[station.GUID] = stationAdapter;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created station adapter for station {station.GUID}", DebugLogger.Category.Packager);
+        }
         packagerBehaviour = new PackagerBehaviour(packager, stationAdapter, employee);
         ActiveBehaviours[npc.GUID] = packagerBehaviour;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created PackagerBehaviour for NPC {npc.fullName} and station {station.GUID}", DebugLogger.Category.Packager);
@@ -79,32 +114,6 @@ namespace NoLazyWorkers.Employees
         return null;
       }
       return packagerBehaviour;
-    }
-  }
-  public static class PackagerExtensions
-  {
-    public class PackagerAdapter : IEmployeeAdapter
-    {
-      private readonly Packager _packager;
-
-      public PackagerAdapter(Packager packager)
-      {
-        _packager = packager ?? throw new ArgumentNullException(nameof(packager));
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Packager);
-      }
-
-      public Property AssignedProperty => _packager.AssignedProperty;
-      public NpcSubType SubType => NpcSubType.Packager;
-
-      public bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_packager, this, npc, station, out employeeBehaviour);
-      public bool HandleIdle(Behaviour behaviour, StateData state) => false;
-      public bool HandlePlanning(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Planning(behaviour, state);
-      public bool HandleMoving(Behaviour behaviour, StateData state) => false;
-      public bool HandleGrabbing(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Grabbing(behaviour, state);
-      public bool HandleInserting(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Inserting(behaviour, state);
-      public bool HandleOperating(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Operating(behaviour, state);
-      public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
-      public bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item) => GetPackagerBehaviour(_packager).InventoryItem(behaviour, state, item);
     }
   }
 }
