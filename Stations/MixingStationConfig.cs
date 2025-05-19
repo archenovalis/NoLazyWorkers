@@ -61,7 +61,7 @@ namespace NoLazyWorkers.Stations
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public List<ItemField> GetInputItemForProduct() => [MixingStationUtilities.GetInputItemForProductSlot(this)];
       public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
-
+      public Type TypeOf => _station.GetType(); // example: if (adapter.TypeOf.IsAssignableFrom(typeof(MixingStation))) is true for both MixingStationMk2 and MixingStation
       public void StartOperation(Behaviour behaviour)
       {
         (behaviour as StartMixingStationBehaviour).StartCook();
@@ -339,7 +339,7 @@ namespace NoLazyWorkers.Stations
       if (MixingRouteListTemplate != null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "MixingStationConfigPanelBindPatch: MixingRouteListTemplate already initialized, skipping",
+            "MixingRouteListFieldUI: MixingRouteListTemplate already initialized, skipping",
             DebugLogger.Category.MixingStation);
       }
       else
@@ -892,24 +892,41 @@ namespace NoLazyWorkers.Stations
       try
       {
         if (__instance == null || __instance.station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"MixingStationConfigurationGetSaveStringPatch: Configuration or station is null", DebugLogger.Category.MixingStation);
           return;
+        }
+
         Guid guid = __instance.station.GUID;
 
-        JArray mixingRoutesArray = [];
-        if (MixingRoutes.TryGetValue(guid, out var routes) && routes.Any())
+        if (!MixingRoutes.ContainsKey(guid) || MixingRoutes[guid] == null)
         {
-          foreach (var route in routes)
-          {
-            string productItemID = route.Product.GetData()?.ItemID ?? "null";
-            string mixerItemID = route.MixerItem.GetData()?.ItemID ?? "null";
+          MixingRoutes[guid] = new List<MixingRoute>();
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: Initialized empty MixingRoutes for station={guid}", DebugLogger.Category.MixingStation);
+        }
 
-            var routeObject = new JObject
-            {
-              ["Product"] = productItemID,
-              ["MixerItem"] = mixerItemID
-            };
-            mixingRoutesArray.Add(routeObject);
+        var routes = MixingRoutes[guid];
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Found {routes.Count} routes for station={guid}", DebugLogger.Category.MixingStation);
+
+        JArray mixingRoutesArray = [];
+        foreach (var route in routes)
+        {
+          if (route == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: Null route in MixingRoutes for station={guid}", DebugLogger.Category.MixingStation);
+            continue;
           }
+
+          string productItemID = route.Product?.GetData()?.ItemID ?? "null";
+          string mixerItemID = route.MixerItem?.GetData()?.ItemID ?? "null";
+
+          var routeObject = new JObject
+          {
+            ["Product"] = productItemID,
+            ["MixerItem"] = mixerItemID
+          };
+          mixingRoutesArray.Add(routeObject);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Added route Product={productItemID}, MixerItem={mixerItemID} for station={guid}", DebugLogger.Category.MixingStation);
         }
 
         MixingStationConfigurationData data = new(
@@ -919,37 +936,30 @@ namespace NoLazyWorkers.Stations
 
         string configJson = JsonUtility.ToJson(data, true);
         JObject jsonObject = JObject.Parse(configJson);
+
         if (mixingRoutesArray.Count > 0)
           jsonObject["MixingRoutes"] = mixingRoutesArray;
+        else
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: No routes to serialize for station={guid}", DebugLogger.Category.MixingStation);
 
-        if (QualityFields.TryGetValue(guid, out var field))
+        // Save quality
+        if (QualityFields.TryGetValue(guid, out var field) && field != null)
+        {
           jsonObject["Quality"] = field.Value.ToString();
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Saved quality={field.Value} for station={guid}", DebugLogger.Category.MixingStation);
+        }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: No quality field found for station={guid}", DebugLogger.Category.MixingStation);
+        }
+
         __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationConfigurationGetSaveStringPatch: Saved JSON for station={guid}: {__result}",
-            DebugLogger.Category.MixingStation);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationConfigurationGetSaveStringPatch: Routes JSON={mixingRoutesArray}",
-            DebugLogger.Category.MixingStation);
-        if (routes != null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"MixingStationConfigurationGetSaveStringPatch: Routes count={routes.Count}",
-              DebugLogger.Category.MixingStation);
-          foreach (var route in routes)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"MixingStationConfigurationGetSaveStringPatch: Route Product.ItemID={route.Product?.GetData()?.ItemID ?? "null"}, MixerItem.ItemID={route.MixerItem?.GetData()?.ItemID ?? "null"}",
-                DebugLogger.Category.MixingStation);
-          }
-        }
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationConfigurationGetSaveStringPatch: Saved JSON for station={guid}: {__result}", DebugLogger.Category.MixingStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"MixingStationConfigurationGetSaveStringPatch: Failed for station GUID={__instance.station?.GUID.ToString() ?? "null"}, error: {e}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"MixingStationConfigurationGetSaveStringPatch: Failed for station GUID={__instance.station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.MixingStation);
       }
     }
 
@@ -987,8 +997,8 @@ namespace NoLazyWorkers.Stations
     }
   }
 
-  [HarmonyPatch(typeof(MixingStationConfigPanel), "Bind")]
-  public class MixingStationConfigPanelBindPatch
+  [HarmonyPatch(typeof(MixingStationConfigPanel))]
+  public class MixingStationConfigPanelPatch
   {
     private static void RouteListInvokeChanged(MixingStationConfiguration config)
     {
@@ -998,19 +1008,18 @@ namespace NoLazyWorkers.Stations
     {
       return panel.GetComponentInChildren<RouteListFieldUI>();
     }
-    static void Postfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
+
+    [HarmonyPostfix]
+    [HarmonyPatch("Bind")]
+    static void BindPostfix(MixingStationConfigPanel __instance, List<EntityConfiguration> configs)
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationConfigPanelBindPatch: Binding configs, count: {configs?.Count ?? 0}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationConfigPanelPatch BindPostfix: Binding configs, count: {configs?.Count ?? 0}", DebugLogger.Category.MixingStation);
 
         if (__instance == null || __instance.DestinationUI == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              "MixingStationConfigPanelBindPatch: __instance or DestinationUI is null",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"MixingStationConfigPanelPatch BindPostfix: __instance or DestinationUI is null", DebugLogger.Category.MixingStation);
           return;
         }
 
@@ -1030,7 +1039,7 @@ namespace NoLazyWorkers.Stations
         sliderObj.transform.Find("Description").gameObject.SetActive(false);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}",
+            $"MixingStationConfigPanelPatch BindPostfix: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}",
             DebugLogger.Category.MixingStation);
 
         var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
@@ -1039,20 +1048,28 @@ namespace NoLazyWorkers.Stations
         var qualityUIObj = Object.Instantiate(qualityFieldUIObj, __instance.transform, false);
         qualityUIObj.SetActive(true);
 
-        List<List<MixingRoute>> routesLists = [];
-        List<MixingStationConfiguration> configList = [];
-        List<QualityField> qualityList = new List<QualityField>();
+        List<List<MixingRoute>> routesLists = new();
+        List<MixingStationConfiguration> configList = new();
+        List<QualityField> qualityList = new();
         foreach (var config in configs.OfType<MixingStationConfiguration>())
         {
           Guid guid = config.station.GUID;
           config.StartThrehold.MaxValue = MAXTHRESHOLD;
 
           if (!MixingRoutes.ContainsKey(guid))
+          {
             MixingRoutes[guid] = [];
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationConfigPanelPatch BindPostfix: Initialized MixingRoutes for station={guid}", DebugLogger.Category.MixingStation);
+          }
+
+          if (!QualityFields.ContainsKey(guid))
+          {
+            QualityFields[guid] = new QualityField(config);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationConfigPanelPatch BindPostfix: Initialized QualityField for station={guid}", DebugLogger.Category.MixingStation);
+          }
+
           routesLists.Add(MixingRoutes[guid]);
           configList.Add(config);
-          if (!QualityFields.ContainsKey(guid))
-            QualityFields[guid] = new QualityField(config);
           qualityList.Add(QualityFields[guid]);
         }
         customRouteListUI.Bind(routesLists, configList, () => configs.ForEach(c => ConfigurationExtensions.InvokeChanged(c)));
@@ -1064,12 +1081,11 @@ namespace NoLazyWorkers.Stations
         var qualityRect = qualityUIObj.GetComponent<RectTransform>();
         qualityRect.anchoredPosition = new Vector2(routeListRect.anchoredPosition.x, routeListRect.anchoredPosition.y + 70f);
 
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigPanelPatch BindPostfix: Bound {routesLists.Count} route lists and {qualityList.Count} quality fields", DebugLogger.Category.MixingStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"MixingStationConfigPanelBindPatch: Postfix failed, error: {e}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"MixingStationConfigPanelPatch BindPostfix: Postfix failed, error: {e}", DebugLogger.Category.MixingStation);
       }
     }
   }

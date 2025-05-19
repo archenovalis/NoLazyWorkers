@@ -16,11 +16,97 @@ using NoLazyWorkers.Employees;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Employees.ChemistExtensions;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
+using NoLazyWorkers.Structures;
 
 namespace NoLazyWorkers.Stations
 {
   public static class MixingStationUtilities
   {
+    public static bool ValidateStationState(Chemist chemist, IStationAdapter stationAdapter, out bool canStart, out bool canRestock)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Entered for chemist={chemist?.fullName ?? "null"}, type={stationAdapter.TypeOf}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
+      canStart = false;
+      canRestock = false;
+      bool hasSufficient = false;
+
+      if (chemist == null || stationAdapter == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Invalid chemist or station adapter, chemist={chemist?.fullName ?? "null"}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      if (stationAdapter.IsInUse || stationAdapter.HasActiveOperation || stationAdapter.OutputSlot.Quantity > 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Station in use, active, or has output for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      var inputItems = stationAdapter.GetInputItemForProduct();
+      if (inputItems == null || inputItems.Count == 0 || inputItems[0]?.SelectedItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Input item null or empty for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      ItemField inputItem = inputItems[0];
+      ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
+      if (targetItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Target item null for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      int threshold = stationAdapter.StartThreshold;
+      int desiredQty = Math.Min(stationAdapter.MaxProductQuantity, stationAdapter.ProductSlots.Sum(s => s.Quantity));
+      int invQty = chemist.Inventory._GetItemAmount(targetItem.ID);
+      int inputQty = stationAdapter.GetInputQuantity();
+
+      var state = new StateData
+      {
+        TargetItem = targetItem,
+        QuantityInventory = invQty,
+        QuantityNeeded = Math.Max(0, threshold - inputQty),
+        QuantityWanted = Math.Max(0, desiredQty - inputQty)
+      };
+
+      if (inputQty >= threshold && desiredQty >= threshold)
+      {
+        if (inputQty >= desiredQty)
+        {
+          canStart = true;
+        }
+        else
+        {
+          var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+          hasSufficient = shelves?.Values?.Sum() > 0;
+          if (!hasSufficient)
+          {
+            canStart = true;
+          }
+          else
+          {
+            canRestock = true;
+            return true;
+          }
+        }
+      }
+
+      if (desiredQty < threshold)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Below threshold and cannot restock for station={stationAdapter.GUID}, inputQty={inputQty}, threshold={threshold}", DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      if (!canStart && !canRestock)
+      {
+        var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+        canRestock = shelves?.Values?.Sum() > 0;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Completed for chemist={chemist.fullName}, station={stationAdapter.GUID}, canStart={canStart}, canRestock={canRestock}, invQty={invQty}, inputQty={inputQty}, desiredQty={desiredQty}, threshold={threshold}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}", DebugLogger.Category.MixingStation);
+      return canStart || canRestock;
+    }
+
     public static ItemField GetInputItemForProductSlot(IStationAdapter station)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
@@ -67,6 +153,30 @@ namespace NoLazyWorkers.Stations
 
   public class MixingStationBehaviour : EmployeeBehaviour
   {
+    /* protected override void HandleCompleted(Behaviour behaviour, StateData state)
+    {
+      if (state.Station.HasActiveOperation) return;
+      if (state.Station.OutputSlot.Quantity > 0)
+      {
+        var item = state.Station.OutputSlot.ItemInstance;
+        // loop
+
+        // deliver
+        var destination = EmployeeUtilities.FindPackagingStation(Adapter, item) ?? FindShelfForDelivery(Npc, item);
+        if (destination != null)
+        {
+          var slots = destination.ReserveInputSlotsForItem(item, Npc.NetworkObject);
+          var request = new TransferRequest(item, state.Station.OutputSlot.Quantity, Npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null), state.Station.TransitEntity, new List<ItemSlot> { state.Station.OutputSlot }, destination, slots);
+          state.ActiveRoutes.Add(new PrioritizedRoute(request, PRIORITY_STATION_REFILL));
+          TransitionState(behaviour, state, EState.Grabbing, "Output ready for delivery");
+        }
+      }
+      else
+      {
+        TransitionState(behaviour, state, EState.Idle, "Operation complete");
+      }
+    } */
+
     public MixingStationBehaviour(NPC npc, ChemistAdapter adapter = null) : base(npc, adapter)
     {
       if (npc == null)
@@ -74,7 +184,7 @@ namespace NoLazyWorkers.Stations
         DebugLogger.Log(DebugLogger.LogLevel.Error, "MixingStationBehaviour: NPC is null", DebugLogger.Category.Chemist);
         throw new ArgumentNullException(nameof(npc));
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationBehaviour: Initialized for NPC {npc.fullName}", DebugLogger.Category.Chemist);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationBehaviour: Initialized for NPC {npc.fullName}", DebugLogger.Category.Chemist);
     }
 
     public virtual bool ValidateState(Chemist chemist, Behaviour behaviour, StateData state, out bool canStart, out bool canRestock)
@@ -83,7 +193,7 @@ namespace NoLazyWorkers.Stations
       canStart = false;
       canRestock = false;
       bool hasSufficient = false;
-      IStationAdapter station = EmployeeUtilities.GetStation(behaviour);
+      IStationAdapter station = StationUtilities.GetStation(behaviour);
       if (station == null || chemist == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateState: Invalid station or chemist for {chemist?.fullName}, station={station?.GUID}", DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
@@ -165,12 +275,12 @@ namespace NoLazyWorkers.Stations
         List<MixingStation> list = new();
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationChemistPatch.GetMixingStationsReadyToStart: Checking {__instance.configuration.MixStations?.Count ?? 0} stations for {__instance.fullName}", DebugLogger.Category.Chemist);
 
-        if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employee))
+        if (!EmployeeExtensions.EmployeeAdapters.TryGetValue(__instance.GUID, out var employee))
         {
-          employee = new ChemistAdapter(__instance);
-          EmployeeAdapters[__instance.GUID] = employee;
+          employee = new ChemistExtensions.ChemistAdapter(__instance);
+          EmployeeExtensions.EmployeeAdapters[__instance.GUID] = employee;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Registered adapter for NPC {__instance.fullName}, type=Chemist", DebugLogger.Category.Chemist);
         }
-        MixingStationBehaviour behaviourInstance = new MixingStationBehaviour(__instance, (ChemistAdapter)employee);
 
         foreach (MixingStation station in __instance.configuration.MixStations ?? Enumerable.Empty<MixingStation>())
         {
@@ -179,32 +289,26 @@ namespace NoLazyWorkers.Stations
             DebugLogger.Log(DebugLogger.LogLevel.Error, "GetMixingStationsReadyToStart: Null station in MixStations", DebugLogger.Category.Chemist);
             continue;
           }
+
           if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetMixingStationsReadyToStart: No adapter for station {station.GUID}, creating new", DebugLogger.Category.Chemist);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixingStationsReadyToStart: Creating adapter for station {station.GUID}", DebugLogger.Category.Chemist);
             stationAdapter = new MixingStationAdapter(station);
+            StationAdapters[station.GUID] = stationAdapter;
           }
+
           if (((IUsable)station).IsInUse || stationAdapter.HasActiveOperation)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetMixingStationsReadyToStart: Station {station.GUID} in use or active, skipping", DebugLogger.Category.Chemist);
             continue;
           }
-          if (!Config.TryGetValue(station.GUID, out var config))
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetMixingStationsReadyToStart: Config missing for station {station.GUID}, using default", DebugLogger.Category.Chemist);
-            config = station.Configuration as MixingStationConfiguration;
-            Config[station.GUID] = config;
-          }
 
-          var behaviour = __instance.StartMixingStationBehaviour;
-          behaviour.targetStation = station;
-          var state = new StateData { CurrentState = EState.Idle };
-
-          if (!behaviourInstance.ValidateState(__instance, behaviour, state, out bool canStart, out bool canRestock))
+          if (!MixingStationUtilities.ValidateStationState(__instance, stationAdapter, out bool canStart, out bool canRestock))
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetMixingStationsReadyToStart: State validation failed for station {station.GUID}, canStart={canStart}, canRestock={canRestock}", DebugLogger.Category.Chemist);
             continue;
           }
+
           if (canStart || canRestock)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixingStationsReadyToStart: Station {station.GUID} ready, canStart={canStart}, canRestock={canRestock}", DebugLogger.Category.Chemist);
@@ -224,94 +328,6 @@ namespace NoLazyWorkers.Stations
       }
     }
   }
-
-  /* [HarmonyPatch(typeof(StartMixingStationBehaviour))]
-  public class StartMixingStationBehaviourPatch
-  {
-    [HarmonyPatch("Awake")]
-    [HarmonyPostfix]
-    static void AwakePostfix(StartMixingStationBehaviour __instance)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"StartMixingStationBehaviourPatch.Awake: Entered for {__instance.chemist?.fullName}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      try
-      {
-        Cleanup(__instance);
-        states[__instance] = new StateData
-        {
-          CurrentState = EState.Idle,
-          Fetching = new Dictionary<PlaceableStorageEntity, int>()
-        };
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"StartMixingStationBehaviourPatch.Awake: Initialized state for {__instance.chemist?.fullName}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"StartMixingStationBehaviourPatch.Awake: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-      }
-    } */
-
-  /* [HarmonyPatch("StartCook")]
-  [HarmonyPrefix]
-  static bool StartCookPrefix(StartMixingStationBehaviour __instance)
-  {
-    DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-        $"StartCook: Entered for {__instance.chemist?.fullName}",
-        DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-    try
-    {
-      if (!states.TryGetValue(__instance, out var state))
-      {
-        state = new StateData
-        {
-          CurrentState = EState.Idle,
-          Fetching = new Dictionary<PlaceableStorageEntity, int>()
-        };
-        states[__instance] = state;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"StartCook: Initialized new state for {__instance.chemist?.fullName}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      }
-
-      IStationAdapter station = mixingBehaviour.GetStation(__instance);
-      if (station == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"StartCook: Station is null for {__instance.chemist?.fullName}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-        mixingBehaviour.Disable(__instance);
-        return false;
-      }
-
-      if (!mixingBehaviour.ValidateOperationState(__instance.chemist, __instance, state))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"StartCook: Operation state invalid for {__instance.chemist?.fullName}, station={station.GUID}",
-            DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-        mixingBehaviour.Disable(__instance);
-        return false;
-      }
-
-      station.StartOperation(__instance);
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"StartCook: Started operation for {__instance.chemist?.fullName}, station={station.GUID}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-      return false;
-    }
-    catch (Exception e)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Error,
-          $"StartCook: Failed for chemist: {__instance.chemist?.fullName}, error: {e}",
-          DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
-      mixingBehaviour.Disable(__instance);
-      return false;
-    }
-  }
-} */
 
   [HarmonyPatch(typeof(Chemist))]
   public class ChemistMixingStationBehaviourPatch

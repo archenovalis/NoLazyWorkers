@@ -22,6 +22,7 @@ using ScheduleOne.Delivery;
 using ScheduleOne.NPCs.Behaviour;
 using static NoLazyWorkers.NoLazyUtilities;
 using NoLazyWorkers.Structures;
+using NoLazyWorkers.Stations;
 
 namespace NoLazyWorkers.Employees
 {
@@ -39,7 +40,18 @@ namespace NoLazyWorkers.Employees
       bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item) => false;
       Property AssignedProperty { get; }
       NpcSubType SubType { get; }
+      bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour);
     }
+    public static readonly Dictionary<Type, Func<NPC, Behaviour>> StationTypeToBehaviourMap = new()
+    {
+        { typeof(MixingStation), npc => (npc as Chemist)?.StartMixingStationBehaviour },
+        { typeof(MixingStationMk2), npc => (npc as Chemist)?.StartMixingStationBehaviour },
+        // Add other station types as needed
+        // { typeof(ChemistryStation), npc => (npc as Chemist)?.StartChemistryStationBehaviour },
+        // { typeof(LabOven), npc => (npc as Chemist)?.StartLabOvenBehaviour },
+        // { typeof(Cauldron), npc => (npc as Chemist)?.StartCauldronBehaviour },
+        { typeof(PackagingStation), npc => (npc as Packager)?.PackagingBehaviour }
+    };
     public enum NpcSubType
     {
       Chemist,
@@ -166,6 +178,16 @@ namespace NoLazyWorkers.Employees
       }
     }
 
+    public static void ClearAll()
+    {
+      MixingRoutes.Clear();
+      QualityFields.Clear();
+      StationAdapterBehaviours.Clear();
+      ActiveBehaviours.Clear();
+      EmployeeAdapters.Clear();
+      DebugLogger.Log(DebugLogger.LogLevel.Info, "EmployeeExtensions: Cleared all dictionaries", DebugLogger.Category.AllEmployees);
+    }
+
     public static Dictionary<Guid, IEmployeeAdapter> EmployeeAdapters = new();
     public static Dictionary<IStationAdapter, Behaviour> StationAdapterBehaviours = new();
     public static Dictionary<Guid, MoveItemBehaviour> ActiveMoveItemBehaviours = new();
@@ -193,14 +215,6 @@ namespace NoLazyWorkers.Employees
     {
       StationAdapterBehaviours[adapter] = behaviour;
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Registered station adapter for behaviour {behaviour.GetHashCode()}", DebugLogger.Category.AllEmployees);
-    }
-
-    public static IStationAdapter GetStation(Behaviour behaviour)
-    {
-      var adapter = StationAdapterBehaviours.FirstOrDefault(a => a.Value == behaviour).Key;
-      if (adapter == null)
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"No station adapter found for behaviour {behaviour.GetHashCode()}", DebugLogger.Category.AllEmployees);
-      return adapter;
     }
 
     public static ITransitEntity FindPackagingStation(IEmployeeAdapter employee, ItemInstance item)
@@ -336,9 +350,35 @@ namespace NoLazyWorkers.Employees
       StateStartTimes[Npc.GUID] = Time.time;
     }
 
+    public virtual Behaviour GetInstancedBehaviour(NPC npc, IStationAdapter station)
+    {
+      if (npc == null || station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetInstancedBehaviour: NPC or station is null", DebugLogger.Category.AllEmployees);
+        return null;
+      }
+
+      Type stationType = station.TypeOf;
+      if (!StationTypeToBehaviourMap.TryGetValue(stationType, out var behaviourRetriever))
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetInstancedBehaviour: No behaviour mapped for station type {stationType.Name}", DebugLogger.Category.AllEmployees);
+        return null;
+      }
+
+      var behaviour = behaviourRetriever(npc);
+      if (behaviour == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetInstancedBehaviour: Behaviour is null for NPC {npc.fullName} and station type {stationType.Name}", DebugLogger.Category.AllEmployees);
+        return null;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetInstancedBehaviour: Retrieved behaviour for NPC {npc.fullName} and station {station.GUID}", DebugLogger.Category.AllEmployees);
+      return behaviour;
+    }
+
     protected virtual void HandleIdle(Behaviour behaviour, StateData state)
     {
-      state.Station = EmployeeUtilities.GetStation(behaviour);
+      state.Station = StationUtilities.GetStation(behaviour);
       if (state.Station == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleIdle: No station for {Npc.fullName}, disabling", DebugLogger.Category.AllEmployees);
@@ -369,12 +409,12 @@ namespace NoLazyWorkers.Employees
       TransitionState(behaviour, state, EState.Planning, "Start route planning");
     }
 
-    protected virtual void HandlePlanning(Behaviour behaviour, StateData state)
+    public virtual void HandlePlanning(Behaviour behaviour, StateData state)
     {
       if (Adapter?.HandlePlanning(behaviour, state) == true) return;
       state.ActiveRoutes.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandlePlanning: No routes planned for NPC {Npc.fullName}, transitioning to Idle", DebugLogger.Category.AllEmployees);
-      TransitionState(behaviour, state, EState.Idle, "No routes planned by adapter");
+      (behaviour.Npc as Employee).ShouldIdle();
     }
 
     protected virtual void HandleMoving(Behaviour behaviour, StateData state)
@@ -550,6 +590,7 @@ namespace NoLazyWorkers.Employees
         state.IsMoving = false;
         States.Remove(behaviour);
       }
+      (behaviour.Npc as Employee).ShouldIdle();
       behaviour.Disable();
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Disable: Behaviour disabled for {Npc.fullName}", DebugLogger.Category.AllEmployees);
     }

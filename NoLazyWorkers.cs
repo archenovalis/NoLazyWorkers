@@ -39,21 +39,21 @@ namespace NoLazyWorkers
     public static int Level = 4;
     public static bool All = true; // enables all but stacktrace logs
     public static bool Core = true;
-    public static bool Settings = false;
+    public static bool Settings = true;
     // employees
-    public static bool AllEmployees = false;
+    public static bool AllEmployees = true;
     public static bool Chemist = true;
-    public static bool Botanist = false;
-    public static bool Packager = false;
+    public static bool Botanist = true;
+    public static bool Packager = true;
     // generic
     public static bool Storage = true;
-    public static bool General = false;
+    public static bool General = true;
     // stations
-    public static bool Pot = false;
-    public static bool LabOven = false;
-    public static bool ChemistryStation = false;
+    public static bool Pot = true;
+    public static bool LabOven = true;
+    public static bool ChemistryStation = true;
     public static bool MixingStation = true;
-    public static bool PackagingStation = false;
+    public static bool PackagingStation = true;
     //
     public static bool Stacktrace = false;
   }
@@ -195,6 +195,7 @@ namespace NoLazyWorkers
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
+      EmployeeExtensions.ClearAll();
       ConfigurationExtensions.NPCSupply.Clear();
       Settings.SettingsExtensions.Configured.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", DebugLogger.Category.Core);

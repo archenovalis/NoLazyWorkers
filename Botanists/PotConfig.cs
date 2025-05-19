@@ -286,11 +286,10 @@ namespace NoLazyWorkers.Botanists
   [HarmonyPatch(typeof(PotConfigPanel), "Bind")]
   public class PotConfigPanelBindPatch
   {
-    static void Postfix(PotConfigPanel __instance, List<EntityConfiguration> configs)
+    static void BindPostfix(PotConfigPanel __instance, List<EntityConfiguration> configs)
     {
       try
       {
-
         // Destination UI update
         foreach (TextMeshProUGUI child in __instance.DestinationUI.GetComponentsInChildren<TextMeshProUGUI>())
           if (child.gameObject.name == "Description") { child.gameObject.SetActive(false); break; }
@@ -312,11 +311,11 @@ namespace NoLazyWorkers.Botanists
           Guid guid = config.Pot.GUID;
           if (PotExtensions.Supply.TryGetValue(guid, out ObjectField supply))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
           }
           PotExtensions.Supply[guid] = supply ?? new(config);
           supplyList.Add(PotExtensions.Supply[guid]);

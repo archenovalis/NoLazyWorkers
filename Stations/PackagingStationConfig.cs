@@ -30,7 +30,6 @@ namespace NoLazyWorkers.Employees
     public static int MAXOPTIONS = 5;
     public static Dictionary<Guid, List<ItemField>> ItemFields { get; } = new();
     public static Dictionary<Guid, List<QualityField>> QualityFields { get; } = new();
-    public static Dictionary<Guid, PackagingStationConfiguration> Config { get; } = new();
 
     public class PackagingStationAdapter : IStationAdapter
     {
@@ -45,9 +44,9 @@ namespace NoLazyWorkers.Employees
 
       public Guid GUID => _station.GUID;
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
-      public ItemSlot InsertSlot => _station.InputSlots.FirstOrDefault();
-      public List<ItemSlot> ProductSlots => _station.OutputSlots;
-      public ItemSlot OutputSlot => _station.OutputSlots.FirstOrDefault();
+      public ItemSlot InsertSlot => _station.PackagingSlot;
+      public List<ItemSlot> ProductSlots => [_station.ProductSlot];
+      public ItemSlot OutputSlot => _station.OutputSlot;
       public bool IsInUse => (_station as IUsable).IsInUse;
       public bool HasActiveOperation => false;
       public int StartThreshold => 1;
@@ -56,30 +55,30 @@ namespace NoLazyWorkers.Employees
       public void StartOperation(Behaviour behaviour) => (behaviour as PackagingStationBehaviour).StartPackaging();
       public int MaxProductQuantity => 20;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
-      public List<ItemInstance> RefillList()
-      {
-        List<ItemInstance> items = [];
-        var fields = ItemFields[_station.GUID];
-        var qualities = QualityFields[_station.GUID];
-        for (int i = 0; i < fields.Count; i++)
-        {
-          var item = fields[i].SelectedItem;
-          if (item == null)
-            continue;
-          var prodItem = item.GetDefaultInstance() as ProductItemInstance;
-          prodItem.SetQuality(qualities[i].Value);
-          items.AddUnique(prodItem);
-        }
-        return items;
-      }
-      public bool CanRefill(ItemInstance item)
-      {
-        if (RefillList().Any(i => i.CanStackWith(item, false)))
-          return true;
-        return false;
-      }
-
+      public List<ItemInstance> RefillList() => GetRefillList(_station);
+      public bool CanRefill(ItemInstance item) => RefillList().Any(i => i.CanStackWith(item, false));
       public bool MoveOutputToShelf() => false;
+      public Type TypeOf => _station.GetType();
+    }
+  }
+
+  public static class PackagingStationUtilities
+  {
+    public static List<ItemInstance> GetRefillList(PackagingStation station)
+    {
+      List<ItemInstance> items = [];
+      var fields = ItemFields[station.GUID];
+      var qualities = QualityFields[station.GUID];
+      for (int i = 0; i < fields.Count; i++)
+      {
+        var item = fields[i].SelectedItem;
+        if (item == null)
+          continue;
+        var prodItem = item.GetDefaultInstance() as ProductItemInstance;
+        prodItem.SetQuality(qualities[i].Value);
+        items.AddUnique(prodItem);
+      }
+      return items;
     }
 
     public static void RegisterItemFields(PackagingStation station, List<ItemField> itemFields)
@@ -101,7 +100,6 @@ namespace NoLazyWorkers.Employees
         DebugLogger.Log(DebugLogger.LogLevel.Warning, "RegisterConfig: Station or config is null", DebugLogger.Category.PackagingStation);
         return;
       }
-      Config[station.GUID] = config;
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"PackagingExtensions.RegisterConfig: Registered config for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
@@ -114,14 +112,10 @@ namespace NoLazyWorkers.Employees
         return;
       }
       ItemFields.Remove(station.GUID);
-      Config.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"PackagingExtensions.Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.PackagingStation);
     }
-  }
 
-  public static class PackagingStationUtilities
-  {
     public static void InitializeItemFields(PackagingStation station, PackagingStationConfiguration config)
     {
       try
@@ -194,8 +188,8 @@ namespace NoLazyWorkers.Employees
         }
 
         // Register fields
-        PackagingStationExtensions.QualityFields[guid] = qualityFields;
-        PackagingStationExtensions.RegisterItemFields(station, itemFields);
+        QualityFields[guid] = qualityFields;
+        RegisterItemFields(station, itemFields);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Initialized {itemFields.Count} ItemFields for station {guid}", DebugLogger.Category.PackagingStation);
       }
       catch (Exception e)
@@ -390,9 +384,18 @@ namespace NoLazyWorkers.Employees
     }
 
     [HarmonyPostfix]
+    [HarmonyPatch("ShouldSave")]
+    static void ShouldSavePostfix(PackagingStationConfiguration __instance, ref bool __result)
+    {
+      __result = true;
+    }
+
+    [HarmonyPostfix]
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(PackagingStationConfiguration __instance, ref string __result)
     {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"PackagingStationConfigurationPatch.GetSaveStringPostfix: Starting station {__instance.Station.GUID}", DebugLogger.Category.PackagingStation);
       try
       {
         if (__instance.Station == null) return;
@@ -411,6 +414,8 @@ namespace NoLazyWorkers.Employees
           }
           json["ItemFields"] = itemFieldsData;
         }
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"PackagingStationConfigurationPatch.GetSaveStringPostfix: station {__instance.Station.GUID} itemfields: {json["ItemFields"].ToString(Newtonsoft.Json.Formatting.Indented)}", DebugLogger.Category.PackagingStation);
         JArray qualityFieldsArray = [];
         if (QualityFields.TryGetValue(__instance.Station.GUID, out var fields) && fields.Any())
         {
@@ -426,6 +431,8 @@ namespace NoLazyWorkers.Employees
           }
         }
         json["Qualities"] = qualityFieldsArray;
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"PackagingStationConfigurationPatch.GetSaveStringPostfix: station {__instance.Station.GUID} itemfields: {json["Qualities"].ToString(Newtonsoft.Json.Formatting.Indented)}", DebugLogger.Category.PackagingStation);
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,

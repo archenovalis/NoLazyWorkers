@@ -36,6 +36,7 @@ using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using NoLazyWorkers.Stations;
 using System.Reflection;
 using NoLazyWorkers.Employees;
+using static NoLazyWorkers.Stations.StationExtensions;
 
 namespace NoLazyWorkers.Stations
 {
@@ -63,6 +64,25 @@ namespace NoLazyWorkers.Stations
       List<ItemInstance> RefillList();
       bool CanRefill(ItemInstance item);
       bool MoveOutputToShelf();
+      Type TypeOf { get; }
+    }
+  }
+
+
+  public static class StationUtilities
+  {
+    public static IStationAdapter GetStation(Behaviour behaviour)
+    {
+      var adapter = EmployeeExtensions.StationAdapterBehaviours.FirstOrDefault(a => a.Value == behaviour).Key;
+      if (adapter == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetStation: No station adapter found for behaviour {behaviour.GetHashCode()} (Type={behaviour.GetType().Name})", DebugLogger.Category.AllEmployees);
+        foreach (var entry in EmployeeExtensions.StationAdapterBehaviours)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetStation: Registered behaviour {entry.Value.GetHashCode()} (Type={entry.Value.GetType().Name}) for adapter {entry.Key.GUID}", DebugLogger.Category.AllEmployees);
+        }
+      }
+      return adapter;
     }
   }
 }

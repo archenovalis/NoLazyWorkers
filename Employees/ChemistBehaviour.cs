@@ -23,30 +23,25 @@ namespace NoLazyWorkers.Employees
 {
   public class ChemistBehaviour : EmployeeBehaviour
   {
-    public ChemistBehaviour(Behaviour behaviour, IStationAdapter station, IEmployeeAdapter employee) : base(behaviour.Npc, employee)
+    public IEmployeeAdapter Employee;
+    public ChemistBehaviour(Chemist chemist, IStationAdapter station, IEmployeeAdapter employee) : base(chemist, employee)
     {
-      RegisterStationBehaviour(behaviour, station);
-    }
+      Employee = employee ?? throw new ArgumentNullException(nameof(employee));
+      if (station == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistBehaviour: Station adapter is null for NPC {chemist.fullName}", DebugLogger.Category.Chemist);
+        return;
+      }
 
-    protected override void HandleCompleted(Behaviour behaviour, StateData state)
-    {
-      if (state.Station.HasActiveOperation) return;
-      if (state.Station.OutputSlot.Quantity > 0)
+      var behaviour = GetInstancedBehaviour(chemist, station);
+      if (behaviour == null)
       {
-        var item = state.Station.OutputSlot.ItemInstance;
-        var destination = FindPackagingStation(Adapter, item) ?? FindShelfForDelivery(Npc, item);
-        if (destination != null)
-        {
-          var slots = destination.ReserveInputSlotsForItem(item, Npc.NetworkObject);
-          var request = new TransferRequest(item, state.Station.OutputSlot.Quantity, Npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null), state.Station.TransitEntity, new List<ItemSlot> { state.Station.OutputSlot }, destination, slots);
-          state.ActiveRoutes.Add(new PrioritizedRoute(request, PRIORITY_STATION_REFILL));
-          TransitionState(behaviour, state, EState.Grabbing, "Output ready for delivery");
-        }
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistBehaviour: Failed to get behaviour for station {station.GUID} for NPC {chemist.fullName}", DebugLogger.Category.Chemist);
+        return;
       }
-      else
-      {
-        TransitionState(behaviour, state, EState.Idle, "Operation complete");
-      }
+
+      RegisterStationBehaviour(behaviour, station);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistBehaviour: Initialized for NPC {chemist.fullName} with behaviour for station {station.GUID}", DebugLogger.Category.Chemist);
     }
   }
 }
