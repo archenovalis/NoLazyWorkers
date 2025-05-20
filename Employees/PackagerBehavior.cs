@@ -31,7 +31,7 @@ using FishNet.Object;
 using Pathfinding.Examples;
 using ScheduleOne.NPCs;
 using UnityEngine.InputSystem;
-using NoLazyWorkers.Structures;
+using NoLazyWorkers.General;
 using System;
 using UnityEngine.InputSystem.EnhancedTouch;
 using System.Data.Common;
@@ -118,7 +118,7 @@ namespace NoLazyWorkers.Employees
       var request = new TransferRequest(behaviour.Npc, item, quantity, inventorySlot, null, new List<ItemSlot> { inventorySlot }, destination, deliverySlots);
       state.ActiveRoutes.Add(new PrioritizedRoute(request, PRIORITY_SHELF_RESTOCK));
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.HandleInventoryItem: Added route for {quantity} of {item.ID}", DebugLogger.Category.Packager);
-      TransitionState(behaviour, state, EState.Inserting, "Inventory route added");
+      TransitionState(behaviour, state, EState.Delivery, "Inventory route added");
       return true;
     }
 
@@ -127,7 +127,7 @@ namespace NoLazyWorkers.Employees
       var route = state.ActiveRoutes.FirstOrDefault();
       if (route.PickupLocation == null) // Inventory route
       {
-        TransitionState(behaviour, state, EState.Inserting, "Inventory route, skip pickup");
+        TransitionState(behaviour, state, EState.Delivery, "Inventory route, skip pickup");
         MoveTo(behaviour, state, route.Destination);
         return true;
       }
@@ -160,7 +160,7 @@ namespace NoLazyWorkers.Employees
         return false;
       }
       state.ActiveRoutes.Remove(route);
-      TransitionState(behaviour, state, EState.Inserting, "Items picked up");
+      TransitionState(behaviour, state, EState.Delivery, "Items picked up");
       MoveTo(behaviour, state, route.Destination);
       return true;
     }

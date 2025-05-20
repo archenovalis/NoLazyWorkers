@@ -25,8 +25,8 @@ using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
 using static NoLazyWorkers.ConfigurationExtensions;
-using static NoLazyWorkers.Structures.StorageExtensions;
-using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.General.StorageExtensions;
+using static NoLazyWorkers.General.StorageUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
@@ -34,7 +34,7 @@ using ScheduleOne.Persistence;
 using NoLazyWorkers.Employees;
 using ScheduleOne.Employees;
 
-namespace NoLazyWorkers.Structures
+namespace NoLazyWorkers.General
 {
   public static class StorageExtensions
   {
@@ -748,11 +748,9 @@ namespace NoLazyWorkers.Structures
     [SerializeField]
     public QualityFieldUI QualityUI;
     private Button Button;
-    private UnityAction OnChanged;
 
     private void RefreshChanged(ItemDefinition item, StorageConfiguration config)
     {
-      OnChanged?.Invoke();
       var worldSpaceUI = (StorageUIElement)config.Proxy.WorldspaceUI;
       worldSpaceUI.RefreshUI();
       InvokeChanged(config);

@@ -15,13 +15,13 @@ using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.General.StorageUtilities;
 using static NoLazyWorkers.Employees.ChemistExtensions;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using static NoLazyWorkers.Employees.ChemistUtilities;
 using static NoLazyWorkers.Employees.EmployeeUtilities;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using NoLazyWorkers.Structures;
+using NoLazyWorkers.General;
 using static NoLazyWorkers.Employees.EmployeeExtensions.PrioritizedRoute;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
@@ -41,17 +41,20 @@ namespace NoLazyWorkers.Employees
       {
         _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
       }
+      public bool HandleIdle(Behaviour behaviour, StateData state) => false;
       public bool HandleGrabbing(Behaviour behaviour, StateData state) => false;
-      public bool HandleInserting(Behaviour behaviour, StateData state) => false;
+      public bool HandleMoving(Behaviour behaviour, StateData state) => false;
+      public bool HandleDelivering(Behaviour behaviour, StateData state) => false;
       public bool HandleOperating(Behaviour behaviour, StateData state) => false;
-      public bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item) => false;
-      public bool HandlePlanning(Behaviour behaviour, StateData state) => GetChemistBehaviour(_chemist).Planning(behaviour, state);
+      public bool HandleInventoryItems(Behaviour behaviour, StateData state) => false;
+      public bool HandlePlanning(Behaviour behaviour, StateData state) => false;
+      public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
       public bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_chemist, this, npc, station, out employeeBehaviour);
     }
   }
   public static class ChemistUtilities
   {
-    public static ChemistBehaviour GetChemistBehaviour(Chemist chemist)
+    public static ChemistBehaviour GetChemistBehaviour(NPC chemist)
     {
       var chemistBehaviour = ActiveBehaviours.TryGetValue(chemist.GUID, out var beh) ? beh as ChemistBehaviour : null;
       if (chemistBehaviour == null)
@@ -90,7 +93,7 @@ namespace NoLazyWorkers.Employees
             stationAdapter = new CauldronAdapter(station as Cauldron); */
           StationAdapters[station.GUID] = stationAdapter;
         }
-        chemistBehaviour = new ChemistBehaviour(chemist, stationAdapter, adapter);
+        chemistBehaviour = new ChemistBehaviour(chemist, adapter);
         ActiveBehaviours[npc.GUID] = chemistBehaviour;
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created ChemistBehaviour for NPC {npc.fullName} and station {station.GUID}", DebugLogger.Category.Chemist);
       }

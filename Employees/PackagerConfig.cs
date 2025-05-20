@@ -20,7 +20,7 @@ using static NoLazyWorkers.Employees.PackagerExtensions;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.DevUtilities;
-using NoLazyWorkers.Structures;
+using NoLazyWorkers.General;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Employees.PackagingStationExtensions;
 using ScheduleOne.EntityFramework;
@@ -47,10 +47,10 @@ namespace NoLazyWorkers.Employees
       public bool HandlePlanning(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Planning(behaviour, state);
       public bool HandleMoving(Behaviour behaviour, StateData state) => false;
       public bool HandleGrabbing(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Grabbing(behaviour, state);
-      public bool HandleInserting(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Inserting(behaviour, state);
+      public bool HandleDelivering(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Inserting(behaviour, state);
       public bool HandleOperating(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Operating(behaviour, state);
       public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
-      public bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item) => GetPackagerBehaviour(_packager).InventoryItem(behaviour, state, item);
+      public bool HandleInventoryItems(Behaviour behaviour, StateData state) => false;
     }
   }
 

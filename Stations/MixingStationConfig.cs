@@ -27,7 +27,8 @@ using static NoLazyWorkers.Stations.MixingStationUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.StationExtensions;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
-using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.General.StorageUtilities;
+using Unity.Mathematics;
 
 namespace NoLazyWorkers.Stations
 {
@@ -43,7 +44,6 @@ namespace NoLazyWorkers.Stations
     public class MixingStationAdapter : IStationAdapter
     {
       private readonly MixingStation _station;
-
       public MixingStationAdapter(MixingStation station)
       {
         StationAdapters[station.GUID] = this;
@@ -51,7 +51,6 @@ namespace NoLazyWorkers.Stations
       }
       public MixingStation Station => _station;
       public MixingStationConfiguration Config => _station.stationConfiguration;
-
       public Guid GUID => _station.GUID;
       public ItemSlot InsertSlot => _station.MixerSlot;
       public List<ItemSlot> ProductSlots => [_station.ProductSlot];
@@ -68,11 +67,8 @@ namespace NoLazyWorkers.Stations
       public void StartOperation(Behaviour behaviour)
       {
         (behaviour as StartMixingStationBehaviour).StartCook();
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}", DebugLogger.Category.MixingStation);
       }
-
       public List<ItemInstance> RefillList()
       {
         List<ItemInstance> items = [];
@@ -90,60 +86,47 @@ namespace NoLazyWorkers.Stations
       {
         throw new NotImplementedException();
       }
-
       public bool MoveOutputToShelf()
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"UniqueCompletion: Entered for station={_station.GUID}",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UniqueCompletion: Entered for station={_station.GUID}", DebugLogger.Category.MixingStation);
         if (OutputSlot.Quantity <= 0 || OutputSlot.ItemInstance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"UniqueCompletion: No items in output slot for station={_station.GUID}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UniqueCompletion: No items in output slot for station={_station.GUID}", DebugLogger.Category.MixingStation);
           return false;
         }
-
         var outputItem = OutputSlot.ItemInstance;
         var outputProduct = outputItem.Definition as ProductDefinition;
         if (outputProduct == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"UniqueCompletion: Output item {outputItem.ID} is not a ProductDefinition for station={_station.GUID}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UniqueCompletion: Output item {outputItem.ID} is not a ProductDefinition for station={_station.GUID}", DebugLogger.Category.MixingStation);
           return false;
         }
-
         if (!MixingRoutes.TryGetValue(_station.GUID, out var routes) || routes == null || routes.Count == 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"UniqueCompletion: No routes defined for station={_station.GUID}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UniqueCompletion: No routes defined for station={_station.GUID}", DebugLogger.Category.MixingStation);
           return false;
         }
-
         var matchingRoute = routes.FirstOrDefault(route =>
             route.Product?.SelectedItem != null && route.Product.SelectedItem == outputProduct);
         if (matchingRoute == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"UniqueCompletion: No matching route for output={outputItem.ID} in station={_station.GUID}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UniqueCompletion: No matching route for output={outputItem.ID} in station={_station.GUID}", DebugLogger.Category.MixingStation);
           return false;
         }
-
-        // Move item to ProductSlot
         int quantityToLoop = OutputSlot.Quantity;
-
         var itemToLoop = outputItem.GetCopy(quantityToLoop);
         ProductSlots[0].InsertItem(itemToLoop);
         OutputSlot.ChangeQuantity(-quantityToLoop, false);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"UniqueCompletion: Looped {quantityToLoop} of {outputItem.ID} to product slot for station={_station.GUID}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UniqueCompletion: Looped {quantityToLoop} of {outputItem.ID} to product slot for station={_station.GUID}", DebugLogger.Category.MixingStation);
         return true;
       }
+    }
+    public struct RestockObj
+    {
+      public ItemInstance Item;
+      public int Quantity;
+      public PlaceableStorageEntity Shelf;
+      public List<ItemSlot> PickupSlots;
     }
   }
 
@@ -159,115 +142,75 @@ namespace NoLazyWorkers.Stations
           if (station.Configuration is MixingStationConfiguration mixerConfig)
           {
             Guid guid = station.GUID;
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"RestoreConfigurations: Started for station: {guid}",
-                DebugLogger.Category.MixingStation);
-
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Started for station: {guid}", DebugLogger.Category.MixingStation);
             Config[guid] = mixerConfig;
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"RestoreConfigurations: Registered missing MixerConfig for station: {guid}",
-                DebugLogger.Category.MixingStation);
-
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Registered missing MixerConfig for station: {guid}", DebugLogger.Category.MixingStation);
             if (!MixingRoutes.ContainsKey(guid))
             {
               MixingRoutes[guid] = [];
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
-                  $"RestoreConfigurations: Initialized MixingRoutes for station: {guid}",
-                  DebugLogger.Category.MixingStation);
+              DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Initialized MixingRoutes for station: {guid}", DebugLogger.Category.MixingStation);
             }
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"RestoreConfigurations: Skipped station {station?.GUID}, no MixingStationConfiguration",
-                DebugLogger.Category.MixingStation);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Skipped station {station?.GUID}, no MixingStationConfiguration", DebugLogger.Category.MixingStation);
           }
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              $"RestoreConfigurations: Failed for station: {station?.GUID.ToString() ?? "null"}, error: {e}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"RestoreConfigurations: Failed for station: {station?.GUID.ToString() ?? "null"}, error: {e}", DebugLogger.Category.MixingStation);
         }
       }
     }
 
     public static void InitializeStaticRouteListTemplate()
     {
-      var routeListTemplate = GetTransformTemplateFromConfigPanel(
-          EConfigurableType.Packager,
-          "RouteListFieldUI");
+      var routeListTemplate = GetTransformTemplateFromConfigPanel(EConfigurableType.Packager, "RouteListFieldUI");
       if (routeListTemplate == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            "InitializeStaticRouteListTemplate: routeListTemplate is null",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeStaticRouteListTemplate: routeListTemplate is null", DebugLogger.Category.MixingStation);
         return;
       }
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "InitializeStaticRouteListTemplate: Initializing MixingRouteListTemplate",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStaticRouteListTemplate: Initializing MixingRouteListTemplate", DebugLogger.Category.MixingStation);
         var templateObj = Object.Instantiate(routeListTemplate.gameObject);
         templateObj.AddComponent<CanvasRenderer>();
         templateObj.name = "MixingRouteListTemplate";
         templateObj.SetActive(false);
         try
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "InitializeStaticRouteListTemplate: Adding MixingRouteListFieldUI",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStaticRouteListTemplate: Adding MixingRouteListFieldUI", DebugLogger.Category.MixingStation);
           var routeListFieldUI = templateObj.AddComponent<MixingRouteListFieldUI>();
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              $"InitializeStaticRouteListTemplate: Failed to add MixingRouteListFieldUI, error: {e}",
-              DebugLogger.Category.MixingStation);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStaticRouteListTemplate: Failed to add MixingRouteListFieldUI, error: {e}", DebugLogger.Category.MixingStation);
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "InitializeStaticRouteListTemplate: MixingRouteListFieldUI added",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStaticRouteListTemplate: MixingRouteListFieldUI added", DebugLogger.Category.MixingStation);
         var defaultScript = templateObj.GetComponent<RouteListFieldUI>();
         if (defaultScript != null)
           Object.Destroy(defaultScript);
         if (templateObj.GetComponent<MixingRouteListFieldUI>() == null)
           templateObj.AddComponent<MixingRouteListFieldUI>();
-
         var contentsTransform = templateObj.transform.Find("Contents");
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeStaticRouteListTemplate: contentsTransform: {contentsTransform?.name}",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStaticRouteListTemplate: contentsTransform: {contentsTransform?.name}", DebugLogger.Category.MixingStation);
         var entryTransform = templateObj.transform.Find("Contents/Entry");
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeStaticRouteListTemplate: entryTransform: {entryTransform?.name}",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStaticRouteListTemplate: entryTransform: {entryTransform?.name}", DebugLogger.Category.MixingStation);
         var addNewLabel = templateObj.transform.Find("Contents/AddNew/Label")?.GetComponent<TextMeshProUGUI>();
         if (addNewLabel != null)
           addNewLabel.text = "  Add Recipe";
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"InitializeStaticRouteListTemplate: addNewLabel?.text: {addNewLabel?.text}",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStaticRouteListTemplate: addNewLabel?.text: {addNewLabel?.text}", DebugLogger.Category.MixingStation);
         for (int i = 0; i <= MAXROUTES; i++)
         {
           Transform entry = contentsTransform.Find($"Entry ({i})") ?? (i == 0 ? contentsTransform.Find("Entry") : null);
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"InitializeStaticRouteListTemplate: Processing Entry ({i})",
-              DebugLogger.Category.MixingStation);
-
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStaticRouteListTemplate: Processing Entry ({i})", DebugLogger.Category.MixingStation);
           if (entry == null)
           {
             GameObject newEntry = Object.Instantiate(entryTransform.gameObject, contentsTransform, false);
             newEntry.name = $"Entry ({i})";
             newEntry.AddComponent<CanvasRenderer>();
             entry = newEntry.transform;
-
             var productTransform = entry.Find("Source");
             if (productTransform != null)
               productTransform.name = "ProductIMGUI";
@@ -285,81 +228,71 @@ namespace NoLazyWorkers.Stations
             if (mixerTransform != null)
               mixerTransform.name = "MixerItemIMGUI";
           }
-
           var routeEntryUI = entry.GetComponent<RouteEntryUI>();
           if (routeEntryUI != null)
             Object.Destroy(routeEntryUI);
           if (entry.GetComponent<MixingRouteEntryUI>() == null)
             entry.gameObject.AddComponent<MixingRouteEntryUI>();
         }
-
         contentsTransform.Find("AddNew").SetAsLastSibling();
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "InitializeStaticRouteListTemplate: SetAsLastSibling",
-            DebugLogger.Category.MixingStation);
-
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStaticRouteListTemplate: SetAsLastSibling", DebugLogger.Category.MixingStation);
         templateObj.transform.Find("Title")?.gameObject.SetActive(false);
         templateObj.transform.Find("From")?.gameObject.SetActive(false);
         templateObj.transform.Find("To")?.gameObject.SetActive(false);
-
         MixingRouteListTemplate = templateObj;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "InitializeStaticRouteListTemplate: Static MixingRouteListTemplate initialized successfully",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStaticRouteListTemplate: Static MixingRouteListTemplate initialized successfully", DebugLogger.Category.MixingStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"InitializeStaticRouteListTemplate: Failed to initialize MixingRouteListTemplate, error: {e}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStaticRouteListTemplate: Failed to initialize MixingRouteListTemplate, error: {e}", DebugLogger.Category.MixingStation);
       }
     }
 
-    public static bool ValidateStationState(Chemist chemist, IStationAdapter stationAdapter, out bool canStart, out bool canRestock)
+    public static bool ValidateStationState(Chemist chemist, IStationAdapter stationAdapter, out bool canStart, out bool canRestock, out RestockObj restock)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Entered for chemist={chemist?.fullName ?? "null"}, type={stationAdapter.TypeOf}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
+      restock = new()
+      {
+        Item = null,
+        Quantity = 0,
+        Shelf = null,
+        PickupSlots = null
+      };
       canStart = false;
       canRestock = false;
-      bool hasSufficient = false;
-
       if (chemist == null || stationAdapter == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Invalid chemist or station adapter, chemist={chemist?.fullName ?? "null"}, station={stationAdapter?.GUID.ToString() ?? "null"}", DebugLogger.Category.MixingStation);
         return false;
       }
-
       if (stationAdapter.IsInUse || stationAdapter.HasActiveOperation || stationAdapter.OutputSlot.Quantity > 0)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Station in use, active, or has output for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
         return false;
       }
-
       var inputItems = stationAdapter.GetInputItemForProduct();
       if (inputItems == null || inputItems.Count == 0 || inputItems[0]?.SelectedItem == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Input item null or empty for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
         return false;
       }
-
       ItemField inputItem = inputItems[0];
       ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
+      restock.Item = targetItem;
       if (targetItem == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateStationState: Target item null for station={stationAdapter.GUID}", DebugLogger.Category.MixingStation);
         return false;
       }
-
       int threshold = stationAdapter.StartThreshold;
       int desiredQty = Math.Min(stationAdapter.MaxProductQuantity, stationAdapter.ProductSlots.Sum(s => s.Quantity));
       int invQty = chemist.Inventory._GetItemAmount(targetItem.ID);
       int inputQty = stationAdapter.GetInputQuantity();
-
       if (desiredQty < threshold)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateStationState: Below threshold and cannot restock for station={stationAdapter.GUID}, inputQty={inputQty}, threshold={threshold}", DebugLogger.Category.MixingStation);
         return false;
       }
-
       var state = new StateData
       {
         TargetItem = targetItem,
@@ -367,7 +300,7 @@ namespace NoLazyWorkers.Stations
         QuantityNeeded = Math.Max(0, threshold - inputQty),
         QuantityWanted = Math.Max(0, desiredQty - inputQty)
       };
-
+      Dictionary<PlaceableStorageEntity, int> shelves = new();
       if (inputQty >= threshold && desiredQty >= threshold)
       {
         if (inputQty >= desiredQty)
@@ -376,69 +309,61 @@ namespace NoLazyWorkers.Stations
         }
         else
         {
-          var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
-          hasSufficient = shelves?.Values?.Sum() > 0;
-          if (!hasSufficient)
+          shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+          if (shelves?.Values?.Sum() <= 0)
           {
             canStart = true;
           }
           else
           {
             canRestock = true;
-            return true;
           }
         }
       }
       else
       {
-        var shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
-        canRestock = shelves?.Values?.FirstOrDefault() > 0;
+        shelves = FindShelvesWithItem(chemist, targetItem, state.QuantityNeeded - invQty, state.QuantityWanted - invQty);
+        canRestock = shelves?.Values?.Sum() > 0;
       }
-
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Completed for chemist={chemist.fullName}, station={stationAdapter.GUID}, canStart={canStart}, canRestock={canRestock}, invQty={invQty}, inputQty={inputQty}, desiredQty={desiredQty}, threshold={threshold}, qtyNeeded={state.QuantityNeeded}, qtyWanted={state.QuantityWanted}", DebugLogger.Category.MixingStation);
+
+      if (canRestock)
+      {
+        restock.Shelf = shelves.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
+        restock.Quantity = math.min(shelves[restock.Shelf], state.QuantityWanted - invQty);
+        restock.PickupSlots = restock.Shelf.StorageEntity.ItemSlots.FindAll(s => s.ItemInstance.CanStackWithMinQuality(targetItem));
+      }
       return canStart || canRestock;
     }
 
     public static ItemField GetInputItemForProductSlot(IStationAdapter station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"GetInputItemForProductSlot: Entered for station={station?.GUID}",
-          DebugLogger.Category.MixingStation);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetInputItemForProductSlot: Entered for station={station?.GUID}", DebugLogger.Category.MixingStation);
       if (station == null || !(station is MixingStationAdapter mixingAdapter))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"GetInputItemForProductSlot: Invalid or null station, GUID={station?.GUID}",
-            DebugLogger.Category.MixingStation, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetInputItemForProductSlot: Invalid or null station, GUID={station?.GUID}", DebugLogger.Category.MixingStation);
         return null;
       }
       MixingStation mixingStation = mixingAdapter?.Station;
       var productInSlot = mixingStation.ProductSlot.ItemInstance?.Definition as ProductDefinition;
       if (productInSlot == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"GetInputItemForProductSlot: Product slot item is not a ProductDefinition for station={mixingStation.GUID}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetInputItemForProductSlot: Product slot item is not a ProductDefinition for station={mixingStation.GUID}", DebugLogger.Category.MixingStation);
         return null;
       }
       if (!MixingRoutes.TryGetValue(mixingStation.GUID, out var routes) || routes == null || routes.Count == 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"GetInputItemForProductSlot: No routes defined for station={mixingStation.GUID}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetInputItemForProductSlot: No routes defined for station={mixingStation.GUID}", DebugLogger.Category.MixingStation);
         return null;
       }
       var matchingRoute = routes.FirstOrDefault(route =>
           route.Product?.SelectedItem != null && route.Product.SelectedItem == productInSlot);
       if (matchingRoute == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"GetInputItemForProductSlot: No route matches product={productInSlot.Name} for station={mixingStation.GUID}",
-            DebugLogger.Category.MixingStation);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetInputItemForProductSlot: No route matches product={productInSlot.Name} for station={mixingStation.GUID}", DebugLogger.Category.MixingStation);
         return null;
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"GetInputItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={mixingStation.GUID}",
-          DebugLogger.Category.MixingStation);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetInputItemForProductSlot: Found mixerItem={matchingRoute.MixerItem.SelectedItem?.Name ?? "null"} for product={productInSlot.Name} in station={mixingStation.GUID}", DebugLogger.Category.MixingStation);
       return matchingRoute.MixerItem;
     }
   }

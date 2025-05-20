@@ -23,7 +23,7 @@ using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using FluffyUnderware.DevTools.Extensions;
-using NoLazyWorkers.Structures;
+using NoLazyWorkers.General;
 using ScheduleOne.NPCs.Behaviour;
 using FishNet.Object;
 using ScheduleOne.NPCs;

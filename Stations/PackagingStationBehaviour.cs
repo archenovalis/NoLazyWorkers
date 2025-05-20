@@ -2,7 +2,7 @@ using FishNet;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
 using NoLazyWorkers.Employees;
-using NoLazyWorkers.Structures;
+using NoLazyWorkers.General;
 using ScheduleOne;
 using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
@@ -19,7 +19,7 @@ using UnityEngine.Events;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using static NoLazyWorkers.Employees.PackagingStationExtensions;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Structures.StorageUtilities;
+using static NoLazyWorkers.General.StorageUtilities;
 
 namespace NoLazyWorkers.Stations
 {
