@@ -30,8 +30,13 @@ namespace NoLazyWorkers.Employees
     public ChemistBehaviour(Chemist chemist, IEmployeeAdapter employee) : base(chemist, employee)
     {
       _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
-      Employee = employee;
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistBehaviour: Initialized for NPC {chemist.fullName}", DebugLogger.Category.Chemist);
+      Employee = employee ?? throw new ArgumentNullException(nameof(employee));
+      if (Npc == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistBehaviour: Npc is null after base constructor for chemist {chemist.fullName}", DebugLogger.Category.Chemist);
+        Npc = chemist;
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistBehaviour: Initialized for NPC {chemist.fullName}, Npc={Npc?.fullName ?? "null"}", DebugLogger.Category.Chemist);
     }
   }
 
@@ -80,26 +85,49 @@ namespace NoLazyWorkers.Employees
     {
       try
       {
+        if (__instance == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Chemist instance is null", DebugLogger.Category.Chemist);
+          return false;
+        }
+
         if (!InstanceFinder.IsServer)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Skipping client-side for chemist={__instance?.fullName ?? "null"}", DebugLogger.Category.Chemist);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Skipping client-side for chemist={__instance.fullName}", DebugLogger.Category.Chemist);
           return true;
         }
+
+        // Ensure adapter exists
+        if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var adapter) || adapter == null)
+        {
+          adapter = new ChemistAdapter(__instance);
+          EmployeeAdapters[__instance.GUID] = adapter;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Created ChemistAdapter for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+        }
+
+        // Retrieve or create ChemistBehaviour
         var chemistBehaviour = ChemistUtilities.GetChemistBehaviour(__instance);
         if (chemistBehaviour == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: No ChemistBehaviour for {__instance.fullName}, initializing", DebugLogger.Category.Chemist);
-          var adapter = new ChemistAdapter(__instance);
           chemistBehaviour = new ChemistBehaviour(__instance, adapter);
           ActiveBehaviours[__instance.GUID] = chemistBehaviour;
-          EmployeeAdapters[__instance.GUID] = adapter;
         }
+
+        // Ensure state exists
+        if (!EmployeeBehaviour.States.ContainsKey(__instance.GUID))
+        {
+          EmployeeBehaviour.States[__instance.GUID] = new StateData();
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Initialized StateData for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+        }
+
         if (__instance.Fired)
         {
           __instance.LeavePropertyAndDespawn();
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Chemist {__instance.fullName} is fired, despawning", DebugLogger.Category.Chemist);
           return false;
         }
+
         if (!__instance.CanWork())
         {
           __instance.SubmitNoWorkReason("I am unable to work right now", "Check my status to see why I can't work.");
@@ -107,12 +135,11 @@ namespace NoLazyWorkers.Employees
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Chemist {__instance.fullName} cannot work, setting idle", DebugLogger.Category.Chemist);
           return false;
         }
-        if (!EmployeeBehaviour.States.ContainsKey(__instance.GUID))
-        {
-          EmployeeBehaviour.States[__instance.GUID] = new StateData();
-        }
+
         var state = EmployeeBehaviour.States[__instance.GUID];
-        chemistBehaviour.Update(__instance.MoveItemBehaviour);
+        if (__instance.MoveItemBehaviour.Active)
+          chemistBehaviour.Update(__instance.MoveItemBehaviour);
+
         if (state.CurrentState != EState.Idle || state.ActiveRoutes.Count > 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Processing state={state.CurrentState}, routes={state.ActiveRoutes.Count} for {__instance.fullName}", DebugLogger.Category.Chemist);
@@ -123,6 +150,7 @@ namespace NoLazyWorkers.Employees
           __instance.MarkIsWorking();
           return false;
         }
+
         if (__instance.configuration?.TotalStations > 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: No mod tasks, trying game tasks for {__instance.fullName}", DebugLogger.Category.Chemist);
@@ -139,7 +167,8 @@ namespace NoLazyWorkers.Employees
       catch (Exception e)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: Failed for chemist {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Chemist);
-        __instance.SetIdle(true);
+        if (__instance != null)
+          __instance.SetIdle(true);
         return false;
       }
     }

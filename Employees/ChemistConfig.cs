@@ -44,7 +44,7 @@ namespace NoLazyWorkers.Employees
       public bool HandleIdle(Behaviour behaviour, StateData state) => false;
       public bool HandleGrabbing(Behaviour behaviour, StateData state) => false;
       public bool HandleMoving(Behaviour behaviour, StateData state) => false;
-      public bool HandleDelivering(Behaviour behaviour, StateData state) => false;
+      public bool HandleDelivery(Behaviour behaviour, StateData state) => false;
       public bool HandleOperating(Behaviour behaviour, StateData state) => false;
       public bool HandleInventoryItems(Behaviour behaviour, StateData state) => false;
       public bool HandlePlanning(Behaviour behaviour, StateData state) => false;

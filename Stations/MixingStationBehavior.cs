@@ -161,7 +161,7 @@ namespace NoLazyWorkers.Stations
             }
             state.Station = stationAdapter;
             var behaviour = chemistBehaviour.GetInstancedBehaviour(__instance, stationAdapter);
-            state.ActiveRoutes.Add(new PrioritizedRoute(EmployeeUtilities.CreateTransferRequest(__instance, restock.Item, restock.Quantity, restock.Shelf, restock.PickupSlots, station, [station.MixerSlot], force: true), 100));
+            chemistBehaviour.AddRoutes(behaviour, state, [EmployeeUtilities.CreateTransferRequest(__instance, restock.Item, restock.Quantity, restock.Shelf, restock.PickupSlots, station, [station.MixerSlot], force: true)]);
             chemistBehaviour.TransitionState(behaviour, state, EState.Grabbing, "Looping route planned");
           }
         }
@@ -223,7 +223,6 @@ namespace NoLazyWorkers.Stations
             States[__instance.GUID] = state;
           }
           state.Station = stationAdapter;
-
           // Check for looping
           if (MixingRoutes.TryGetValue(station.GUID, out var routes) && routes != null && routes.Any())
           {
@@ -248,28 +247,34 @@ namespace NoLazyWorkers.Stations
               }
             }
           }
-          // Fallback to shelf delivery
-          PlaceableStorageEntity shelf = FindShelfForDelivery(__instance, outputSlot.ItemInstance);
-          if (shelf != null)
+          // Fallback to product delivery
+          ITransitEntity destination = EmployeeUtilities.FindPackagingStation(chemistBehaviour.Employee, outputSlot.ItemInstance) ?? FindShelfForDelivery(__instance, outputSlot.ItemInstance);
+          if (destination != null)
           {
-            var deliverySlots = (shelf as ITransitEntity).ReserveInputSlotsForItem(outputSlot.ItemInstance, __instance.NetworkObject);
-            if (deliverySlots == null || deliverySlots.Count == 0)
+            var destinationSlots = destination.ReserveInputSlotsForItem(outputSlot.ItemInstance, __instance.NetworkObject);
+            if (destinationSlots == null || destinationSlots.Count == 0)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No delivery slots for shelf={shelf.GUID}", DebugLogger.Category.Chemist);
+              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No delivery slots for destination={destination.GUID}", DebugLogger.Category.Chemist);
               continue;
             }
-            int quantity = Math.Min(outputSlot.Quantity, deliverySlots.Sum(s => s.GetCapacityForItem(outputSlot.ItemInstance)));
-            var request = EmployeeUtilities.CreateTransferRequest(__instance, outputSlot.ItemInstance, quantity, station, new List<ItemSlot> { outputSlot }, shelf, deliverySlots);
+            int quantity = Math.Min(outputSlot.Quantity, destinationSlots.Sum(s => s.GetCapacityForItem(outputSlot.ItemInstance)));
+            var inventorySlot = __instance.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+            if (inventorySlot == null)
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No inventory slot for product={outputProduct.Name}", DebugLogger.Category.Chemist);
+              continue;
+            }
+            var request = EmployeeUtilities.CreateTransferRequest(__instance, outputSlot.ItemInstance, quantity, station, [outputSlot], destination, destinationSlots);
             if (request != null)
             {
               chemistBehaviour.AddRoutes(behaviour, state, new List<TransferRequest> { request });
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: Planned shelf delivery for product={outputProduct.Name} to shelf={shelf.GUID}", DebugLogger.Category.Chemist);
-              chemistBehaviour.TransitionState(behaviour, state, EState.Grabbing, "Shelf delivery planned");
+              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: Planned delivery for product={outputProduct.Name} to {destination.GUID}", DebugLogger.Category.Chemist);
+              chemistBehaviour.TransitionState(behaviour, state, EState.Delivery, "Shelf/packaging delivery planned");
             }
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No shelf found for product={outputProduct.Name} in station={station.GUID}", DebugLogger.Category.Chemist);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No destination found for product={outputProduct.Name} in station={station.GUID}", DebugLogger.Category.Chemist);
           }
         }
         __result = new List<MixingStation>();

@@ -61,79 +61,126 @@ namespace NoLazyWorkers.Employees
 
     public bool Planning(Behaviour behaviour, StateData state)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerBehaviour.Planning: Starting for NPC {_packager.fullName}, Property {Employee.AssignedProperty}, Routes={state.ActiveRoutes.Count}", DebugLogger.Category.Packager);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerBehaviour.Planning: Starting for NPC {_packager.fullName}, Property {_packager.AssignedProperty}, Routes={state.ActiveRoutes.Count}", DebugLogger.Category.Packager);
 
-      // Check if routes already exist
-      if (state.ActiveRoutes.Count >= behaviour.Npc.Inventory.ItemSlots.Count(s => s.ItemInstance == null))
+      // Check if routes already fill inventory capacity
+      int availableSlots = _packager.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
+      if (state.ActiveRoutes.Count >= availableSlots)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.Planning: Using {state.ActiveRoutes.Count} existing routes for NPC {_packager.fullName}", DebugLogger.Category.Packager);
         TransitionState(behaviour, state, EState.Grabbing, "Using existing routes");
         return true;
       }
 
-      var requests = FindItemsNeedingMovement(_packager, state);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.Planning: Found {requests.Count} routes for NPC {_packager.fullName}", DebugLogger.Category.Packager);
+      ITransitEntity existingSource = null;
+      // Check for additional routes from the same source as existing routes
+      if (state.ActiveRoutes.Count > 0)
+        existingSource = state.ActiveRoutes.FirstOrDefault().Source;
+      var requests = new List<TransferRequest>();
+      if (existingSource != null)
+      {
+        requests = FindAdditionalRoutesFromSource(_packager, state, existingSource);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerBehaviour.Planning: Found {requests.Count} additional routes from source {existingSource.GUID} for NPC {_packager.fullName}", DebugLogger.Category.Packager);
+      }
+
+      // If no additional routes from existing source, search all sources
       if (requests.Count == 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.Planning: No routes found. Stations={PropertyStations.GetValueOrDefault(Employee.AssignedProperty)?.Count ?? 0}, Shelves={StorageExtensions.AnyShelves.Count}, Docks={Employee.AssignedProperty?.LoadingDocks.Length ?? 0}", DebugLogger.Category.Packager);
-        state.ActiveRoutes.Clear();
-        TransitionState(behaviour, state, EState.Idle, "No routes planned");
-        return false;
+        requests = FindItemsNeedingMovement(_packager, state);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.Planning: Found {requests.Count} routes for NPC {_packager.fullName}", DebugLogger.Category.Packager);
       }
+
+      if (requests.Count == 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.Planning: No routes found. Stations={PropertyStations.GetValueOrDefault(_packager.AssignedProperty)?.Count ?? 0}, Shelves={StorageExtensions.AnyShelves.Count}, Docks={_packager.AssignedProperty?.LoadingDocks.Length ?? 0}", DebugLogger.Category.Packager);
+        if (state.ActiveRoutes.Count == 0)
+        {
+          TransitionState(behaviour, state, EState.Idle, "No routes planned");
+          return false;
+        }
+        // Proceed with existing routes
+        TransitionState(behaviour, state, EState.Grabbing, "No new routes, using existing");
+        return true;
+      }
+
       AddRoutes(behaviour, state, requests);
       TransitionState(behaviour, state, EState.Grabbing, "Routes planned");
       return true;
     }
 
-    public bool InventoryItem(Behaviour behaviour, StateData state, ItemInstance item)
+    private List<TransferRequest> FindAdditionalRoutesFromSource(Packager npc, StateData state, ITransitEntity source)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerBehaviour.HandleInventoryItem: Processing item {item.ID} for NPC {_packager.fullName}", DebugLogger.Category.Packager);
-      var destination = StorageUtilities.FindShelfForDelivery(_packager, item);
-      if (destination == null)
+      var requests = new List<TransferRequest>();
+      var property = npc.AssignedProperty;
+      if (property == null)
       {
-        NoDestinationCache[Employee.AssignedProperty].Add(item);
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.HandleInventoryItem: No destination for item {item.ID}", DebugLogger.Category.Packager);
-        return false;
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"FindAdditionalRoutesFromSource: Property is null for NPC {npc.fullName}", DebugLogger.Category.Packager);
+        return requests;
       }
-      var inventorySlot = _packager.Inventory.ItemSlots
-          .FirstOrDefault(s => s?.ItemInstance != null && s.ItemInstance.CanStackWith(item) && s.Quantity > 0);
-      if (inventorySlot == null)
+
+      int maxRoutes = Mathf.Min(MAX_ROUTES_PER_CYCLE, npc.Inventory.ItemSlots.Count(s => s.ItemInstance == null) - state.ActiveRoutes.Count);
+      if (maxRoutes <= 0)
+        return requests;
+
+      // Check stations that need items from this source
+      if (PropertyStations.TryGetValue(property, out var stations))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.HandleInventoryItem: No valid inventory slot for item {item.ID}", DebugLogger.Category.Packager);
-        return false;
+        foreach (var station in stations)
+        {
+          if (station.IsInUse || station.HasActiveOperation) continue;
+          var items = station.RefillList();
+          foreach (var item in items)
+          {
+            if (IsItemTimedOut(property, item))
+              continue;
+            var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(source, item)
+                .Where(s => s.Quantity > 0 && (!s.IsLocked || s.ActiveLock?.LockOwner == npc.NetworkObject)).ToList();
+            if (sourceSlots.Count == 0)
+              continue;
+
+            var destination = station.TransitEntity;
+            var deliverySlots = destination.ReserveInputSlotsForItem(item, npc.NetworkObject);
+            if (deliverySlots == null || deliverySlots.Count == 0)
+              continue;
+
+            int quantity = Mathf.Min(sourceSlots.Sum(s => s.Quantity), station.MaxProductQuantity - station.GetInputQuantity());
+            if (quantity <= 0)
+              continue;
+
+            if (!npc.Movement.CanGetTo(station.GetAccessPoint(npc)))
+              continue;
+
+            var inventorySlot = npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
+            if (inventorySlot == null)
+              continue;
+
+            var request = new TransferRequest(npc, item, quantity, inventorySlot, source, sourceSlots, destination, deliverySlots);
+            requests.Add(request);
+            maxRoutes--;
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindAdditionalRoutesFromSource: Added route for {quantity} of {item.ID} to station {station.GUID}", DebugLogger.Category.Packager);
+            if (maxRoutes <= 0)
+              break;
+          }
+          if (maxRoutes <= 0)
+            break;
+        }
       }
-      var transitEntity = destination as ITransitEntity;
-      var deliverySlots = transitEntity.ReserveInputSlotsForItem(item, _packager.NetworkObject);
-      if (deliverySlots == null || deliverySlots.Count == 0)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.HandleInventoryItem: No valid delivery slots for item {item.ID}", DebugLogger.Category.Packager);
-        return false;
-      }
-      int quantity = Math.Min(inventorySlot.Quantity, transitEntity.GetInputCapacityForItem(item, _packager));
-      if (quantity <= 0)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.HandleInventoryItem: Invalid quantity {quantity} for item {item.ID}", DebugLogger.Category.Packager);
-        return false;
-      }
-      var request = new TransferRequest(behaviour.Npc, item, quantity, inventorySlot, null, new List<ItemSlot> { inventorySlot }, destination, deliverySlots);
-      state.ActiveRoutes.Add(new PrioritizedRoute(request, PRIORITY_SHELF_RESTOCK));
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.HandleInventoryItem: Added route for {quantity} of {item.ID}", DebugLogger.Category.Packager);
-      TransitionState(behaviour, state, EState.Delivery, "Inventory route added");
-      return true;
+
+      return requests;
     }
 
     public bool Grabbing(Behaviour behaviour, StateData state)
     {
       var route = state.ActiveRoutes.FirstOrDefault();
-      if (route.PickupLocation == null) // Inventory route
+      if (route.Source == null) // Inventory route
       {
         TransitionState(behaviour, state, EState.Delivery, "Inventory route, skip pickup");
         MoveTo(behaviour, state, route.Destination);
         return true;
       }
-      if (!IsAtLocation(behaviour, route.PickupLocation))
+      if (!IsAtLocation(behaviour, route.Source))
       {
-        MoveTo(behaviour, state, route.PickupLocation);
+        MoveTo(behaviour, state, route.Source);
         return true;
       }
       state.PickupSlots = route.PickupSlots;
@@ -178,7 +225,7 @@ namespace NoLazyWorkers.Employees
         MoveTo(behaviour, state, route.Destination);
         return true;
       }
-      state.DeliverySlots = route.DeliverySlots;
+      state.DeliverySlots = route.DestinationSlots;
       state.DeliverySlots.ApplyLocks(_packager, "Delivery lock");
       int remaining = state.QuantityInventory;
       foreach (var slot in state.DeliverySlots)
@@ -241,6 +288,7 @@ namespace NoLazyWorkers.Employees
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"FindItemsNeedingMovement: Property is null for NPC {npc.fullName}", DebugLogger.Category.Packager);
         return requests;
       }
+
       int maxRoutes = Mathf.Min(MAX_ROUTES_PER_CYCLE, npc.Inventory.ItemSlots.Count(s => s.ItemInstance == null) - state.ActiveRoutes.Count);
       var pickupGroups = new Dictionary<ITransitEntity, List<TransferRequest>>();
       var processedShelves = new List<Guid>();
@@ -259,36 +307,33 @@ namespace NoLazyWorkers.Employees
             if (IsItemTimedOut(property, item))
               continue;
             var shelves = StorageUtilities.FindShelvesWithItem(npc, item, 1);
+            if (shelves.Count == 0)
+              continue;
             var source = shelves.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
-            var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(source, item);
-            if (sourceSlots.Count == 0) continue;
-            sourceSlots.ApplyLocks(npc, "Route planning lock");
+            var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(source, item)
+                .Where(s => s.Quantity > 0 && (!s.IsLocked || s.ActiveLock?.LockOwner == npc.NetworkObject)).ToList();
+            if (sourceSlots.Count == 0)
+              continue;
+
             var destination = station.TransitEntity;
             var deliverySlots = destination.ReserveInputSlotsForItem(item, npc.NetworkObject);
             if (deliverySlots == null || deliverySlots.Count == 0)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             int quantity = Mathf.Min(sourceSlots.Sum(s => s.Quantity), station.MaxProductQuantity - station.GetInputQuantity());
             if (quantity <= 0)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             if (!npc.Movement.CanGetTo(station.GetAccessPoint(npc)))
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             var inventorySlot = npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
             if (inventorySlot == null)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             var request = new TransferRequest(npc, item, quantity, inventorySlot, source, sourceSlots, destination, deliverySlots);
-            if (!pickupGroups.ContainsKey(source)) pickupGroups[source] = new List<TransferRequest>();
+            if (!pickupGroups.ContainsKey(source))
+              pickupGroups[source] = new List<TransferRequest>();
             pickupGroups[source].Add(request);
             maxRoutes--;
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindItemsNeedingMovement: StationRefill request for {quantity} of {item.ID}", DebugLogger.Category.Packager);
@@ -308,45 +353,42 @@ namespace NoLazyWorkers.Employees
           var dockItem = slot.ItemInstance;
           if (IsItemTimedOut(npc.AssignedProperty, dockItem))
             continue;
-          var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(dock, dockItem);
-          if (sourceSlots.Count == 0) continue;
-          sourceSlots.ApplyLocks(npc, "Route planning lock");
+          var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(dock, dockItem)
+              .Where(s => s.Quantity > 0 && (!s.IsLocked || s.ActiveLock?.LockOwner == npc.NetworkObject)).ToList();
+          if (sourceSlots.Count == 0)
+            continue;
+
           var destination = StorageUtilities.FindShelfForDelivery(npc, dockItem);
           if (destination == null)
           {
-            sourceSlots.RemoveLock();
             AddItemTimeout(npc.AssignedProperty, dockItem);
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetTransitRouteReadyPrefix: Added item {dockItem.ID} to NoDestinationCache for property {npc.AssignedProperty}", DebugLogger.Category.Packager);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindItemsNeedingMovement: Added item {dockItem.ID} to NoDestinationCache for property {npc.AssignedProperty}", DebugLogger.Category.Packager);
             continue;
           }
+
           var transitEntity = destination as ITransitEntity;
           var deliverySlots = transitEntity.ReserveInputSlotsForItem(dockItem, npc.NetworkObject);
           if (deliverySlots == null || deliverySlots.Count == 0)
           {
-            sourceSlots.RemoveLock();
             if (transitEntity.GetInputCapacityForItem(dockItem, npc) <= 0)
               AddItemTimeout(npc.AssignedProperty, dockItem);
             continue;
           }
+
           int quantity = Mathf.Min(sourceSlots.Sum(s => s.Quantity), transitEntity.GetInputCapacityForItem(dockItem, npc));
           if (quantity <= 0)
-          {
-            sourceSlots.RemoveLock();
             continue;
-          }
+
           if (!npc.Movement.CanGetTo(NavMeshUtility.GetAccessPoint(dock, npc).position))
-          {
-            sourceSlots.RemoveLock();
             continue;
-          }
+
           var inventorySlot = npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
           if (inventorySlot == null)
-          {
-            sourceSlots.RemoveLock();
             continue;
-          }
+
           var request = new TransferRequest(npc, dockItem, quantity, inventorySlot, dock, sourceSlots, destination, deliverySlots);
-          if (!pickupGroups.ContainsKey(dock)) pickupGroups[dock] = new List<TransferRequest>();
+          if (!pickupGroups.ContainsKey(dock))
+            pickupGroups[dock] = new List<TransferRequest>();
           pickupGroups[dock].Add(request);
           maxRoutes--;
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindItemsNeedingMovement: Dock request for {quantity} of {dockItem.ID}", DebugLogger.Category.Packager);
@@ -371,11 +413,10 @@ namespace NoLazyWorkers.Employees
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindItemsNeedingMovement: Skipping item {item.ID} in NoDestinationCache", DebugLogger.Category.Packager);
             continue;
           }
-          slot.ApplyLocks(npc, "Route planning lock");
+
           var assignedShelf = StorageUtilities.FindShelfForDelivery(npc, item, false);
           if (assignedShelf == null || assignedShelf == shelf)
           {
-            slot.RemoveLock();
             if (assignedShelf == null)
             {
               cache.AddUnique(item);
@@ -383,27 +424,23 @@ namespace NoLazyWorkers.Employees
             }
             continue;
           }
+
           var transitEntity = assignedShelf as ITransitEntity;
           var deliverySlots = transitEntity.ReserveInputSlotsForItem(item, npc.NetworkObject);
           if (deliverySlots == null || deliverySlots.Count == 0)
-          {
-            slot.RemoveLock();
             continue;
-          }
+
           int quantity = Mathf.Min(slot.Quantity, transitEntity.GetInputCapacityForItem(item, npc));
           if (quantity <= 0)
-          {
-            slot.RemoveLock();
             continue;
-          }
+
           var inventorySlot = npc.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
           if (inventorySlot == null)
-          {
-            slot.RemoveLock();
             continue;
-          }
+
           var request = new TransferRequest(npc, item, quantity, inventorySlot, shelf, new List<ItemSlot> { slot }, assignedShelf, deliverySlots);
-          if (!pickupGroups.ContainsKey(shelf)) pickupGroups[shelf] = new List<TransferRequest>();
+          if (!pickupGroups.ContainsKey(shelf))
+            pickupGroups[shelf] = new List<TransferRequest>();
           pickupGroups[shelf].Add(request);
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FindItemsNeedingMovement: ShelfRestock request for {quantity} of {item.ID}", DebugLogger.Category.Packager);
         }
@@ -414,11 +451,7 @@ namespace NoLazyWorkers.Employees
         requests.AddRange(group.Value.OrderByDescending(r => GetPriority(r)).Take(maxRoutes));
         if (requests.Count >= maxRoutes) break;
       }
-      foreach (var slot in pickupGroups.SelectMany(g => g.Value).SelectMany(r => r.PickupSlots).Distinct())
-      {
-        if (!requests.Any(r => r.PickupSlots.Contains(slot)))
-          slot.RemoveLock();
-      }
+
       return requests;
     }
   }
@@ -426,8 +459,6 @@ namespace NoLazyWorkers.Employees
   [HarmonyPatch(typeof(Packager))]
   public static class PackagerPatch
   {
-    public static Dictionary<Guid, List<PrioritizedRoute>> PrestateRoutes = new();
-
     [HarmonyPrefix]
     [HarmonyPatch("GetStationToAttend")]
     public static bool GetStationToAttendPrefix(Packager __instance, ref PackagingStation __result)
@@ -508,12 +539,14 @@ namespace NoLazyWorkers.Employees
           __result = null;
           return false;
         }
+
         if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var adapter))
         {
           adapter = new PackagerAdapter(__instance);
           EmployeeAdapters[__instance.GUID] = adapter;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"Registered adapter for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
         }
+
         var packagerAdapter = adapter as PackagerAdapter;
         if (packagerAdapter == null)
         {
@@ -521,70 +554,79 @@ namespace NoLazyWorkers.Employees
           __result = null;
           return false;
         }
-        if (!PrestateRoutes.ContainsKey(__instance.GUID))
-          PrestateRoutes[__instance.GUID] = new();
+
+        // Ensure state exists
+        if (!EmployeeBehaviour.States.ContainsKey(__instance.GUID))
+        {
+          EmployeeBehaviour.States[__instance.GUID] = new StateData();
+        }
+        var state = EmployeeBehaviour.States[__instance.GUID];
+
         int maxRoutes = Mathf.Min(EmployeeBehaviour.MAX_ROUTES_PER_CYCLE, __instance.Inventory.ItemSlots.Count(s => s.ItemInstance == null));
         foreach (PackagingStation station in __instance.configuration.AssignedStations ?? Enumerable.Empty<PackagingStation>())
         {
           if (station == null)
             continue;
+
           if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
           {
             stationAdapter = new PackagingStationAdapter(station);
             StationAdapters[station.GUID] = stationAdapter;
           }
+
           if (stationAdapter.IsInUse || stationAdapter.HasActiveOperation)
             continue;
+
           var items = stationAdapter.RefillList();
           foreach (var item in items)
           {
             if (IsItemTimedOut(__instance.AssignedProperty, item))
               continue;
+
             var shelves = StorageUtilities.FindShelvesWithItem(__instance, item, stationAdapter.StartThreshold);
+            if (shelves.Count == 0)
+              continue;
+
             var source = shelves.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
-            var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(source, item);
-            if (sourceSlots.Count == 0) continue;
-            sourceSlots.ApplyLocks(__instance, "Route planning lock");
+            var sourceSlots = StorageUtilities.GetOutputSlotsContainingTemplateItem(source, item)
+                .Where(s => s.Quantity > 0 && (!s.IsLocked || s.ActiveLock?.LockOwner == __instance.NetworkObject)).ToList();
+            if (sourceSlots.Count == 0)
+              continue;
+
             var destination = stationAdapter.TransitEntity;
             var deliverySlots = destination.ReserveInputSlotsForItem(item, __instance.NetworkObject);
             if (deliverySlots == null || deliverySlots.Count == 0)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             int quantity = Mathf.Min(sourceSlots.Sum(s => s.Quantity), stationAdapter.MaxProductQuantity - stationAdapter.GetInputQuantity());
             if (quantity <= 0)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             if (!__instance.Movement.CanGetTo(stationAdapter.GetAccessPoint(__instance)))
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             var inventorySlot = __instance.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
             if (inventorySlot == null)
-            {
-              sourceSlots.RemoveLock();
               continue;
-            }
+
             var request = new TransferRequest(__instance, item, quantity, inventorySlot, source, sourceSlots, destination, deliverySlots);
             var route = new PrioritizedRoute(request, EmployeeBehaviour.PRIORITY_STATION_REFILL)
             {
               TransitRoute = new AdvancedTransitRoute(source, destination)
             };
-            PrestateRoutes[__instance.GUID].Add(route);
+            state.ActiveRoutes.Add(route);
             DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetStationMoveItemsPrefix: Created route for {quantity} of {item.ID} to station {station.GUID}", DebugLogger.Category.Packager);
             __result = null;
             return false;
           }
-          if (PrestateRoutes[__instance.GUID].Count >= maxRoutes)
+
+          if (state.ActiveRoutes.Count >= maxRoutes)
           {
             __result = null;
             return false;
           }
         }
+
         __result = null;
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetStationMoveItemsPrefix: No station with items to move for NPC {__instance.fullName}", DebugLogger.Category.Packager);
         return false;
@@ -611,12 +653,14 @@ namespace NoLazyWorkers.Employees
           __result = null;
           return false;
         }
+
         if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var adapter))
         {
           adapter = new PackagerAdapter(__instance);
           EmployeeAdapters[__instance.GUID] = adapter;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"Registered adapter for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
         }
+
         var packagerAdapter = adapter as PackagerAdapter;
         if (packagerAdapter == null)
         {
@@ -624,37 +668,28 @@ namespace NoLazyWorkers.Employees
           __result = null;
           return false;
         }
-        if (!PrestateRoutes.ContainsKey(__instance.GUID))
-          PrestateRoutes[__instance.GUID] = new();
 
-        int maxRoutes = Mathf.Min(EmployeeBehaviour.MAX_ROUTES_PER_CYCLE, __instance.Inventory.ItemSlots.Count(s => s.ItemInstance == null) - PrestateRoutes[__instance.GUID].Count);
-        if (PrestateRoutes[__instance.GUID].Count < maxRoutes)
+        if (!EmployeeBehaviour.States.ContainsKey(__instance.GUID))
         {
-          var state = new StateData() { CurrentState = EState.Planning, ActiveRoutes = PrestateRoutes[__instance.GUID] };
-          if (packagerAdapter.HandlePlanning(__instance.MoveItemBehaviour, state))
-          {
-            var route = state.ActiveRoutes.OrderByDescending(r => r.Priority).FirstOrDefault(r => r.TransitRoute != null);
-            if (route.TransitRoute != null)
-            {
-              item = route.Item;
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetTransitRouteReadyPrefix: Planned route for item {item?.ID} for NPC {__instance.fullName}, priority={route.Priority}", DebugLogger.Category.Packager);
-            }
-          }
+          EmployeeBehaviour.States[__instance.GUID] = new StateData();
         }
-        foreach (var route in PrestateRoutes[__instance.GUID])
+        var state = EmployeeBehaviour.States[__instance.GUID];
+
+        int maxRoutes = Mathf.Min(EmployeeBehaviour.MAX_ROUTES_PER_CYCLE, __instance.Inventory.ItemSlots.Count(s => s.ItemInstance == null));
+        if (state.ActiveRoutes.Count < maxRoutes)
         {
-          __instance.MoveItemBehaviour.Initialize(route.TransitRoute, route.Item, route.Quantity);
-          __instance.MoveItemBehaviour.Enable_Networked(null);
+          state.CurrentState = EState.Planning;
+          packagerAdapter.HandlePlanning(__instance.MoveItemBehaviour, state);
         }
-        PrestateRoutes[__instance.GUID].Clear();
+        __result = null;
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetTransitRouteReadyPrefix: No routes ready for NPC {__instance.fullName}", DebugLogger.Category.Packager);
-        return true;
+        return false;
       }
       catch (Exception e)
       {
-        PrestateRoutes[__instance.GUID].Clear();
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerPatch.GetTransitRouteReadyPrefix: Failed for NPC {__instance.fullName}, error: {e}", DebugLogger.Category.Packager);
-        return true;
+        __result = null;
+        return false;
       }
     }
   }

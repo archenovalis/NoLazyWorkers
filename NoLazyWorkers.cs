@@ -189,7 +189,7 @@ namespace NoLazyWorkers
         MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
         DebugLogger.Log(DebugLogger.LogLevel.Info, "Applied Fixer and Misc settings on main scene load.", DebugLogger.Category.Core);
         MixingStationUtilities.InitializeStaticRouteListTemplate();
-        StorageUtilities.InitializeStorageModule();
+        StorageConfigUtilities.InitializeStorageModule();
       }
     }
 

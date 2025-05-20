@@ -27,6 +27,7 @@ using static NoLazyWorkers.NoLazyUtilities;
 using static NoLazyWorkers.ConfigurationExtensions;
 using static NoLazyWorkers.General.StorageExtensions;
 using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.General.StorageConfigUtilities;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
@@ -95,350 +96,6 @@ namespace NoLazyWorkers.General
           .ToList();
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetOutputSlotsContainingTemplateItem: Found {matchingSlots.Count} slots for item {item.ID} in {entity.GUID}", DebugLogger.Category.Packager);
       return matchingSlots;
-    }
-
-    public static void InitializeStorageModule()
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStorageModule: Starting", DebugLogger.Category.Storage);
-      GetStorageConfigPanelTemplate();
-      CacheCrossSprite();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorageModule: ConfigPanelTemplate {(ConfigPanelTemplate != null ? "initialized" : "null")}", DebugLogger.Category.Storage);
-    }
-
-    public static bool InitializeStorage(Guid guid, PlaceableStorageEntity storage)
-    {
-      try
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Called for GUID: {guid}, storage: {(storage != null ? storage.name : "null")}", DebugLogger.Category.Storage);
-
-        if (storage == null || guid == Guid.Empty)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: storage is null or guid is empty ({guid})", DebugLogger.Category.Storage);
-          return false;
-        }
-
-        if (!Storage.ContainsKey(guid))
-        {
-          Storage[guid] = storage;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}, Storage count: {Storage.Count}", DebugLogger.Category.Storage);
-        }
-
-        var proxy = StorageConfigurableProxy.AttachToStorage(storage);
-        if (proxy == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed to attach proxy for GUID: {guid}", DebugLogger.Category.Storage);
-          return false;
-        }
-
-        bool initialized = false;
-        CoroutineRunner.Instance.RunCoroutineWithResult<bool>(WaitForProxyInitialization(guid, storage, proxy), success => initialized = success);
-
-        return initialized;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed for GUID: {guid}, error: {e.Message}", DebugLogger.Category.Storage);
-        return false;
-      }
-    }
-
-    private static IEnumerator WaitForProxyInitialization(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
-    {
-      int retries = 30;
-      float delay = 0.05f;
-      for (int i = 0; i < retries; i++)
-      {
-        if (proxy != null && proxy.configuration != null)
-        {
-          Property property = storage.GetProperty(storage.transform);
-          if (property != null)
-          {
-            storage.ParentProperty = property;
-            proxy.CreateWorldspaceUI();
-            property.AddConfigurable(proxy);
-
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"WaitForProxyInitialization: Completed for GUID: {guid}", DebugLogger.Category.Storage);
-            yield return true;
-            yield break;
-          }
-        }
-        yield return new WaitForSeconds(delay);
-      }
-      DebugLogger.Log(DebugLogger.LogLevel.Error, $"WaitForProxyInitialization: Failed for GUID: {guid} after {retries} retries", DebugLogger.Category.Storage);
-      yield return false;
-    }
-
-    private static void CacheCrossSprite()
-    {
-      CrossSprite = GetCrossSprite();
-      if (CrossSprite == null)
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "CacheCrossSprite: Failed to load cross sprite", DebugLogger.Category.Storage);
-      else
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "CacheCrossSprite: Successfully cached cross sprite", DebugLogger.Category.Storage);
-    }
-
-    public static Sprite GetCrossSprite()
-    {
-      if (CrossSprite != null)
-        return CrossSprite;
-
-      var prefab = GetPrefabGameObject("Supplier Stash");
-      if (prefab == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Supplier Stash prefab not found", DebugLogger.Category.Storage);
-        return null;
-      }
-      else
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetCrossSprite: Prefab hierarchy:\n{DebugTransformHierarchy(prefab.transform)}", DebugLogger.Category.Storage);
-      }
-
-      var iconObj = prefab.transform.Find("Dead drop hopper/Icon");
-      if (iconObj == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Icon GameObject not found in Supplier Stash prefab", DebugLogger.Category.Storage);
-        return null;
-      }
-
-      var renderer = iconObj.GetComponent<MeshRenderer>();
-      if (renderer == null || renderer.material == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No MeshRenderer or material found on Icon GameObject", DebugLogger.Category.Storage);
-        return null;
-      }
-
-      var texture = renderer.material.mainTexture as Texture2D;
-      if (texture == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No Texture2D found in material", DebugLogger.Category.Storage);
-        return null;
-      }
-      // Create Sprite from Texture2D
-      var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
-      if (sprite != null)
-      {
-        sprite.name = "Cross";
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetCrossSprite: Created sprite '{sprite.name}' from Texture2D '{texture.name}'", DebugLogger.Category.Storage);
-      }
-      CrossSprite = sprite;
-      return sprite;
-    }
-
-    public static Sprite GetPackagedSprite(ItemDefinition product, ItemDefinition packaging)
-    {
-      if (product == null || packaging == null)
-        return product?.Icon;
-
-      var productIconManager = ProductIconManager.Instance;
-      if (productIconManager == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: ProductIconManager instance is null", DebugLogger.Category.Storage);
-        return product?.Icon;
-      }
-
-      var sprite = productIconManager.GetIcon(product.ID, packaging.ID);
-      if (sprite == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: Sprite is null", DebugLogger.Category.Storage);
-        return product?.Icon;
-      }
-      sprite.name = $"{product.Name} ({packaging.Name})";
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetPackagedSprite: Created sprite '{sprite.name}' for product {product.ID}, packaging {packaging.ID}", DebugLogger.Category.Storage);
-      return sprite;
-    }
-
-    public static ConfigPanel GetStorageConfigPanelTemplate()
-    {
-      try
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "GetStorageConfigPanelTemplate: Starting",
-            DebugLogger.Category.Storage);
-
-        if (ConfigPanelTemplate != null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Returning cached template",
-              DebugLogger.Category.Storage);
-          return ConfigPanelTemplate;
-        }
-
-        // Get template from PotConfigPanel
-        Transform storageTransform = GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "");
-        if (storageTransform == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              "GetStorageConfigPanelTemplate: storageTransform is null",
-              DebugLogger.Category.Storage);
-          return null;
-        }
-
-        GameObject storageObj = Object.Instantiate(storageTransform.gameObject);
-        storageObj.name = "StorageConfigPanel";
-        if (storageObj.GetComponent<CanvasRenderer>() == null)
-        {
-          storageObj.AddComponent<CanvasRenderer>();
-        }
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "GetStorageConfigPanelTemplate: Instantiated StorageConfigPanel",
-            DebugLogger.Category.Storage);
-
-        // Remove default script
-        var defaultScript = storageObj.GetComponent<PotConfigPanel>();
-        if (defaultScript != null)
-        {
-          Object.Destroy(defaultScript);
-        }
-
-        // Add StorageConfigPanel
-        StorageConfigPanel configPanel = storageObj.GetComponent<StorageConfigPanel>();
-        if (configPanel == null)
-        {
-          configPanel = storageObj.AddComponent<StorageConfigPanel>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Added StorageConfigPanel",
-              DebugLogger.Category.Storage);
-        }
-
-        // Remove unnecessary components
-        foreach (string partName in new[] { "Additive2", "Additive3", "Botanist", "ObjectFieldUI", "SupplyUI", "Seed" })
-        {
-          var part = storageObj.transform.Find(partName);
-          if (part != null)
-          {
-            Object.Destroy(part.gameObject);
-          }
-        }
-
-        // Setup StorageItemUI
-        Transform itemFieldUITransform = storageObj.transform.Find("Additive1");
-        if (itemFieldUITransform == null)
-        {
-          // Fallback: Instantiate from PotConfigPanel prefab
-          var potPanel = GetPrefabGameObject("PotConfigPanel");
-          if (potPanel == null)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
-                "GetStorageConfigPanelTemplate: PotConfigPanel prefab not found",
-                DebugLogger.Category.Storage);
-            return null;
-          }
-          var templateUI = potPanel.GetComponentInChildren<ItemFieldUI>();
-          if (templateUI == null)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
-                "GetStorageConfigPanelTemplate: ItemFieldUI not found in PotConfigPanel",
-                DebugLogger.Category.Storage);
-            return null;
-          }
-          itemFieldUITransform = Object.Instantiate(templateUI.gameObject, storageObj.transform, false).transform;
-          itemFieldUITransform.name = "StorageItemUI";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Instantiated StorageItemUI from prefab",
-              DebugLogger.Category.Storage);
-        }
-
-        GameObject itemFieldUIObj = itemFieldUITransform.gameObject;
-        itemFieldUIObj.SetActive(true);
-        var itemFieldUI = itemFieldUIObj.GetComponent<ItemFieldUI>();
-        if (itemFieldUI == null)
-        {
-          itemFieldUI = itemFieldUIObj.AddComponent<ItemFieldUI>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Added ItemFieldUI to StorageItemUI",
-              DebugLogger.Category.Storage);
-        }
-        if (itemFieldUIObj.GetComponent<CanvasRenderer>() == null)
-        {
-          itemFieldUIObj.AddComponent<CanvasRenderer>();
-        }
-
-        configPanel.StorageItemUI = itemFieldUI;
-        if (configPanel.StorageItemUI == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              "GetStorageConfigPanelTemplate: Failed to assign StorageItemUI",
-              DebugLogger.Category.Storage);
-          return null;
-        }
-
-        // Setup Title and Description
-        TextMeshProUGUI titleText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
-            .FirstOrDefault(t => t.gameObject.name == "Title");
-        if (titleText != null)
-        {
-          titleText.text = "Assign Item";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Set Title to 'Assign Item'",
-              DebugLogger.Category.Storage);
-        }
-        TextMeshProUGUI descText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
-            .FirstOrDefault(t => t.gameObject.name == "Description");
-        if (descText != null)
-        {
-          descText.text = "Select the item to assign to this shelf";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Set Description",
-              DebugLogger.Category.Storage);
-        }
-
-        // Setup QualityFieldUI
-        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
-        if (dryingRackPanelObj == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              "GetStorageConfigPanelTemplate: DryingRackPanel prefab not found",
-              DebugLogger.Category.Storage);
-          return null;
-        }
-        var qualityFieldUIObj = dryingRackPanelObj.GetComponentInChildren<QualityFieldUI>();
-        if (qualityFieldUIObj == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              "GetStorageConfigPanelTemplate: QualityFieldUI not found in DryingRackPanel",
-              DebugLogger.Category.Storage);
-          return null;
-        }
-        var qualityUIObj = Object.Instantiate(qualityFieldUIObj.gameObject, storageObj.transform, false);
-        qualityUIObj.name = "QualityFieldUI";
-        qualityUIObj.transform.Find("Description").gameObject.SetActive(false);
-        qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Quality";
-        qualityUIObj.SetActive(false);
-
-        var qualityRect = qualityUIObj.GetComponent<RectTransform>();
-        var itemFieldRect = itemFieldUIObj.GetComponent<RectTransform>();
-        if (qualityRect != null && itemFieldRect != null)
-        {
-          qualityRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 75f);
-          itemFieldRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y + 10f);
-        }
-
-        configPanel.QualityUI = qualityUIObj.GetComponent<QualityFieldUI>();
-        if (configPanel.QualityUI == null)
-        {
-          configPanel.QualityUI = qualityUIObj.AddComponent<QualityFieldUI>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              "GetStorageConfigPanelTemplate: Added QualityFieldUI to QualityFieldUI",
-              DebugLogger.Category.Storage);
-        }
-        if (qualityUIObj.GetComponent<CanvasRenderer>() == null)
-        {
-          qualityUIObj.AddComponent<CanvasRenderer>();
-        }
-
-        ConfigPanelTemplate = configPanel;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            "GetStorageConfigPanelTemplate: Template initialized successfully",
-            DebugLogger.Category.Storage);
-        return configPanel;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"GetStorageConfigPanelTemplate: Failed, error: {e.Message}\nStackTrace: {e.StackTrace}",
-            DebugLogger.Category.Storage);
-        return null;
-      }
     }
 
     // Method: CanStackWithMinQuality
@@ -738,6 +395,353 @@ namespace NoLazyWorkers.General
 
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetItemQuantityInShelf: Found {qty} of {targetItem.ID} in shelf {shelf.GUID}", [DebugLogger.Category.Storage, DebugLogger.Category.Packager]);
       return qty;
+    }
+  }
+
+  public static class StorageConfigUtilities
+  {
+    public static void InitializeStorageModule()
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStorageModule: Starting", DebugLogger.Category.Storage);
+      GetStorageConfigPanelTemplate();
+      CacheCrossSprite();
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorageModule: ConfigPanelTemplate {(ConfigPanelTemplate != null ? "initialized" : "null")}", DebugLogger.Category.Storage);
+    }
+
+    public static bool InitializeStorage(Guid guid, PlaceableStorageEntity storage)
+    {
+      try
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Called for GUID: {guid}, storage: {(storage != null ? storage.name : "null")}", DebugLogger.Category.Storage);
+
+        if (storage == null || guid == Guid.Empty)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: storage is null or guid is empty ({guid})", DebugLogger.Category.Storage);
+          return false;
+        }
+
+        if (!Storage.ContainsKey(guid))
+        {
+          Storage[guid] = storage;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}, Storage count: {Storage.Count}", DebugLogger.Category.Storage);
+        }
+
+        var proxy = StorageConfigurableProxy.AttachToStorage(storage);
+        if (proxy == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed to attach proxy for GUID: {guid}", DebugLogger.Category.Storage);
+          return false;
+        }
+
+        bool initialized = false;
+        CoroutineRunner.Instance.RunCoroutineWithResult<bool>(WaitForProxyInitialization(guid, storage, proxy), success => initialized = success);
+
+        return initialized;
+      }
+      catch (Exception e)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed for GUID: {guid}, error: {e.Message}", DebugLogger.Category.Storage);
+        return false;
+      }
+    }
+
+    private static IEnumerator WaitForProxyInitialization(Guid guid, PlaceableStorageEntity storage, StorageConfigurableProxy proxy)
+    {
+      int retries = 30;
+      float delay = 0.05f;
+      for (int i = 0; i < retries; i++)
+      {
+        if (proxy != null && proxy.configuration != null)
+        {
+          Property property = storage.GetProperty(storage.transform);
+          if (property != null)
+          {
+            storage.ParentProperty = property;
+            proxy.CreateWorldspaceUI();
+            property.AddConfigurable(proxy);
+
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"WaitForProxyInitialization: Completed for GUID: {guid}", DebugLogger.Category.Storage);
+            yield return true;
+            yield break;
+          }
+        }
+        yield return new WaitForSeconds(delay);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Error, $"WaitForProxyInitialization: Failed for GUID: {guid} after {retries} retries", DebugLogger.Category.Storage);
+      yield return false;
+    }
+
+    public static void CacheCrossSprite()
+    {
+      CrossSprite = GetCrossSprite();
+      if (CrossSprite == null)
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "CacheCrossSprite: Failed to load cross sprite", DebugLogger.Category.Storage);
+      else
+        DebugLogger.Log(DebugLogger.LogLevel.Info, "CacheCrossSprite: Successfully cached cross sprite", DebugLogger.Category.Storage);
+    }
+
+    public static Sprite GetCrossSprite()
+    {
+      if (CrossSprite != null)
+        return CrossSprite;
+
+      var prefab = GetPrefabGameObject("Supplier Stash");
+      if (prefab == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Supplier Stash prefab not found", DebugLogger.Category.Storage);
+        return null;
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetCrossSprite: Prefab hierarchy:\n{DebugTransformHierarchy(prefab.transform)}", DebugLogger.Category.Storage);
+      }
+
+      var iconObj = prefab.transform.Find("Dead drop hopper/Icon");
+      if (iconObj == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Icon GameObject not found in Supplier Stash prefab", DebugLogger.Category.Storage);
+        return null;
+      }
+
+      var renderer = iconObj.GetComponent<MeshRenderer>();
+      if (renderer == null || renderer.material == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No MeshRenderer or material found on Icon GameObject", DebugLogger.Category.Storage);
+        return null;
+      }
+
+      var texture = renderer.material.mainTexture as Texture2D;
+      if (texture == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No Texture2D found in material", DebugLogger.Category.Storage);
+        return null;
+      }
+      // Create Sprite from Texture2D
+      var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+      if (sprite != null)
+      {
+        sprite.name = "Cross";
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetCrossSprite: Created sprite '{sprite.name}' from Texture2D '{texture.name}'", DebugLogger.Category.Storage);
+      }
+      CrossSprite = sprite;
+      return sprite;
+    }
+
+    public static Sprite GetPackagedSprite(ItemDefinition product, ItemDefinition packaging)
+    {
+      if (product == null || packaging == null)
+        return product?.Icon;
+
+      var productIconManager = ProductIconManager.Instance;
+      if (productIconManager == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: ProductIconManager instance is null", DebugLogger.Category.Storage);
+        return product?.Icon;
+      }
+
+      var sprite = productIconManager.GetIcon(product.ID, packaging.ID);
+      if (sprite == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: Sprite is null", DebugLogger.Category.Storage);
+        return product?.Icon;
+      }
+      sprite.name = $"{product.Name} ({packaging.Name})";
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetPackagedSprite: Created sprite '{sprite.name}' for product {product.ID}, packaging {packaging.ID}", DebugLogger.Category.Storage);
+      return sprite;
+    }
+
+    public static ConfigPanel GetStorageConfigPanelTemplate()
+    {
+      try
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Starting",
+            DebugLogger.Category.Storage);
+
+        if (ConfigPanelTemplate != null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Returning cached template",
+              DebugLogger.Category.Storage);
+          return ConfigPanelTemplate;
+        }
+
+        // Get template from PotConfigPanel
+        Transform storageTransform = GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "");
+        if (storageTransform == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: storageTransform is null",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+
+        GameObject storageObj = Object.Instantiate(storageTransform.gameObject);
+        storageObj.name = "StorageConfigPanel";
+        if (storageObj.GetComponent<CanvasRenderer>() == null)
+        {
+          storageObj.AddComponent<CanvasRenderer>();
+        }
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Instantiated StorageConfigPanel",
+            DebugLogger.Category.Storage);
+
+        // Remove default script
+        var defaultScript = storageObj.GetComponent<PotConfigPanel>();
+        if (defaultScript != null)
+        {
+          Object.Destroy(defaultScript);
+        }
+
+        // Add StorageConfigPanel
+        StorageConfigPanel configPanel = storageObj.GetComponent<StorageConfigPanel>();
+        if (configPanel == null)
+        {
+          configPanel = storageObj.AddComponent<StorageConfigPanel>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added StorageConfigPanel",
+              DebugLogger.Category.Storage);
+        }
+
+        // Remove unnecessary components
+        foreach (string partName in new[] { "Additive2", "Additive3", "Botanist", "ObjectFieldUI", "SupplyUI", "Seed" })
+        {
+          var part = storageObj.transform.Find(partName);
+          if (part != null)
+          {
+            Object.Destroy(part.gameObject);
+          }
+        }
+
+        // Setup StorageItemUI
+        Transform itemFieldUITransform = storageObj.transform.Find("Additive1");
+        if (itemFieldUITransform == null)
+        {
+          // Fallback: Instantiate from PotConfigPanel prefab
+          var potPanel = GetPrefabGameObject("PotConfigPanel");
+          if (potPanel == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                "GetStorageConfigPanelTemplate: PotConfigPanel prefab not found",
+                DebugLogger.Category.Storage);
+            return null;
+          }
+          var templateUI = potPanel.GetComponentInChildren<ItemFieldUI>();
+          if (templateUI == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error,
+                "GetStorageConfigPanelTemplate: ItemFieldUI not found in PotConfigPanel",
+                DebugLogger.Category.Storage);
+            return null;
+          }
+          itemFieldUITransform = Object.Instantiate(templateUI.gameObject, storageObj.transform, false).transform;
+          itemFieldUITransform.name = "StorageItemUI";
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Instantiated StorageItemUI from prefab",
+              DebugLogger.Category.Storage);
+        }
+
+        GameObject itemFieldUIObj = itemFieldUITransform.gameObject;
+        itemFieldUIObj.SetActive(true);
+        var itemFieldUI = itemFieldUIObj.GetComponent<ItemFieldUI>();
+        if (itemFieldUI == null)
+        {
+          itemFieldUI = itemFieldUIObj.AddComponent<ItemFieldUI>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added ItemFieldUI to StorageItemUI",
+              DebugLogger.Category.Storage);
+        }
+        if (itemFieldUIObj.GetComponent<CanvasRenderer>() == null)
+        {
+          itemFieldUIObj.AddComponent<CanvasRenderer>();
+        }
+
+        configPanel.StorageItemUI = itemFieldUI;
+        if (configPanel.StorageItemUI == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: Failed to assign StorageItemUI",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+
+        // Setup Title and Description
+        TextMeshProUGUI titleText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+            .FirstOrDefault(t => t.gameObject.name == "Title");
+        if (titleText != null)
+        {
+          titleText.text = "Assign Item";
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Set Title to 'Assign Item'",
+              DebugLogger.Category.Storage);
+        }
+        TextMeshProUGUI descText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
+            .FirstOrDefault(t => t.gameObject.name == "Description");
+        if (descText != null)
+        {
+          descText.text = "Select the item to assign to this shelf";
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Set Description",
+              DebugLogger.Category.Storage);
+        }
+
+        // Setup QualityFieldUI
+        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
+        if (dryingRackPanelObj == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: DryingRackPanel prefab not found",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+        var qualityFieldUIObj = dryingRackPanelObj.GetComponentInChildren<QualityFieldUI>();
+        if (qualityFieldUIObj == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "GetStorageConfigPanelTemplate: QualityFieldUI not found in DryingRackPanel",
+              DebugLogger.Category.Storage);
+          return null;
+        }
+        var qualityUIObj = Object.Instantiate(qualityFieldUIObj.gameObject, storageObj.transform, false);
+        qualityUIObj.name = "QualityFieldUI";
+        qualityUIObj.transform.Find("Description").gameObject.SetActive(false);
+        qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Quality";
+        qualityUIObj.SetActive(false);
+
+        var qualityRect = qualityUIObj.GetComponent<RectTransform>();
+        var itemFieldRect = itemFieldUIObj.GetComponent<RectTransform>();
+        if (qualityRect != null && itemFieldRect != null)
+        {
+          qualityRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y - 75f);
+          itemFieldRect.anchoredPosition = new Vector2(itemFieldRect.anchoredPosition.x, itemFieldRect.anchoredPosition.y + 10f);
+        }
+
+        configPanel.QualityUI = qualityUIObj.GetComponent<QualityFieldUI>();
+        if (configPanel.QualityUI == null)
+        {
+          configPanel.QualityUI = qualityUIObj.AddComponent<QualityFieldUI>();
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              "GetStorageConfigPanelTemplate: Added QualityFieldUI to QualityFieldUI",
+              DebugLogger.Category.Storage);
+        }
+        if (qualityUIObj.GetComponent<CanvasRenderer>() == null)
+        {
+          qualityUIObj.AddComponent<CanvasRenderer>();
+        }
+
+        ConfigPanelTemplate = configPanel;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            "GetStorageConfigPanelTemplate: Template initialized successfully",
+            DebugLogger.Category.Storage);
+        return configPanel;
+      }
+      catch (Exception e)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"GetStorageConfigPanelTemplate: Failed, error: {e.Message}\nStackTrace: {e.StackTrace}",
+            DebugLogger.Category.Storage);
+        return null;
+      }
     }
   }
 

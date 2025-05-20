@@ -43,17 +43,18 @@ namespace NoLazyWorkers.General
       _prioritizedRoute = route;
       itemToRetrieveTemplate = route.Item;
       maxMoveAmount = route.Quantity;
-      skipPickup = route.PickupLocation == null;
-      assignedRoute = route.PickupLocation != null ? new TransitRoute(route.PickupLocation, route.Destination) : null;
+      skipPickup = route.Source == null;
+      assignedRoute = route.Source != null ? new TransitRoute(route.Source, route.Destination) : null;
       _reservedSlot = route.InventorySlot;
       EmployeeUtilities.SetReservedSlot(this, _reservedSlot);
 
-      base.Initialize(assignedRoute, route.Item, route.Quantity, skipPickup);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.Initialize: Initialized for NPC={Npc.fullName}, item={route.Item.ID}, qty={route.Quantity}, pickup={route.PickupLocation?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID}", DebugLogger.Category.AllEmployees);
-
+      if (assignedRoute != null)
+      {
+        base.Initialize(assignedRoute, route.Item, route.Quantity, skipPickup);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.Initialize: Initialized for NPC={Npc.fullName}, item={route.Item.ID}, qty={route.Quantity}, pickup={route.Source?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID}", DebugLogger.Category.AllEmployees);
+      }
       if (skipPickup)
       {
-        // Inventory route: Manually start delivery
         currentState = EState.WalkingToDestination;
         MoveToDestination();
       }
@@ -79,11 +80,12 @@ namespace NoLazyWorkers.General
 
     private void MoveToDestination()
     {
-      var accessPoint = NavMeshUtility.GetAccessPoint(assignedRoute?.Destination ?? _prioritizedRoute?.Destination, Npc);
+      var destination = assignedRoute?.Destination ?? _prioritizedRoute?.Destination;
+      var accessPoint = destination != null ? NavMeshUtility.GetAccessPoint(destination, Npc) : null;
       if (accessPoint != null)
       {
         Npc.Movement.SetDestination(accessPoint.position);
-        StartCoroutine(CheckArrival(assignedRoute?.Destination ?? _prioritizedRoute?.Destination, () =>
+        StartCoroutine(CheckArrival(destination, () =>
         {
           currentState = EState.Placing;
           PlaceItem();
@@ -91,7 +93,7 @@ namespace NoLazyWorkers.General
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvancedMoveItemBehaviour.MoveToDestination: No access point for destination={_prioritizedRoute?.Destination.GUID}", DebugLogger.Category.AllEmployees);
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvancedMoveItemBehaviour.MoveToDestination: No access point for destination={destination?.GUID}", DebugLogger.Category.AllEmployees);
         Disable_Networked(null);
       }
     }
@@ -131,6 +133,7 @@ namespace NoLazyWorkers.General
         var destination = assignedRoute?.Destination ?? _prioritizedRoute?.Destination;
         destination?.ReserveInputSlotsForItem(_reservedSlot.ItemInstance.GetCopy(grabbedAmount), Npc.NetworkObject);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.TakeItem: Skipped pickup for {grabbedAmount} of {itemToRetrieveTemplate.ID} from inventory", DebugLogger.Category.AllEmployees);
+        MoveToDestination();
         return;
       }
       if (_reservedSlot.ItemInstance != null)
@@ -146,7 +149,7 @@ namespace NoLazyWorkers.General
         Disable_Networked(null);
         return;
       }
-      ItemSlot sourceSlot = assignedRoute.Source.GetFirstSlotContainingTemplateItem(itemToRetrieveTemplate, ITransitEntity.ESlotType.Output);
+      ItemSlot sourceSlot = _prioritizedRoute?.PickupSlots.FirstOrDefault(s => s.Quantity >= amountToGrab && s.ItemInstance.CanStackWith(itemToRetrieveTemplate, false));
       if (sourceSlot == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvancedMoveItemBehaviour.TakeItem: No source slot for item={itemToRetrieveTemplate.ID}", DebugLogger.Category.AllEmployees);
@@ -157,6 +160,8 @@ namespace NoLazyWorkers.General
       grabbedAmount = amountToGrab;
       sourceSlot.ChangeQuantity(-amountToGrab);
       _reservedSlot.InsertItem(copy);
+      sourceSlot.ApplyLock(Npc.NetworkObject, "Grabbing");
+      _reservedSlot.ApplyLock(Npc.NetworkObject, "Grabbing");
       assignedRoute.Destination.ReserveInputSlotsForItem(copy, Npc.NetworkObject);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.TakeItem: Grabbed {amountToGrab} of {itemToRetrieveTemplate.ID} into slot {_reservedSlot.GetHashCode()}", DebugLogger.Category.AllEmployees);
     }
@@ -190,15 +195,23 @@ namespace NoLazyWorkers.General
         yield return new WaitForSeconds(0.5f);
         destination?.RemoveSlotLocks(Npc.NetworkObject);
         ItemInstance copy = _reservedSlot.ItemInstance.GetCopy(grabbedAmount);
-        if (destination != null && destination.GetInputCapacityForItem(copy, Npc) >= grabbedAmount)
+        var destinationSlots = _prioritizedRoute?.DestinationSlots;
+        int remaining = grabbedAmount;
+        foreach (var slot in destinationSlots.Where(s => s != null && !s.IsLocked))
         {
-          destination.InsertItemIntoInput(copy, Npc);
-          _reservedSlot.ChangeQuantity(-grabbedAmount);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.PlaceItem: Delivered {grabbedAmount} of {itemToRetrieveTemplate.ID} to {destination.GUID}", DebugLogger.Category.AllEmployees);
+          int capacity = slot.GetCapacityForItem(copy);
+          int amount = Mathf.Min(remaining, capacity);
+          if (amount <= 0) continue;
+          slot.InsertItem(copy.GetCopy(amount));
+          slot.ApplyLock(Npc.NetworkObject, "Delivery");
+          remaining -= amount;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour.PlaceItem: Delivered {amount} of {itemToRetrieveTemplate.ID} to slot {slot.GetHashCode()}", DebugLogger.Category.AllEmployees);
+          if (remaining <= 0) break;
         }
-        else
+        _reservedSlot.ChangeQuantity(-grabbedAmount);
+        if (remaining > 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvancedMoveItemBehaviour.PlaceItem: Destination lacks capacity for {grabbedAmount} of {itemToRetrieveTemplate.ID}", DebugLogger.Category.AllEmployees);
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvancedMoveItemBehaviour.PlaceItem: Could not deliver {remaining} of {itemToRetrieveTemplate.ID}", DebugLogger.Category.AllEmployees);
           Disable_Networked(null);
         }
         yield return new WaitForSeconds(0.5f);
