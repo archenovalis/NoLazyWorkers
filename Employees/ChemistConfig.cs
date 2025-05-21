@@ -41,15 +41,15 @@ namespace NoLazyWorkers.Employees
       {
         _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
       }
-      public bool HandleIdle(Behaviour behaviour, StateData state) => false;
-      public bool HandleGrabbing(Behaviour behaviour, StateData state) => false;
-      public bool HandleMoving(Behaviour behaviour, StateData state) => false;
-      public bool HandleDelivery(Behaviour behaviour, StateData state) => false;
-      public bool HandleOperating(Behaviour behaviour, StateData state) => false;
-      public bool HandleInventoryItems(Behaviour behaviour, StateData state) => false;
-      public bool HandlePlanning(Behaviour behaviour, StateData state) => false;
-      public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
-      public bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_chemist, this, npc, station, out employeeBehaviour);
+      public bool HandleIdle(Employee employee, StateData state) => false;
+      public bool HandleTransfer(Employee employee, StateData state) => false;
+      public bool HandleMoving(Employee employee, StateData state) => false;
+      public bool HandleDelivery(Employee employee, StateData state) => false;
+      public bool HandleOperating(Employee employee, StateData state) => false;
+      public bool HandleInventoryItems(Employee employee, StateData state) => false;
+      public bool HandlePlanning(Employee employee, StateData state) => false;
+      public bool HandleCompleted(Employee employee, StateData state) => false;
+      public bool GetEmployeeBehaviour(NPC npc, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_chemist, this, out employeeBehaviour);
     }
   }
   public static class ChemistUtilities
@@ -64,38 +64,26 @@ namespace NoLazyWorkers.Employees
       return chemistBehaviour;
     }
 
-    public static bool RetrieveBehaviour(Chemist chemist, ChemistAdapter adapter, NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour)
+    public static bool RetrieveBehaviour(Chemist chemist, ChemistAdapter adapter, out EmployeeBehaviour employeeBehaviour)
     {
       employeeBehaviour = null;
-      if (npc == null)
+      if (chemist == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetEmployeeBehaviour: Invalid NPC for chemist {chemist.fullName}", DebugLogger.Category.Chemist);
         return false;
       }
-      if (!EmployeeAdapters.ContainsKey(npc.GUID) || EmployeeAdapters[npc.GUID] == null)
+      if (!EmployeeAdapters.ContainsKey(chemist.GUID) || EmployeeAdapters[chemist.GUID] == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetEmployeeBehaviour: No adapter found for NPC {npc.fullName}, creating new", DebugLogger.Category.Chemist);
-        EmployeeAdapters[npc.GUID] = adapter;
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetEmployeeBehaviour: No adapter found for NPC {chemist.fullName}, creating new", DebugLogger.Category.Chemist);
+        EmployeeAdapters[chemist.GUID] = adapter;
       }
 
-      var chemistBehaviour = ActiveBehaviours.TryGetValue(npc.GUID, out var beh) ? beh as ChemistBehaviour : null;
+      var chemistBehaviour = ActiveBehaviours.TryGetValue(chemist.GUID, out var beh) ? beh as ChemistBehaviour : null;
       if (chemistBehaviour == null)
       {
-        if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
-        {
-          if (station is MixingStation)
-            stationAdapter = new MixingStationAdapter(station as MixingStation);
-          /* else if (station is ChemistryStation)
-            stationAdapter = new ChemistryStationAdapter(station as ChemistryStation);
-          else if (station is LabOven)
-            stationAdapter = new LabOvenAdapter(station as LabOven);
-          else if (station is Cauldron)
-            stationAdapter = new CauldronAdapter(station as Cauldron); */
-          StationAdapters[station.GUID] = stationAdapter;
-        }
         chemistBehaviour = new ChemistBehaviour(chemist, adapter);
-        ActiveBehaviours[npc.GUID] = chemistBehaviour;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created ChemistBehaviour for NPC {npc.fullName} and station {station.GUID}", DebugLogger.Category.Chemist);
+        ActiveBehaviours[chemist.GUID] = chemistBehaviour;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created ChemistBehaviour for NPC {chemist.fullName}", DebugLogger.Category.Chemist);
       }
 
       employeeBehaviour = chemistBehaviour;

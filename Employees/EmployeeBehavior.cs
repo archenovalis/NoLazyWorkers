@@ -13,7 +13,6 @@ using UnityEngine;
 using static NoLazyWorkers.Stations.StationExtensions;
 using static NoLazyWorkers.General.StorageUtilities;
 
-using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using ScheduleOne.Property;
@@ -23,6 +22,11 @@ using ScheduleOne.NPCs.Behaviour;
 using static NoLazyWorkers.NoLazyUtilities;
 using NoLazyWorkers.General;
 using NoLazyWorkers.Stations;
+using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+using FishNet.Object;
+using FishNet.Serializing;
+using FishNet.Transporting;
+using static FishNet.Object.NetworkBehaviour;
 
 namespace NoLazyWorkers.Employees
 {
@@ -30,24 +34,24 @@ namespace NoLazyWorkers.Employees
   {
     public interface IEmployeeAdapter
     {
-      bool HandleIdle(Behaviour behaviour, StateData state);
-      bool HandlePlanning(Behaviour behaviour, StateData state);
-      bool HandleMoving(Behaviour behaviour, StateData state);
-      bool HandleGrabbing(Behaviour behaviour, StateData state);
-      bool HandleDelivery(Behaviour behaviour, StateData state);
-      bool HandleOperating(Behaviour behaviour, StateData state);
-      bool HandleCompleted(Behaviour behaviour, StateData state);
-      bool HandleInventoryItems(Behaviour behaviour, StateData state);
+      bool HandleIdle(Employee behaviour, StateData state);
+      bool HandlePlanning(Employee behaviour, StateData state);
+      bool HandleMoving(Employee behaviour, StateData state);
+      bool HandleTransfer(Employee behaviour, StateData state);
+      bool HandleDelivery(Employee behaviour, StateData state);
+      bool HandleOperating(Employee behaviour, StateData state);
+      bool HandleCompleted(Employee behaviour, StateData state);
+      bool HandleInventoryItems(Employee behaviour, StateData state);
       Property AssignedProperty { get; }
       NpcSubType SubType { get; }
-      bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour);
+      bool GetEmployeeBehaviour(NPC npc, out EmployeeBehaviour employeeBehaviour);
     }
 
     public enum NpcSubType { Chemist, Packager, Botanist, Cleaner, Driver }
 
     public enum EState
     {
-      Idle, Planning, Moving, Grabbing, Delivery, Operating, Completed
+      Idle, Planning, Moving, Transfer, Delivery, Operating, Completed
     }
 
     public class StateData
@@ -92,8 +96,6 @@ namespace NoLazyWorkers.Employees
           throw new ArgumentException("No valid pickup slots for inventory route");
         if (DestinationSlots.Count == 0)
           throw new ArgumentException("No valid delivery slots");
-        inventorySlot.ApplyLock(npc.NetworkObject, "Route inventory lock");
-        destinationSlots.ApplyLocks(npc, "Route delivery lock");
       }
     }
 
@@ -111,15 +113,15 @@ namespace NoLazyWorkers.Employees
 
       public PrioritizedRoute(TransferRequest request, int priority)
       {
-        Item = request.Item;
+        Item = request.Item ?? throw new ArgumentNullException(nameof(request.Item));
         Quantity = request.Quantity;
-        InventorySlot = request.InventorySlot;
+        InventorySlot = request.InventorySlot ?? throw new ArgumentNullException(nameof(request.InventorySlot));
         Source = request.Source;
         PickupSlots = request.PickupSlots;
-        Destination = request.Destination;
-        DestinationSlots = request.DestinationSlots;
+        Destination = request.Destination ?? throw new ArgumentNullException(nameof(request.Destination));
+        DestinationSlots = request.DestinationSlots ?? throw new ArgumentNullException(nameof(request.DestinationSlots));
         Priority = priority;
-        TransitRoute = request.Source != null ? new AdvancedTransitRoute(request.Source, request.Destination) : null;
+        TransitRoute = new AdvancedTransitRoute(request.Source, request.Destination);
       }
     }
 
@@ -127,13 +129,14 @@ namespace NoLazyWorkers.Employees
         {
             { typeof(MixingStation), npc => (npc as Chemist)?.StartMixingStationBehaviour },
             { typeof(MixingStationMk2), npc => (npc as Chemist)?.StartMixingStationBehaviour },
+            { typeof(PackagingStation), npc => (npc as Packager)?.PackagingBehaviour },
         };
 
     public static Dictionary<Guid, IEmployeeAdapter> EmployeeAdapters = new();
-    public static Dictionary<IStationAdapter, Behaviour> StationAdapterBehaviours = new();
+    public static Dictionary<IStationAdapter, Employee> StationAdapterBehaviours = new();
     public static Dictionary<Guid, MoveItemBehaviour> ActiveMoveItemBehaviours = new();
     public static Dictionary<Guid, EmployeeBehaviour> ActiveBehaviours = new();
-    public static Dictionary<MoveItemBehaviour, ItemSlot> ReservedSlots = new();
+    public static Dictionary<Guid, List<ItemSlot>> ReservedSlots = new();
     public static Dictionary<Property, List<ItemInstance>> NoDestinationCache = new();
     public static Dictionary<Property, Dictionary<ItemInstance, float>> TimedOutItems = new();
 
@@ -191,7 +194,7 @@ namespace NoLazyWorkers.Employees
       return null;
     }
 
-    public static void RegisterStationBehaviour(Behaviour behaviour, IStationAdapter adapter)
+    public static void RegisterStationBehaviour(Employee behaviour, IStationAdapter adapter)
     {
       StationAdapterBehaviours[adapter] = behaviour;
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Registered station adapter for behaviour {behaviour.GetHashCode()}", DebugLogger.Category.AllEmployees);
@@ -204,97 +207,34 @@ namespace NoLazyWorkers.Employees
           .FirstOrDefault(s => s is PackagingStation p && !s.IsInUse && s.CanRefill(item))?.TransitEntity;
     }
 
-    public static void ApplyLocks(this List<ItemSlot> slots, NPC npc, string reason)
+    public static void SetReservedSlot(Employee employee, ItemSlot slot)
     {
-      foreach (var slot in slots.Where(s => s != null))
-        slot.ApplyLock(npc.NetworkObject, reason);
-    }
-
-    public static void ApplyLocks(this ItemSlot slot, NPC npc, string reason)
-    {
-      slot.ApplyLock(npc.NetworkObject, reason);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ApplyLock: Locked slot {slot.GetHashCode()} for {reason} by NPC={npc.fullName}", DebugLogger.Category.Packager);
-    }
-
-    public static void RemoveLock(this List<ItemSlot> slots)
-    {
-      foreach (var slot in slots.Where(s => s != null))
+      if (!ReservedSlots.TryGetValue(employee.GUID, out var reserved))
       {
-        slot.RemoveLock();
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"RemoveLock: Unlocked slot {slot.GetHashCode()}", DebugLogger.Category.Packager);
+        ReservedSlots[employee.GUID] = new();
+        reserved = ReservedSlots[employee.GUID];
       }
+      reserved.Add(slot);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SetReservedSlot: Set slot {slot.SlotIndex} for NPC={employee.fullName}", DebugLogger.Category.Packager);
     }
 
-    public static void SetReservedSlot(MoveItemBehaviour behaviour, ItemSlot slot)
+    public static ItemSlot GetReservedSlot(Employee employee)
     {
-      ReservedSlots[behaviour] = slot;
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SetReservedSlot: Set slot {slot.GetHashCode()} for behaviour {behaviour.GetHashCode()} for NPC={behaviour.Npc.fullName}", DebugLogger.Category.Packager);
-    }
-
-    public static ItemSlot GetReservedSlot(MoveItemBehaviour behaviour)
-    {
-      ReservedSlots.TryGetValue(behaviour, out var slot);
+      ItemSlot slot = null;
+      if (ReservedSlots.TryGetValue(employee.GUID, out var slots))
+      {
+        slot = slots[0];
+        slots.RemoveAt(0);
+      }
       return slot;
     }
 
-    public static void ReleaseReservations(MoveItemBehaviour behaviour)
+    public static void ReleaseReservations(Employee employee)
     {
-      if (ReservedSlots.TryGetValue(behaviour, out var slot) && slot != null)
+      if (ReservedSlots.TryGetValue(employee.GUID, out var slots) && slots != null)
       {
-        slot.RemoveLock();
-        ReservedSlots.Remove(behaviour);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ReleaseReservations: Released slot {slot.GetHashCode()} for behaviour {behaviour.GetHashCode()} for NPC={behaviour.Npc.fullName}", DebugLogger.Category.Packager);
-      }
-    }
-
-    // New: Centralized route creation method
-    public static TransferRequest CreateTransferRequest(NPC npc, ItemInstance item, int quantity, ITransitEntity pickupLocation, List<ItemSlot> pickupSlots,
-        ITransitEntity deliveryLocation, List<ItemSlot> deliverySlots, bool force = false)
-    {
-      if (item == null || quantity <= 0 || deliveryLocation == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateTransferRequest: Invalid parameters for NPC {npc.fullName}", DebugLogger.Category.AllEmployees);
-        return null;
-      }
-
-      var property = (npc as Employee).AssignedProperty;
-      if (property == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateTransferRequest: Property is null for NPC {npc.fullName}", DebugLogger.Category.AllEmployees);
-        return null;
-      }
-
-      if (!force && IsItemTimedOut(property, item))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CreateTransferRequest: Item {item.ID} is timed out", DebugLogger.Category.AllEmployees);
-        return null;
-      }
-
-      var inventorySlot = npc.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
-      if (inventorySlot == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"CreateTransferRequest: No inventory slot for item {item.ID}", DebugLogger.Category.AllEmployees);
-        return null;
-      }
-
-      if (!npc.Movement.CanGetTo(NavMeshUtility.GetAccessPoint(deliveryLocation, npc).position))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"CreateTransferRequest: Cannot reach destination {deliveryLocation.GUID}", DebugLogger.Category.AllEmployees);
-        return null;
-      }
-
-      try
-      {
-        var request = new TransferRequest(npc, item, quantity, inventorySlot, pickupLocation, pickupSlots, deliveryLocation, deliverySlots);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"CreateTransferRequest: Created request for {quantity} of {item.ID} from {pickupLocation?.GUID.ToString() ?? "inventory"} to {deliveryLocation.GUID}", DebugLogger.Category.AllEmployees);
-        return request;
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateTransferRequest: Failed for item {item.ID}, error: {e}", DebugLogger.Category.AllEmployees);
-        pickupSlots?.RemoveLock();
-        deliverySlots?.RemoveLock();
-        return null;
+        ReservedSlots.Remove(employee.GUID);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ReleaseReservations: Released {slots.Count()} slots for employee {employee.fullName}", DebugLogger.Category.Packager);
       }
     }
   }
@@ -303,7 +243,7 @@ namespace NoLazyWorkers.Employees
   {
     protected NPC Npc;
     protected readonly IEmployeeAdapter Adapter;
-    protected readonly Dictionary<EState, Action<Behaviour, StateData>> StatePackagers;
+    protected readonly Dictionary<EState, Action<Employee, StateData>> StatePackagers;
     public static readonly Dictionary<Guid, StateData> States = new();
     private static readonly Dictionary<Guid, float> StateStartTimes = new();
     private static readonly Dictionary<PrioritizedRoute, (float Time, string Reason)> FailedRoutes = new();
@@ -319,12 +259,12 @@ namespace NoLazyWorkers.Employees
       Npc = npc ?? throw new ArgumentNullException(nameof(npc));
       Adapter = adapter;
       EmployeeUtilities.RegisterEmployeeAdapter(npc, adapter);
-      StatePackagers = new Dictionary<EState, Action<Behaviour, StateData>>
+      StatePackagers = new Dictionary<EState, Action<Employee, StateData>>
       {
           { EState.Idle, HandleIdle },
           { EState.Planning, HandlePlanning },
           { EState.Moving, HandleMoving },
-          { EState.Grabbing, HandleGrabbing },
+          { EState.Transfer, HandleTransfer },
           { EState.Delivery, HandleDelivery },
           { EState.Operating, HandleOperating },
           { EState.Completed, HandleCompleted }
@@ -332,12 +272,11 @@ namespace NoLazyWorkers.Employees
       StateStartTimes[npc.GUID] = Time.time;
     }
 
-    public virtual void Update(Behaviour behaviour)
+    public virtual void Update(Employee employee)
     {
-      if (Npc == null || behaviour == null)
+      if (Npc == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"EmployeeBehaviour.Update: Npc or behaviour is null for {GetType().Name}", DebugLogger.Category.AllEmployees);
-        return;
+        Npc = employee;
       }
       if (!States.TryGetValue(Npc.GUID, out var state))
       {
@@ -350,34 +289,34 @@ namespace NoLazyWorkers.Employees
       switch (state.CurrentState)
       {
         case EState.Idle:
-          HandleIdle(behaviour, state);
+          HandleIdle(employee, state);
           break;
         case EState.Planning:
-          HandlePlanning(behaviour, state);
+          HandlePlanning(employee, state);
           break;
         case EState.Moving:
-          HandleMoving(behaviour, state);
+          HandleMoving(employee, state);
           break;
-        case EState.Grabbing:
-          HandleGrabbing(behaviour, state);
+        case EState.Transfer:
+          HandleTransfer(employee, state);
           break;
         case EState.Delivery:
-          HandleDelivery(behaviour, state);
+          HandleDelivery(employee, state);
           break;
         case EState.Operating:
-          HandleOperating(behaviour, state);
+          HandleOperating(employee, state);
           break;
         case EState.Completed:
-          HandleCompleted(behaviour, state);
+          HandleCompleted(employee, state);
           break;
         default:
           state.CurrentState = EState.Idle;
-          HandleIdle(behaviour, state);
+          HandleIdle(employee, state);
           break;
       }
     }
 
-    public void TransitionState(Behaviour behaviour, StateData state, EState newState, string reason)
+    public void TransitionState(Employee employee, StateData state, EState newState, string reason)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"TransitionState: {Npc.fullName} from {state.CurrentState} to {newState}, reason={reason}, invQty={state.QuantityInventory}, routes={state.ActiveRoutes.Count}", DebugLogger.Category.AllEmployees);
       state.CurrentState = newState;
@@ -407,55 +346,53 @@ namespace NoLazyWorkers.Employees
       return behaviour;
     }
 
-    protected void HandleIdle(Behaviour behaviour, StateData state)
+    protected void HandleIdle(Employee employee, StateData state)
     {
-      if (Adapter?.HandleIdle(behaviour, state) == false)
+      if (Adapter?.HandleIdle(employee, state) == false)
       {
-        (behaviour.Npc as Employee).SetIdle(true);
-        TransitionState(behaviour, state, EState.Planning, "Start route planning");
+        employee.SetIdle(true);
+        TransitionState(employee, state, EState.Planning, "Start route planning");
       }
     }
 
-    public void HandlePlanning(Behaviour behaviour, StateData state)
+    public void HandlePlanning(Employee employee, StateData state)
     {
       // Check for inventory items
-      if (Adapter?.HandleInventoryItems(behaviour, state) == false)
+      if (Adapter?.HandleInventoryItems(employee, state) == false)
       {
-        var inventorySlots = behaviour.Npc.Inventory.ItemSlots
+        var inventorySlots = employee.Inventory.ItemSlots
                     .Where(s => s?.ItemInstance != null && s.Quantity > 0 && !s.IsLocked)
                     .ToList();
         foreach (var slot in inventorySlots)
         {
-          slot.ApplyLocks(behaviour.Npc, "Inventory route planning lock");
-          if (HandleInventoryItem(behaviour, state, slot.ItemInstance))
+          if (HandleInventoryItem(employee, state, slot.ItemInstance))
           {
             slot.RemoveLock();
           }
           slot.RemoveLock();
         }
       }
-      Adapter?.HandlePlanning(behaviour, state);
+      Adapter?.HandlePlanning(employee, state);
     }
 
-    public bool HandleInventoryItem(Behaviour behaviour, StateData state, ItemInstance item)
+    public bool HandleInventoryItem(Employee employee, StateData state, ItemInstance item)
     {
-      var npc = behaviour.Npc as Employee;
-      var shelf = FindShelfForDelivery(npc, item);
+      var shelf = FindShelfForDelivery(employee, item);
       if (shelf == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInventoryItem: No shelf found for item {item.ID}", DebugLogger.Category.Chemist);
-        EmployeeUtilities.AddItemTimeout(npc.AssignedProperty, item);
+        EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, item);
         return false;
       }
 
-      var deliverySlots = (shelf as ITransitEntity).ReserveInputSlotsForItem(item, npc.NetworkObject);
+      var deliverySlots = (shelf as ITransitEntity).ReserveInputSlotsForItem(item, (FishNet.Object.NetworkObject)employee.NetworkObject);
       if (deliverySlots == null || deliverySlots.Count == 0)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInventoryItem: No delivery slots for item {item.ID} on shelf {shelf.GUID}", DebugLogger.Category.Chemist);
         return false;
       }
 
-      var inventorySlot = npc.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance != null && s.ItemInstance.CanStackWith(item, false));
+      var inventorySlot = employee.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance != null && s.ItemInstance.CanStackWith(item, false));
       if (inventorySlot == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInventoryItem: No inventory slot with item {item.ID}", DebugLogger.Category.Chemist);
@@ -463,111 +400,157 @@ namespace NoLazyWorkers.Employees
       }
 
       int quantity = Mathf.Min(inventorySlot.Quantity, deliverySlots.Sum(s => s.GetCapacityForItem(item)));
-      var request = EmployeeUtilities.CreateTransferRequest(npc, item, quantity, null, new List<ItemSlot> { inventorySlot }, shelf, deliverySlots);
+      var request = new TransferRequest(employee, item, quantity, inventorySlot, null, [inventorySlot], shelf, deliverySlots);
       if (request != null)
       {
-        Adapter.GetEmployeeBehaviour(npc, state.Station.TransitEntity as BuildableItem, out var employeeBehaviour);
-        employeeBehaviour.AddRoutes(behaviour, state, new List<TransferRequest> { request });
-        TransitionState(behaviour, state, EState.Grabbing, "Inventory item delivery planned");
+        Adapter.GetEmployeeBehaviour(employee, out var employeeBehaviour);
+        employeeBehaviour.AddRoutes(employee, state, new List<TransferRequest> { request });
+        TransitionState(employee, state, EState.Transfer, "Inventory item delivery planned");
         return true;
       }
       return false;
     }
 
-    protected void HandleMoving(Behaviour behaviour, StateData state)
+    protected void HandleMoving(Employee employee, StateData state)
     {
-      if (!state.IsMoving) return;
-      state.MoveElapsed += Time.deltaTime;
-      if (state.MoveElapsed >= state.MoveTimeout || !Npc.Movement.IsMoving)
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"HandleMoving: NPC={employee?.fullName ?? "null"}, IsMoving={state.IsMoving}, MoveElapsed={state.MoveElapsed}, Npc.IsMoving={employee.Movement.IsMoving}",
+          DebugLogger.Category.AllEmployees);
+
+      if (!state.IsMoving)
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"HandleMoving: State.IsMoving is false for NPC={employee?.fullName ?? "null"}, transitioning to Idle",
+            DebugLogger.Category.AllEmployees);
+        TransitionState(employee, state, EState.Idle, "Not moving");
+        return;
+      }
+
+      state.MoveElapsed += Time.deltaTime;
+      if (state.MoveElapsed >= state.MoveTimeout)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"HandleMoving: Timeout moving to {state.Destination?.Name ?? "null"} for NPC={employee?.fullName ?? "null"}",
+            DebugLogger.Category.AllEmployees);
         state.IsMoving = false;
-        if (state.MoveElapsed >= state.MoveTimeout)
+        TransitionState(employee, state, EState.Idle, "Movement timeout");
+        return;
+      }
+
+      if (!employee.Movement.IsMoving)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"HandleMoving: Npc.Movement.IsMoving is false, checking destination for NPC={employee?.fullName ?? "null"}",
+            DebugLogger.Category.AllEmployees);
+        state.IsMoving = false;
+        if (state.Destination != null && NavMeshUtility.IsAtTransitEntity(state.Destination, employee, 0.4f))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleMoving: Timeout moving to {state.Destination?.Name}, to Idle", DebugLogger.Category.AllEmployees);
-          TransitionState(behaviour, state, EState.Idle, "Movement timeout");
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"HandleMoving: Reached {state.Destination.Name} for NPC={employee?.fullName ?? "null"}",
+              DebugLogger.Category.AllEmployees);
+          StatePackagers[state.CurrentState](employee, state);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleMoving: Reached {state.Destination?.Name}", DebugLogger.Category.AllEmployees);
-          StatePackagers[state.CurrentState](behaviour, state);
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"HandleMoving: Not at destination, transitioning to Idle for NPC={employee?.fullName ?? "null"}",
+              DebugLogger.Category.AllEmployees);
+          TransitionState(employee, state, EState.Idle, "Not at destination");
         }
       }
     }
 
-    protected void HandleGrabbing(Behaviour behaviour, StateData state)
+    protected void HandleTransfer(Employee employee, StateData state)
     {
-      // Allow adapter to override grabbing handling if implemented
-      if (Adapter?.HandleGrabbing(behaviour, state) == true) return;
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleTransfer: Starting for NPC={Npc.fullName}, ActiveRoutes={state.ActiveRoutes.Count}", DebugLogger.Category.AllEmployees);
+      if (Adapter?.HandleTransfer(employee, state) == true) return;
 
-      // Check if there are no active routes
       if (state.ActiveRoutes.Count <= 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: No active route for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-        TransitionState(behaviour, state, EState.Idle, "No active route");
-        return;
-      }
-      // Get the highest priority route
-      state.ActiveRoutes.OrderByDescending(r => r.Priority);
-      var route = state.ActiveRoutes.FirstOrDefault();
-      if (route.Destination == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: No destination for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-        TransitionState(behaviour, state, EState.Idle, "No destination");
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleTransfer: No active routes for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+        TransitionState(employee, state, EState.Idle, "No active route");
         return;
       }
 
-      // Validate route
-      if (route.Source != null) // Standard route (from station or shelf)
+      var route = state.ActiveRoutes.OrderByDescending(r => r.Priority).FirstOrDefault();
+      if (route.Destination == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleTransfer: No destination for NPC={Npc.fullName}, Route Item={route.Item?.ID}", DebugLogger.Category.AllEmployees);
+        HandleFailedRoute(employee, state, route, "No destination");
+        return;
+      }
+
+      if (route.Source != null)
       {
         state.PickupSlots = route.PickupSlots;
-        if (state.PickupSlots.Count == 0 || state.PickupSlots.All(s => s.Quantity <= 0 || (s.IsLocked && s.ActiveLock.LockOwner != Npc.NetworkObject)))
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleTransfer: Checking pickup slots for item={route.Item.ID}, slots={state.PickupSlots.Count}", DebugLogger.Category.AllEmployees);
+        if (state.PickupSlots.Count == 0 || state.PickupSlots.All(s => s.Quantity <= 0 || (s.IsLocked && s.ActiveLock?.LockOwner != Npc.NetworkObject)))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: No valid pickup slots for item={route.Item.ID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          HandleFailedRoute(behaviour, state, route, "No valid pickup slots");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleTransfer: No valid pickup slots for item={route.Item.ID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+          HandleFailedRoute(employee, state, route, "No valid pickup slots");
           return;
         }
       }
-      else // Inventory route
+      else
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleTransfer: Inventory route for item={route.Item.ID}, InventorySlot={route.InventorySlot?.GetHashCode()}", DebugLogger.Category.AllEmployees);
         if (route.InventorySlot == null || route.InventorySlot.Quantity < route.Quantity || !route.InventorySlot.ItemInstance.CanStackWith(route.Item, false))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: Invalid inventory slot for item={route.Item.ID}, qty={route.InventorySlot?.Quantity}, needed={route.Quantity} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          HandleFailedRoute(behaviour, state, route, "Invalid inventory slot");
+          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleTransfer: Invalid inventory slot for item={route.Item.ID}, qty={route.InventorySlot?.Quantity}, needed={route.Quantity} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+          HandleFailedRoute(employee, state, route, "Invalid inventory slot");
           return;
         }
         state.QuantityInventory = route.Quantity;
       }
 
-      // Initialize AdvancedMoveItemBehaviour
       if (ActiveMoveItemBehaviours.TryGetValue(Npc.GUID, out var moveItemBehaviour))
       {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleTransfer: Found moveItemBehaviour for NPC={Npc.fullName}, Type={moveItemBehaviour.GetType().Name}", DebugLogger.Category.AllEmployees);
         if (moveItemBehaviour is AdvancedMoveItemBehaviour advancedBehaviour)
         {
-          advancedBehaviour.Initialize(route);
-          advancedBehaviour.Enable_Networked(null);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleGrabbing: Initialized AdvancedMoveItemBehaviour for item={route.Item.ID}, qty={route.Quantity}, source={route.Source?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          state.ActiveRoutes.Remove(route);
-          TransitionState(behaviour, state, EState.Grabbing, route.Source == null ? "Inventory route initialized" : "Pickup initialized");
-          return;
+          try
+          {
+            advancedBehaviour.Initialize(route);
+            advancedBehaviour.Enable_Networked(null);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleTransfer: Initialized AdvancedMoveItemBehaviour for item={route.Item.ID}, qty={route.Quantity}, source={route.Source?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+            state.ActiveRoutes.Remove(route);
+            TransitionState(employee, state, EState.Moving, route.Source == null ? "Inventory route initialized" : "Pickup initialized");
+            return;
+          }
+          catch (Exception e)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleTransfer: Failed to initialize AdvancedMoveItemBehaviour for NPC={Npc.fullName}, error: {e}", DebugLogger.Category.AllEmployees);
+            HandleFailedRoute(employee, state, route, "Failed to initialize AdvancedMoveItemBehaviour");
+            return;
+          }
         }
         else if (route.TransitRoute != null)
         {
-          moveItemBehaviour.Initialize(route.TransitRoute, route.Item);
-          moveItemBehaviour.Enable_Networked(null);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleGrabbing: Initialized AdvancedMoveItemBehaviour for item={route.Item.ID}, qty={route.Quantity}, source={route.Source?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          state.ActiveRoutes.Remove(route);
-          TransitionState(behaviour, state, EState.Grabbing, route.Source == null ? "Inventory route initialized" : "Pickup initialized");
-          return;
+          try
+          {
+            moveItemBehaviour.Initialize(route.TransitRoute, route.Item, route.Quantity);
+            moveItemBehaviour.Enable_Networked(null);
+            DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleTransfer: Initialized MoveItemBehaviour for item={route.Item.ID}, qty={route.Quantity}, source={route.Source?.GUID.ToString() ?? "inventory"}, dest={route.Destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+            state.ActiveRoutes.Remove(route);
+            TransitionState(employee, state, EState.Moving, route.Source == null ? "Inventory route initialized" : "Pickup initialized");
+            return;
+          }
+          catch (Exception e)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleTransfer: Failed to initialize MoveItemBehaviour for NPC={Npc.fullName}, error: {e}", DebugLogger.Category.AllEmployees);
+            HandleFailedRoute(employee, state, route, "Failed to initialize MoveItemBehaviour");
+            return;
+          }
         }
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleGrabbing: No AdvancedMoveItemBehaviour for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-      HandleFailedRoute(behaviour, state, route, "No AdvancedMoveItemBehaviour");
+      DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleTransfer: No AdvancedMoveItemBehaviour for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
+      HandleFailedRoute(employee, state, route, "No AdvancedMoveItemBehaviour");
     }
 
-    protected void HandleDelivery(Behaviour behaviour, StateData state)
+    protected void HandleDelivery(Employee employee, StateData state)
     {
       // Allow adapter to override delivery handling if implemented
-      if (Adapter?.HandleDelivery(behaviour, state) == true) return;
+      if (Adapter?.HandleDelivery(employee, state) == true) return;
 
       // Check if the station has a delivery available
       if (state.Station?.OutputSlot?.Quantity > 0 && state.Station.OutputSlot.ItemInstance != null)
@@ -575,14 +558,12 @@ namespace NoLazyWorkers.Employees
         var outputItem = state.Station.OutputSlot.ItemInstance;
         int quantity = state.Station.OutputSlot.Quantity;
 
-        var employee = Npc as Employee;
         // Try to find a packaging station or shelf for delivery
-        ITransitEntity destination = EmployeeUtilities.FindPackagingStation(Adapter, outputItem) ?? FindShelfForDelivery(Npc, outputItem);
+        ITransitEntity destination = EmployeeUtilities.FindPackagingStation(Adapter, outputItem) ?? FindShelfForDelivery(Npc, outputItem, allowAnyShelves: false);
         if (destination == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleDelivery: No destination found for item={outputItem.ID} in station={state.Station.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, outputItem);
-          TransitionState(behaviour, state, EState.Idle, "No destination found");
+          TransitionState(employee, state, EState.Idle, "No destination found");
           return;
         }
 
@@ -591,8 +572,7 @@ namespace NoLazyWorkers.Employees
         if (deliverySlots == null || deliverySlots.Count == 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleDelivery: No delivery slots available for item={outputItem.ID} at {destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, outputItem);
-          TransitionState(behaviour, state, EState.Idle, "No delivery slots");
+          TransitionState(employee, state, EState.Idle, "No delivery slots");
           return;
         }
 
@@ -601,26 +581,18 @@ namespace NoLazyWorkers.Employees
         if (inventorySlot == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleDelivery: No inventory slot available for item={outputItem.ID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          TransitionState(behaviour, state, EState.Idle, "No inventory slot");
+          TransitionState(employee, state, EState.Idle, "No inventory slot");
           return;
         }
 
         // Create transfer request
         quantity = Math.Min(quantity, deliverySlots.Sum(s => s.GetCapacityForItem(outputItem)));
-        var request = EmployeeUtilities.CreateTransferRequest(
-            Npc,
-            outputItem,
-            quantity,
-            state.Station.TransitEntity,
-            new List<ItemSlot> { state.Station.OutputSlot },
-            destination,
-            deliverySlots
-        );
+        var request = new TransferRequest(Npc, outputItem, quantity, inventorySlot, state.Station.TransitEntity, [state.Station.OutputSlot], destination, deliverySlots);
 
         if (request == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleDelivery: Failed to create transfer request for item={outputItem.ID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-          TransitionState(behaviour, state, EState.Idle, "Failed to create transfer request");
+          TransitionState(employee, state, EState.Idle, "Failed to create transfer request");
           return;
         }
 
@@ -628,49 +600,49 @@ namespace NoLazyWorkers.Employees
         state.ActiveRoutes.Add(new PrioritizedRoute(request, 999));
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleDelivery: Added delivery route for item={outputItem.ID}, qty={quantity} to {destination.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
 
-        // Transition to Grabbing state
-        TransitionState(behaviour, state, EState.Grabbing, "Delivery route planned");
+        // Transition to Transfer state
+        TransitionState(employee, state, EState.Transfer, "Delivery route planned");
       }
       else
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleDelivery: No delivery available for station={state.Station?.GUID} for NPC={Npc.fullName}", DebugLogger.Category.AllEmployees);
-        TransitionState(behaviour, state, EState.Idle, "No delivery available");
+        TransitionState(employee, state, EState.Idle, "No delivery available");
       }
     }
 
-    protected void HandleOperating(Behaviour behaviour, StateData state)
+    protected void HandleOperating(Employee employee, StateData state)
     {
-      if (Adapter?.HandleOperating(behaviour, state) == true) return;
-      if (!IsAtLocation(behaviour, state.Station.TransitEntity))
+      if (Adapter?.HandleOperating(employee, state) == true) return;
+      if (!IsAtLocation(state.Station.TransitEntity))
       {
-        MoveTo(behaviour, state, state.Station.TransitEntity);
+        MoveTo(employee, state, state.Station.TransitEntity);
         return;
       }
 
       if (state.Station.HasActiveOperation || state.Station.GetInputQuantity() < state.Station.StartThreshold)
       {
-        TransitionState(behaviour, state, EState.Planning, "Cannot start operation");
+        TransitionState(employee, state, EState.Planning, "Cannot start operation");
         return;
       }
 
-      state.Station.StartOperation(behaviour);
-      TransitionState(behaviour, state, EState.Completed, "Operation started");
+      state.Station.StartOperation(employee);
+      TransitionState(employee, state, EState.Completed, "Operation started");
     }
 
 
-    protected void HandleCompleted(Behaviour behaviour, StateData state)
+    protected void HandleCompleted(Employee employee, StateData state)
     {
-      if (Adapter?.HandleCompleted(behaviour, state) == true) return;
+      if (Adapter?.HandleCompleted(employee, state) == true) return;
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleCompleted: Operation complete for NPC {Npc.fullName}", DebugLogger.Category.AllEmployees);
-      TransitionState(behaviour, state, EState.Idle, "Operation complete");
+      TransitionState(employee, state, EState.Idle, "Operation complete");
     }
 
-    protected void MoveTo(Behaviour behaviour, StateData state, ITransitEntity destination)
+    protected void MoveTo(Employee employee, StateData state, ITransitEntity destination)
     {
       if (destination == null || !Npc.Movement.CanGetTo(destination, 1f))
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MoveTo: Cannot reach {destination?.Name}, disabling", DebugLogger.Category.AllEmployees);
-        Disable(behaviour);
+        Disable(employee);
         return;
       }
       state.Destination = destination;
@@ -681,46 +653,45 @@ namespace NoLazyWorkers.Employees
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"MoveTo: Moving to {destination.Name}", DebugLogger.Category.AllEmployees);
     }
 
-    protected bool IsAtLocation(Behaviour behaviour, ITransitEntity location)
+    protected bool IsAtLocation(ITransitEntity entity)
     {
-      if (location == null) return false;
-      float distance = Vector3.Distance(Npc.transform.position, NavMeshUtility.GetAccessPoint(location, Npc).position);
-      bool atLocation = distance < 0.4f;
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"IsAtLocation: Result={atLocation}, Distance={distance:F2}, location={location.GUID}", DebugLogger.Category.AllEmployees);
-      return atLocation;
+      if (entity == null) return false;
+      for (int i = 0; i < entity.AccessPoints.Length; i++)
+      {
+        if (Vector3.Distance(Npc.transform.position, entity.AccessPoints[i].position) < 0.4f)
+        {
+          return true;
+        }
+
+        if (Npc.Movement.IsAsCloseAsPossible(entity.AccessPoints[i].transform.position, 0.4f))
+        {
+          return true;
+        }
+      }
+
+      return false;
     }
 
-    public void Disable(Behaviour behaviour)
+    public void Disable(Employee employee)
     {
-      if (States.TryGetValue(behaviour.Npc.GUID, out var state))
+      if (States.TryGetValue(employee.GUID, out var state))
       {
-        foreach (var route in state.ActiveRoutes)
-          ReleaseRouteLocks(route);
         state.ActiveRoutes.Clear();
         state.IsMoving = false;
-        States.Remove(behaviour.Npc.GUID);
+        States.Remove(employee.GUID);
       }
-            (behaviour.Npc as Employee).ShouldIdle();
-      behaviour.Disable();
+      employee.ShouldIdle();
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Disable: Behaviour disabled for {Npc.fullName}", DebugLogger.Category.AllEmployees);
     }
 
-    protected void HandleFailedRoute(Behaviour behaviour, StateData state, PrioritizedRoute route, string reason)
+    protected void HandleFailedRoute(Employee employee, StateData state, PrioritizedRoute route, string reason)
     {
       FailedRoutes[route] = (Time.time, reason);
-      ReleaseRouteLocks(route);
       state.ActiveRoutes.Remove(route);
-      TransitionState(behaviour, state, EState.Idle, $"Failed route: {reason}");
+      TransitionState(employee, state, EState.Idle, $"Failed route: {reason}");
     }
 
-    protected void ReleaseRouteLocks(PrioritizedRoute route)
-    {
-      route.PickupSlots?.RemoveLock();
-      route.DestinationSlots?.RemoveLock();
-      route.InventorySlot?.RemoveLock();
-    }
-
-    public void AddRoutes(Behaviour behaviour, StateData state, List<TransferRequest> requests)
+    public void AddRoutes(Employee employee, StateData state, List<TransferRequest> requests)
     {
       int availableSlots = Npc.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
       var filteredRequests = requests
@@ -748,20 +719,66 @@ namespace NoLazyWorkers.Employees
   public static class MoveItemBehaviourPatch
   {
     [HarmonyPostfix]
-    [HarmonyPatch("Awake")]
-    public static void AwakePostfix(MoveItemBehaviour __instance)
-    {
-      ActiveMoveItemBehaviours[__instance.Npc.GUID] = __instance;
-    }
-
-    [HarmonyPostfix]
     [HarmonyPatch("End")]
     public static void EndPostfix(MoveItemBehaviour __instance)
     {
-      ActiveMoveItemBehaviours.Remove(__instance.Npc.GUID);
-      EmployeeUtilities.ReleaseReservations(__instance);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"End: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}", DebugLogger.Category.AllEmployees);
-
+      //TODO: Check for mroe routes goto Transfer else goto Idle
+      EmployeeUtilities.ReleaseReservations(__instance.Npc as Employee);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"EndPostfix: Released reservations for MoveItemBehaviour for NPC={__instance.Npc.fullName}", DebugLogger.Category.AllEmployees);
     }
   }
+
+  /* [HarmonyPatch(typeof(NetworkBehaviour))]
+  public static class NetworkBehaviourPatch
+  {
+    [HarmonyPrefix]
+    [HarmonyPatch("SendObserversRpc")]
+    public static bool SendObserversRpcPrefix(NetworkBehaviour __instance, uint hash, PooledWriter methodWriter, Channel channel, DataOrderType orderType, bool bufferLast, bool excludeServer, bool excludeOwner)
+    {
+      if (__instance.name != "Packager(Clone)" && __instance.name != "Chemist(Clone)") return true;
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: __instance {__instance.name}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: hash {hash}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: methodWriter {methodWriter}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: channel {channel}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: orderType {orderType}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: bufferLast {bufferLast}", DebugLogger.Category.AllEmployees);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: excludeServer {excludeServer}", DebugLogger.Category.AllEmployees);
+      if (!__instance.IsSpawnedWithWarning())
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 0", DebugLogger.Category.AllEmployees);
+        return false;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 1", DebugLogger.Category.AllEmployees);
+      __instance._transportManagerCache.CheckSetReliableChannel(methodWriter.Length + 10, ref channel);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 1a", DebugLogger.Category.AllEmployees);
+      RpcLinkType value;
+      PooledWriter pooledWriter = (!__instance._rpcLinks.TryGetValue(hash, out value)) ? __instance.CreateRpc(hash, methodWriter, PacketId.ObserversRpc, channel) : __instance.CreateLinkedRpc(value, methodWriter, channel);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 2", DebugLogger.Category.AllEmployees);
+      __instance.SetNetworkConnectionCache(excludeServer, excludeOwner);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 3", DebugLogger.Category.AllEmployees);
+      __instance._networkObjectCache.NetworkManager.TransportManager.SendToClients((byte)channel, pooledWriter.GetArraySegment(), __instance._networkObjectCache.Observers, __instance._networkConnectionCache, splitLargeMessages: true, orderType);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 4", DebugLogger.Category.AllEmployees);
+      if (bufferLast)
+      {
+        if (__instance._bufferedRpcs.TryGetValue(hash, out var value2))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 5", DebugLogger.Category.AllEmployees);
+          value2.Writer.StoreLength();
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 6", DebugLogger.Category.AllEmployees);
+        }
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 7", DebugLogger.Category.AllEmployees);
+        __instance._bufferedRpcs[hash] = new BufferedRpc(pooledWriter, channel, orderType);
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 8", DebugLogger.Category.AllEmployees);
+      }
+      else
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 9", DebugLogger.Category.AllEmployees);
+        pooledWriter.StoreLength();
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 10", DebugLogger.Category.AllEmployees);
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SendObserversRpcPrefix: 11", DebugLogger.Category.AllEmployees);
+      return false;
+    }
+  } */
 }

@@ -5,8 +5,6 @@ using ScheduleOne.Employees;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using ScheduleOne.Management.SetterScreens;
-using ScheduleOne.Management.UI;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Loaders;
@@ -27,6 +25,12 @@ using NoLazyWorkers.General;
 using ScheduleOne.NPCs.Behaviour;
 using FishNet.Object;
 using ScheduleOne.NPCs;
+using ScheduleOne.DevUtilities;
+using FishNet;
+using FishNet.Connection;
+using ScheduleOne.Management.SetterScreens;
+using ScheduleOne.Management.UI;
+using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -857,6 +861,7 @@ namespace NoLazyWorkers
     public static bool IsDestinationValidPrefix(MoveItemBehaviour __instance, TransitRoute route, ItemInstance item, ref bool __result)
     {
       MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 0");
+      MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1: {__instance?.Npc}");
       MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1: {__instance?.Npc?.name}");
       MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1:  | {__instance?.Npc?.NetworkObject?.name}");
       MelonLogger.Warning($"[Test] [MoveItemBehaviourTestPatch] 1:  | {route?.Destination?.GUID}");
@@ -881,6 +886,602 @@ namespace NoLazyWorkers
       }
       __result = true;
       return false;
+    }
+  }
+
+  [HarmonyPatch]
+  public static class MovementDebugPatches
+  {
+    [HarmonyPatch(typeof(NPCBehaviour))]
+    public static class MovementDebugNPCBehaviour
+    {
+      [HarmonyPrefix]
+      [HarmonyPatch("Update")]
+      public static void NPCBehaviour_Update_Prefix(NPCBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string activeBehaviourName = __instance.activeBehaviour?.Name ?? "null";
+        string enabledBehaviourName = __instance.GetEnabledBehaviour()?.Name ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"NPCBehaviour.Update: NPC={npcName}, ActiveBehaviour={activeBehaviourName}, EnabledBehaviour={enabledBehaviourName}, IsHost={InstanceFinder.IsHost}",
+              DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("GetEnabledBehaviour")]
+      public static void NPCBehaviour_GetEnabledBehaviour_Prefix(NPCBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string enabledBehaviours = string.Join(", ", __instance.enabledBehaviours.Select(b => $"{b.Name} (Priority={b.Priority}, Enabled={b.Enabled})"));
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"NPCBehaviour.GetEnabledBehaviour: NPC={npcName}, EnabledBehaviours=[{enabledBehaviours}]",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("AddEnabledBehaviour")]
+      public static void NPCBehaviour_AddEnabledBehaviour_Prefix(NPCBehaviour __instance, Behaviour b)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = b?.Name ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"NPCBehaviour.AddEnabledBehaviour: NPC={npcName}, Behaviour={behaviourName}, EnabledBehavioursCount={__instance.enabledBehaviours.Count}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("RemoveEnabledBehaviour")]
+      public static void NPCBehaviour_RemoveEnabledBehaviour_Prefix(NPCBehaviour __instance, Behaviour b)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = b?.Name ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"NPCBehaviour.RemoveEnabledBehaviour: NPC={npcName}, Behaviour={behaviourName}, EnabledBehavioursCount={__instance.enabledBehaviours.Count}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("MinPass")]
+      public static void NPCBehaviour_MinPass_Prefix(NPCBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string activeBehaviourName = __instance.activeBehaviour?.Name ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"NPCBehaviour.MinPass: NPC={npcName}, ActiveBehaviour={activeBehaviourName}, Active={__instance.activeBehaviour?.Active ?? false}",
+            DebugLogger.Category.AllEmployees);
+      }
+    }
+
+    [HarmonyPatch(typeof(Behaviour))]
+    public static class MovementDebugBehaviour
+    {
+      [HarmonyPostfix]
+      [HarmonyPatch("Enable")]
+      public static void Behaviour_Enable_Postfix(Behaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.Enable: NPC={npcName}, Behaviour={behaviourName}, Enabled={__instance.Enabled}, Active={__instance.Active}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("Enable_Networked")]
+      public static void Behaviour_Enable_Networked_Prefix(Behaviour __instance, NetworkConnection conn)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        string connInfo = conn == null ? "null" : $"ClientId={conn.ClientId}";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.Enable_Networked: NPC={npcName}, Behaviour={behaviourName}, Conn={connInfo}, IsServer={__instance.IsServerInitialized}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("Begin")]
+      public static void Behaviour_Begin_Prefix(Behaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.Begin: NPC={npcName}, Behaviour={behaviourName}, Started={__instance.Started}, Active={__instance.Active}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("Begin_Networked")]
+      public static void Behaviour_Begin_Networked_Prefix(Behaviour __instance, NetworkConnection conn)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        string connInfo = conn == null ? "null" : $"ClientId={conn.ClientId}";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.Begin_Networked: NPC={npcName}, Behaviour={behaviourName}, Conn={connInfo}, IsServer={__instance.IsServerInitialized}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("Disable")]
+      public static void Behaviour_Disable_Prefix(Behaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.Disable: NPC={npcName}, Behaviour={behaviourName}, Enabled={__instance.Enabled}, Active={__instance.Active}, Started={__instance.Started}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("RpcLogic___Enable_Networked_328543758")]
+      public static void Behaviour_RpcLogic_Enable_Networked_Prefix(Behaviour __instance, NetworkConnection conn)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        string connInfo = conn == null ? "null" : $"ClientId={conn.ClientId}";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.RpcLogic___Enable_Networked: NPC={npcName}, Behaviour={behaviourName}, Conn={connInfo}, Enabled={__instance.Enabled}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("RpcLogic___Disable_Networked_328543758")]
+      public static void Behaviour_RpcLogic_Disable_Networked_Prefix(Behaviour __instance, NetworkConnection conn)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        string connInfo = conn == null ? "null" : $"ClientId={conn.ClientId}";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.RpcLogic___Disable_Networked: NPC={npcName}, Behaviour={behaviourName}, Conn={connInfo}, Enabled={__instance.Enabled}, Active={__instance.Active}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("End_Networked")]
+      public static void Behaviour_End_Networked_Prefix(Behaviour __instance, NetworkConnection conn)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string behaviourName = __instance.Name;
+        string connInfo = conn == null ? "null" : $"ClientId={conn.ClientId}";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.End_Networked: NPC={npcName}, Behaviour={behaviourName}, Conn={connInfo}, Active={__instance.Active}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("SetDestination", new[] { typeof(Vector3), typeof(bool) })]
+      public static void Behaviour_SetDestination_Prefix(Behaviour __instance, Vector3 position, bool teleportIfFail)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        bool canGetTo = __instance.Npc?.Movement.CanGetTo(position, 1f) ?? false;
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"Behaviour.SetDestination: NPC={npcName}, Position={position}, TeleportIfFail={teleportIfFail}, CanGetTo={canGetTo}, PathingFailures={__instance.consecutivePathingFailures}",
+            DebugLogger.Category.AllEmployees);
+      }
+    }
+
+    [HarmonyPatch(typeof(MoveItemBehaviour))]
+    public static class MovementDebugMoveItemBehaviour
+    {
+      [HarmonyPrefix]
+      [HarmonyPatch("StartTransit")]
+      public static void MoveItemBehaviour_StartTransit_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = __instance.assignedRoute != null
+            ? $"Source={__instance.assignedRoute.Source?.Name ?? "null"}, Dest={__instance.assignedRoute.Destination?.Name ?? "null"}"
+            : "null";
+        string itemInfo = __instance.itemToRetrieveTemplate != null
+            ? $"Item={__instance.itemToRetrieveTemplate.ID}, Qty={__instance.grabbedAmount}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.StartTransit: NPC={npcName}, Route={routeInfo}, Item={itemInfo}, State={__instance.currentState}, IsServer={InstanceFinder.IsServer}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("ActiveMinPass")]
+      public static void MoveItemBehaviour_ActiveMinPass_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = __instance.assignedRoute != null
+            ? $"Source={__instance.assignedRoute.Source?.Name ?? "null"}, Dest={__instance.assignedRoute.Destination?.Name ?? "null"}"
+            : "null";
+        string itemInfo = __instance.itemToRetrieveTemplate != null
+            ? $"Item={__instance.itemToRetrieveTemplate.ID}, Qty={__instance.grabbedAmount}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.ActiveMinPass: NPC={npcName}, State={__instance.currentState}, Route={routeInfo}, Item={itemInfo}, IsMoving={__instance.Npc?.Movement.IsMoving}, IsServer={InstanceFinder.IsServer}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("WalkToSource")]
+      public static void MoveItemBehaviour_WalkToSource_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string sourcePos = __instance.assignedRoute?.Source != null
+            ? NavMeshUtility.GetAccessPoint(__instance.assignedRoute.Source, __instance.Npc)?.position.ToString() ?? "null"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.WalkToSource: NPC={npcName}, SourcePos={sourcePos}, State={__instance.currentState}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("WalkToDestination")]
+      public static void MoveItemBehaviour_WalkToDestination_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string destPos = __instance.assignedRoute?.Destination != null
+            ? NavMeshUtility.GetAccessPoint(__instance.assignedRoute.Destination, __instance.Npc)?.position.ToString() ?? "null"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.WalkToDestination: NPC={npcName}, DestPos={destPos}, State={__instance.currentState}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("Initialize", new[] { typeof(TransitRoute), typeof(ItemInstance), typeof(int), typeof(bool) })]
+      public static void MoveItemBehaviour_Initialize_Prefix(MoveItemBehaviour __instance, TransitRoute route, ItemInstance _itemToRetrieveTemplate, int _maxMoveAmount, bool _skipPickup)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = route != null
+            ? $"Source={route.Source?.Name ?? "null"}, Dest={route.Destination?.Name ?? "null"}"
+            : "null";
+        string itemInfo = _itemToRetrieveTemplate != null
+            ? $"Item={_itemToRetrieveTemplate.ID}, Qty={_itemToRetrieveTemplate.Quantity}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.Initialize: NPC={npcName}, Route={routeInfo}, Item={itemInfo}, MaxMoveAmount={_maxMoveAmount}, SkipPickup={_skipPickup}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("End")]
+      public static void MoveItemBehaviour_End_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = __instance.assignedRoute != null
+            ? $"Source={__instance.assignedRoute.Source?.Name ?? "null"}, Dest={__instance.assignedRoute.Destination?.Name ?? "null"}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.End: NPC={npcName}, Route={routeInfo}, Active={__instance.Active}, State={__instance.currentState}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("EndTransit")]
+      public static void MoveItemBehaviour_EndTransit_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = __instance.assignedRoute != null
+            ? $"Source={__instance.assignedRoute.Source?.Name ?? "null"}, Dest={__instance.assignedRoute.Destination?.Name ?? "null"}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.EndTransit: NPC={npcName}, Route={routeInfo}, Initialized={__instance.Initialized}, GrabbedAmount={__instance.grabbedAmount}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("EndTransit")]
+      public static void MoveItemBehaviour_EndTransit_Postfix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.EndTransit: Completed for NPC={npcName}, Initialized={__instance.Initialized}, AssignedRoute={__instance.assignedRoute == null}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("GetAmountToGrab")]
+      public static void MoveItemBehaviour_GetAmountToGrab_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string itemInfo = __instance.itemToRetrieveTemplate != null
+            ? $"Item={__instance.itemToRetrieveTemplate.ID}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetAmountToGrab: NPC={npcName}, Item={itemInfo}, MaxMoveAmount={__instance.maxMoveAmount}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("GetAmountToGrab")]
+      public static void MoveItemBehaviour_GetAmountToGrab_Postfix(MoveItemBehaviour __instance, int __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetAmountToGrab: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("IsDestinationValid")]
+      public static void MoveItemBehaviour_IsDestinationValid_Prefix(MoveItemBehaviour __instance, TransitRoute route, ItemInstance item)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string routeInfo = route != null
+            ? $"Source={route.Source?.Name ?? "null"}, Dest={route.Destination?.Name ?? "null"}"
+            : "null";
+        string itemInfo = item != null
+            ? $"Item={item.ID}, Qty={item.Quantity}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsDestinationValid: NPC={npcName}, Route={routeInfo}, Item={itemInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("IsDestinationValid")]
+      public static void MoveItemBehaviour_IsDestinationValid_Postfix(MoveItemBehaviour __instance, bool __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsDestinationValid: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("CanGetToSource")]
+      public static void MoveItemBehaviour_CanGetToSource_Prefix(MoveItemBehaviour __instance, TransitRoute route)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string sourceInfo = route?.Source != null ? $"Source={route.Source.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.CanGetToSource: NPC={npcName}, {sourceInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("CanGetToSource")]
+      public static void MoveItemBehaviour_CanGetToSource_Postfix(MoveItemBehaviour __instance, bool __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.CanGetToSource: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("CanGetToDestination")]
+      public static void MoveItemBehaviour_CanGetToDestination_Prefix(MoveItemBehaviour __instance, TransitRoute route)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string destInfo = route?.Destination != null ? $"Dest={route.Destination.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.CanGetToDestination: NPC={npcName}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("CanGetToDestination")]
+      public static void MoveItemBehaviour_CanGetToDestination_Postfix(MoveItemBehaviour __instance, bool __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.CanGetToDestination: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("GetSourceAccessPoint")]
+      public static void MoveItemBehaviour_GetSourceAccessPoint_Prefix(MoveItemBehaviour __instance, TransitRoute route)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string sourceInfo = route?.Source != null ? $"Source={route.Source.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetSourceAccessPoint: NPC={npcName}, {sourceInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("GetSourceAccessPoint")]
+      public static void MoveItemBehaviour_GetSourceAccessPoint_Postfix(MoveItemBehaviour __instance, Transform __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string resultInfo = __result != null ? $"Position={__result.position}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetSourceAccessPoint: NPC={npcName}, Result={resultInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("GetDestinationAccessPoint")]
+      public static void MoveItemBehaviour_GetDestinationAccessPoint_Prefix(MoveItemBehaviour __instance, TransitRoute route)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string destInfo = route?.Destination != null ? $"Dest={route.Destination.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetDestinationAccessPoint: NPC={npcName}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("GetDestinationAccessPoint")]
+      public static void MoveItemBehaviour_GetDestinationAccessPoint_Postfix(MoveItemBehaviour __instance, Transform __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string resultInfo = __result != null ? $"Position={__result.position}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GetDestinationAccessPoint: NPC={npcName}, Result={resultInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("IsAtSource")]
+      public static void MoveItemBehaviour_IsAtSource_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string sourceInfo = __instance.assignedRoute?.Source != null ? $"Source={__instance.assignedRoute.Source.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsAtSource: NPC={npcName}, {sourceInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("IsAtSource")]
+      public static void MoveItemBehaviour_IsAtSource_Postfix(MoveItemBehaviour __instance, bool __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsAtSource: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("IsAtDestination")]
+      public static void MoveItemBehaviour_IsAtDestination_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string destInfo = __instance.assignedRoute?.Destination != null ? $"Dest={__instance.assignedRoute.Destination.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsAtDestination: NPC={npcName}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("IsAtDestination")]
+      public static void MoveItemBehaviour_IsAtDestination_Postfix(MoveItemBehaviour __instance, bool __result)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.IsAtDestination: NPC={npcName}, Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("TakeItem")]
+      public static void MoveItemBehaviour_TakeItem_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string itemInfo = __instance.itemToRetrieveTemplate != null
+            ? $"Item={__instance.itemToRetrieveTemplate.ID}"
+            : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.TakeItem: NPC={npcName}, Item={itemInfo}, GrabbedAmount={__instance.grabbedAmount}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("TakeItem")]
+      public static void MoveItemBehaviour_TakeItem_Postfix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.TakeItem: Completed for NPC={npcName}, GrabbedAmount={__instance.grabbedAmount}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("GrabItem")]
+      public static void MoveItemBehaviour_GrabItem_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string sourceInfo = __instance.assignedRoute?.Source != null ? $"Source={__instance.assignedRoute.Source.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.GrabItem: NPC={npcName}, {sourceInfo}, State={__instance.currentState}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPrefix]
+      [HarmonyPatch("PlaceItem")]
+      public static void MoveItemBehaviour_PlaceItem_Prefix(MoveItemBehaviour __instance)
+      {
+        string npcName = __instance.Npc?.fullName ?? "null";
+        string destInfo = __instance.assignedRoute?.Destination != null ? $"Dest={__instance.assignedRoute.Destination.Name}" : "null";
+        if (npcName == "Christopher Anderson" || npcName == "Karen Green")
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"MoveItemBehaviour.PlaceItem: NPC={npcName}, {destInfo}, State={__instance.currentState}, GrabbedAmount={__instance.grabbedAmount}",
+            DebugLogger.Category.AllEmployees);
+      }
+    }
+
+    [HarmonyPatch(typeof(TransitRoute))]
+    public static class MovementDebugTransitRoute
+    {
+      [HarmonyPrefix]
+      [HarmonyPatch("AreEntitiesNonNull")]
+      public static void TransitRoute_AreEntitiesNonNull_Prefix(TransitRoute __instance)
+      {
+        string sourceInfo = __instance.Source != null ? $"Source={__instance.Source.Name}" : "Source=null";
+        string destInfo = __instance.Destination != null ? $"Dest={__instance.Destination.Name}" : "Dest=null";
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"TransitRoute.AreEntitiesNonNull: {sourceInfo}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("AreEntitiesNonNull")]
+      public static void TransitRoute_AreEntitiesNonNull_Postfix(TransitRoute __instance, bool __result)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"TransitRoute.AreEntitiesNonNull: Result={__result}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      /* [HarmonyPrefix]
+      [HarmonyPatch("ValidateEntities")]
+      public static void TransitRoute_ValidateEntities_Prefix(TransitRoute __instance)
+      {
+        string sourceInfo = __instance.Source != null ? $"Source={__instance.Source.Name}, IsDestroyed={__instance.Source.IsDestroyed}" : "Source=null";
+        string destInfo = __instance.Destination != null ? $"Dest={__instance.Destination.Name}, IsDestroyed={__instance.Destination.IsDestroyed}" : "Dest=null";
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"TransitRoute.ValidateEntities: {sourceInfo}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      }
+
+      [HarmonyPostfix]
+      [HarmonyPatch("ValidateEntities")]
+      public static void TransitRoute_ValidateEntities_Postfix(TransitRoute __instance)
+      {
+        string sourceInfo = __instance.Source != null ? $"Source={__instance.Source.Name}" : "Source=null";
+        string destInfo = __instance.Destination != null ? $"Dest={__instance.Destination.Name}" : "Dest=null";
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"TransitRoute.ValidateEntities: Completed, {sourceInfo}, {destInfo}",
+            DebugLogger.Category.AllEmployees);
+      } */
     }
   }
 }

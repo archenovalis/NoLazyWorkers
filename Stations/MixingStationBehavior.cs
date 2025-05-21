@@ -38,7 +38,7 @@ namespace NoLazyWorkers.Stations
       canStart = false;
       canRestock = false;
       bool hasSufficient = false;
-      IStationAdapter station = StationUtilities.GetStation(behaviour);
+      IStationAdapter station = StationUtilities.GetStationBehaviour(chemist);
       if (station == null || chemist == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateState: Invalid station or chemist for {chemist?.fullName}, station={station?.GUID}", DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
@@ -87,7 +87,7 @@ namespace NoLazyWorkers.Stations
       if (desiredQty < threshold)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ValidateState: Below threshold and cannot restock for {chemist?.fullName}, inputQty={inputQty}, threshold={threshold}", DebugLogger.Category.Chemist, DebugLogger.Category.MixingStation);
-        Disable(behaviour);
+        Disable(chemist);
         return false;
       }
       if (!canStart && !canRestock)
@@ -159,10 +159,16 @@ namespace NoLazyWorkers.Stations
               state = new StateData { Station = stationAdapter };
               States[__instance.GUID] = state;
             }
+            var inventorySlot = __instance.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+            if (inventorySlot == null)
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No inventory slot for product={station.OutputSlot.ItemInstance.Name}", DebugLogger.Category.Chemist);
+              continue;
+            }
             state.Station = stationAdapter;
             var behaviour = chemistBehaviour.GetInstancedBehaviour(__instance, stationAdapter);
-            chemistBehaviour.AddRoutes(behaviour, state, [EmployeeUtilities.CreateTransferRequest(__instance, restock.Item, restock.Quantity, restock.Shelf, restock.PickupSlots, station, [station.MixerSlot], force: true)]);
-            chemistBehaviour.TransitionState(behaviour, state, EState.Grabbing, "Looping route planned");
+            chemistBehaviour.AddRoutes(__instance, state, [new TransferRequest(__instance, restock.Item, restock.Quantity, inventorySlot, restock.Shelf, restock.PickupSlots, station, [station.MixerSlot])]);
+            chemistBehaviour.TransitionState(__instance, state, EState.Transfer, "Looping route planned");
           }
         }
         __result = list;
@@ -216,12 +222,12 @@ namespace NoLazyWorkers.Stations
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetMixStationsReadyToMove: Output item is not a ProductItemInstance for station={station.GUID}", DebugLogger.Category.Chemist);
             continue;
           }
-          var behaviour = chemistBehaviour.GetInstancedBehaviour(__instance, stationAdapter);
           if (!States.TryGetValue(__instance.GUID, out var state))
           {
             state = new StateData { Station = stationAdapter };
             States[__instance.GUID] = state;
           }
+          var behaviour = chemistBehaviour.GetInstancedBehaviour(__instance, stationAdapter);
           state.Station = stationAdapter;
           // Check for looping
           if (MixingRoutes.TryGetValue(station.GUID, out var routes) && routes != null && routes.Any())
@@ -230,6 +236,12 @@ namespace NoLazyWorkers.Stations
                 route.Product?.SelectedItem != null && route.Product.SelectedItem == outputProduct.definition);
             if (matchingRoute != null)
             {
+              var inventorySlot = __instance.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+              if (inventorySlot == null)
+              {
+                DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No inventory slot for product={outputProduct.Name}", DebugLogger.Category.Chemist);
+                continue;
+              }
               var deliverySlots = stationAdapter.ProductSlots.Where(s => s.GetCapacityForItem(outputSlot.ItemInstance) > 0).ToList();
               if (deliverySlots.Count == 0)
               {
@@ -237,12 +249,12 @@ namespace NoLazyWorkers.Stations
                 continue;
               }
               int quantity = Math.Min(outputSlot.Quantity, deliverySlots.Sum(s => s.GetCapacityForItem(outputSlot.ItemInstance)));
-              var request = EmployeeUtilities.CreateTransferRequest(__instance, outputSlot.ItemInstance, quantity, station, [outputSlot], station, deliverySlots);
+              var request = new TransferRequest(__instance, outputSlot.ItemInstance, quantity, inventorySlot, station, [outputSlot], station, deliverySlots);
               if (request != null)
               {
-                chemistBehaviour.AddRoutes(behaviour, state, new List<TransferRequest> { request });
+                chemistBehaviour.AddRoutes(__instance, state, new List<TransferRequest> { request });
                 DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: Planned looping for product={outputProduct.Name} in station={station.GUID}", DebugLogger.Category.Chemist);
-                chemistBehaviour.TransitionState(behaviour, state, EState.Grabbing, "Looping route planned");
+                chemistBehaviour.TransitionState(__instance, state, EState.Transfer, "Looping route planned");
                 continue;
               }
             }
@@ -264,12 +276,12 @@ namespace NoLazyWorkers.Stations
               DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: No inventory slot for product={outputProduct.Name}", DebugLogger.Category.Chemist);
               continue;
             }
-            var request = EmployeeUtilities.CreateTransferRequest(__instance, outputSlot.ItemInstance, quantity, station, [outputSlot], destination, destinationSlots);
+            var request = new TransferRequest(__instance, outputSlot.ItemInstance, quantity, inventorySlot, station, [outputSlot], destination, destinationSlots);
             if (request != null)
             {
-              chemistBehaviour.AddRoutes(behaviour, state, new List<TransferRequest> { request });
+              chemistBehaviour.AddRoutes(__instance, state, new List<TransferRequest> { request });
               DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetMixStationsReadyToMove: Planned delivery for product={outputProduct.Name} to {destination.GUID}", DebugLogger.Category.Chemist);
-              chemistBehaviour.TransitionState(behaviour, state, EState.Delivery, "Shelf/packaging delivery planned");
+              chemistBehaviour.TransitionState(__instance, state, EState.Delivery, "Shelf/packaging delivery planned");
             }
           }
           else

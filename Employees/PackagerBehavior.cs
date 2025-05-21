@@ -41,25 +41,28 @@ using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Employees.PackagingStationExtensions;
 using Object = UnityEngine.Object;
 using NoLazyWorkers.Stations;
+using FishNet.Managing.Object;
 
 namespace NoLazyWorkers.Employees
 {
   public class PackagerBehaviour : EmployeeBehaviour
   {
     public IEmployeeAdapter Employee;
-    private readonly Packager _packager;
-    public PackagerBehaviour(Packager packager, IStationAdapter station, IEmployeeAdapter employee) : base(packager, employee)
+    public readonly Packager _packager;
+    public PackagerBehaviour(Packager packager, IEmployeeAdapter employee) : base(packager, employee)
     {
       _packager = packager ?? throw new ArgumentNullException(nameof(packager));
-      Employee = employee;
-      if (station != null)
-      {
-        RegisterStationBehaviour(GetInstancedBehaviour(packager, station), station);
-      }
+      Employee = employee ?? throw new ArgumentNullException(nameof(employee));
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour: Initialized for NPC {packager.fullName}", DebugLogger.Category.Packager);
+      if (Npc == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerBehaviour: Npc is null after base constructor for Packager {packager.fullName}", DebugLogger.Category.Packager);
+        Npc = packager;
+      }
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour: Initialized for NPC {packager.fullName}, Npc={Npc?.fullName ?? "null"}", DebugLogger.Category.Packager);
     }
 
-    public bool Planning(Behaviour behaviour, StateData state)
+    public bool Planning(Employee employee, StateData state)
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerBehaviour.Planning: Starting for NPC {_packager.fullName}, Property {_packager.AssignedProperty}, Routes={state.ActiveRoutes.Count}", DebugLogger.Category.Packager);
 
@@ -68,7 +71,7 @@ namespace NoLazyWorkers.Employees
       if (state.ActiveRoutes.Count >= availableSlots)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour.Planning: Using {state.ActiveRoutes.Count} existing routes for NPC {_packager.fullName}", DebugLogger.Category.Packager);
-        TransitionState(behaviour, state, EState.Grabbing, "Using existing routes");
+        TransitionState(employee, state, EState.Transfer, "Using existing routes");
         return true;
       }
 
@@ -95,16 +98,13 @@ namespace NoLazyWorkers.Employees
         DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PackagerBehaviour.Planning: No routes found. Stations={PropertyStations.GetValueOrDefault(_packager.AssignedProperty)?.Count ?? 0}, Shelves={StorageExtensions.AnyShelves.Count}, Docks={_packager.AssignedProperty?.LoadingDocks.Length ?? 0}", DebugLogger.Category.Packager);
         if (state.ActiveRoutes.Count == 0)
         {
-          TransitionState(behaviour, state, EState.Idle, "No routes planned");
+          TransitionState(employee, state, EState.Idle, "No routes planned");
           return false;
         }
-        // Proceed with existing routes
-        TransitionState(behaviour, state, EState.Grabbing, "No new routes, using existing");
         return true;
       }
 
-      AddRoutes(behaviour, state, requests);
-      TransitionState(behaviour, state, EState.Grabbing, "Routes planned");
+      AddRoutes(employee, state, requests);
       return true;
     }
 
@@ -169,113 +169,30 @@ namespace NoLazyWorkers.Employees
       return requests;
     }
 
-    public bool Grabbing(Behaviour behaviour, StateData state)
-    {
-      var route = state.ActiveRoutes.FirstOrDefault();
-      if (route.Source == null) // Inventory route
-      {
-        TransitionState(behaviour, state, EState.Delivery, "Inventory route, skip pickup");
-        MoveTo(behaviour, state, route.Destination);
-        return true;
-      }
-      if (!IsAtLocation(behaviour, route.Source))
-      {
-        MoveTo(behaviour, state, route.Source);
-        return true;
-      }
-      state.PickupSlots = route.PickupSlots;
-      state.PickupSlots.ApplyLocks(_packager, "Pickup lock");
-      int remaining = route.PickupSlots.Count;
-      foreach (var slot in state.PickupSlots)
-      {
-        if (slot.Quantity <= 0 || (slot.IsLocked && slot.ActiveLock.LockOwner != _packager.NetworkObject))
-          continue;
-        int amount = Mathf.Min(slot.Quantity, remaining);
-        if (amount <= 0) continue;
-        slot.ChangeQuantity(-amount);
-        route.InventorySlot.InsertItem(route.Item.GetCopy(amount));
-        remaining -= amount;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleGrabbing: Picked up {amount} of {route.Item.ID} from slot {slot.GetHashCode()}", DebugLogger.Category.Packager);
-        if (remaining <= 0) break;
-      }
-      state.PickupSlots.RemoveLock();
-      state.QuantityInventory += route.Quantity - remaining;
-      if (remaining > 0)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleGrabbing: Insufficient items, {remaining} remaining", DebugLogger.Category.Packager);
-        HandleFailedRoute(behaviour, state, route, "Insufficient items");
-        return false;
-      }
-      state.ActiveRoutes.Remove(route);
-      TransitionState(behaviour, state, EState.Delivery, "Items picked up");
-      MoveTo(behaviour, state, route.Destination);
-      return true;
-    }
-
-    public bool Inserting(Behaviour behaviour, StateData state)
-    {
-      var route = state.ActiveRoutes.FirstOrDefault();
-      if (route.Destination == null)
-      {
-        TransitionState(behaviour, state, EState.Idle, "No destination");
-        return false;
-      }
-      if (!IsAtLocation(behaviour, route.Destination))
-      {
-        MoveTo(behaviour, state, route.Destination);
-        return true;
-      }
-      state.DeliverySlots = route.DestinationSlots;
-      state.DeliverySlots.ApplyLocks(_packager, "Delivery lock");
-      int remaining = state.QuantityInventory;
-      foreach (var slot in state.DeliverySlots)
-      {
-        int capacity = slot.GetCapacityForItem(route.Item);
-        int amount = Mathf.Min(remaining, capacity);
-        if (amount <= 0) continue;
-        slot.InsertItem(route.Item.GetCopy(amount));
-        route.InventorySlot.ChangeQuantity(-amount);
-        remaining -= amount;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"HandleInserting: Delivered {amount} of {route.Item.ID} to slot {slot.GetHashCode()}", DebugLogger.Category.Packager);
-        if (remaining <= 0) break;
-      }
-      state.DeliverySlots.RemoveLock();
-      state.QuantityInventory = remaining;
-      if (remaining > 0)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"HandleInserting: Could not deliver {remaining} items", DebugLogger.Category.Packager);
-        HandleFailedRoute(behaviour, state, route, "Insufficient slot capacity");
-        return false;
-      }
-      state.ActiveRoutes.Remove(route);
-      TransitionState(behaviour, state, state.ActiveRoutes.Count > 0 ? EState.Grabbing : EState.Idle, "Delivery complete");
-      return true;
-    }
-
-    public bool Operating(Behaviour behaviour, StateData state)
+    public bool Operating(Employee employee, StateData state)
     {
       if (state.Station == null)
       {
-        state.Station = StationUtilities.GetStation(behaviour);
+        state.Station = StationUtilities.GetStationBehaviour(employee);
         if (state.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandleOperating: No station for {_packager.fullName}", DebugLogger.Category.Packager);
-          TransitionState(behaviour, state, EState.Idle, "No station");
+          TransitionState(employee, state, EState.Idle, "No station");
           return false;
         }
       }
-      if (!IsAtLocation(behaviour, state.Station.TransitEntity))
+      if (!IsAtLocation(state.Station.TransitEntity))
       {
-        MoveTo(behaviour, state, state.Station.TransitEntity);
+        MoveTo(employee, state, state.Station.TransitEntity);
         return true;
       }
       if (state.Station.HasActiveOperation || state.Station.GetInputQuantity() < state.Station.StartThreshold)
       {
-        TransitionState(behaviour, state, EState.Planning, "Cannot start operation");
+        TransitionState(employee, state, EState.Planning, "Cannot start operation");
         return false;
       }
-      state.Station.StartOperation(behaviour);
-      TransitionState(behaviour, state, EState.Completed, "Operation started");
+      state.Station.StartOperation(employee);
+      TransitionState(employee, state, EState.Completed, "Operation started");
       return true;
     }
 
@@ -361,8 +278,6 @@ namespace NoLazyWorkers.Employees
           var destination = StorageUtilities.FindShelfForDelivery(npc, dockItem);
           if (destination == null)
           {
-            AddItemTimeout(npc.AssignedProperty, dockItem);
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindItemsNeedingMovement: Added item {dockItem.ID} to NoDestinationCache for property {npc.AssignedProperty}", DebugLogger.Category.Packager);
             continue;
           }
 
@@ -371,8 +286,7 @@ namespace NoLazyWorkers.Employees
           if (deliverySlots == null || deliverySlots.Count == 0)
           {
             if (transitEntity.GetInputCapacityForItem(dockItem, npc) <= 0)
-              AddItemTimeout(npc.AssignedProperty, dockItem);
-            continue;
+              continue;
           }
 
           int quantity = Mathf.Min(sourceSlots.Sum(s => s.Quantity), transitEntity.GetInputCapacityForItem(dockItem, npc));
@@ -414,14 +328,9 @@ namespace NoLazyWorkers.Employees
             continue;
           }
 
-          var assignedShelf = StorageUtilities.FindShelfForDelivery(npc, item, false);
+          var assignedShelf = StorageUtilities.FindShelfForDelivery(npc, item, allowAnyShelves: false);
           if (assignedShelf == null || assignedShelf == shelf)
           {
-            if (assignedShelf == null)
-            {
-              cache.AddUnique(item);
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"FindItemsNeedingMovement: Added item {item.ID} to NoDestinationCache for property {property}", DebugLogger.Category.Packager);
-            }
             continue;
           }
 
@@ -438,7 +347,7 @@ namespace NoLazyWorkers.Employees
           if (inventorySlot == null)
             continue;
 
-          var request = new TransferRequest(npc, item, quantity, inventorySlot, shelf, new List<ItemSlot> { slot }, assignedShelf, deliverySlots);
+          var request = new TransferRequest(npc, item, quantity, inventorySlot, shelf, [slot], assignedShelf, deliverySlots);
           if (!pickupGroups.ContainsKey(shelf))
             pickupGroups[shelf] = new List<TransferRequest>();
           pickupGroups[shelf].Add(request);
@@ -459,6 +368,221 @@ namespace NoLazyWorkers.Employees
   [HarmonyPatch(typeof(Packager))]
   public static class PackagerPatch
   {
+    [HarmonyPrefix]
+    [HarmonyPatch("UpdateBehaviour")]
+    public static bool UpdateBehaviourPrefix(Packager __instance)
+    {
+      try
+      {
+        if (__instance == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Packager instance is null", DebugLogger.Category.Packager);
+          return false;
+        }
+        if (__instance.MoveItemBehaviour is not AdvancedMoveItemBehaviour)
+        {
+          __instance.behaviour.behaviourStack.Remove(__instance.MoveItemBehaviour);
+          Object.Destroy(__instance.MoveItemBehaviour);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Removed existing MoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          var advancedBehaviour = __instance.gameObject.AddComponent<AdvancedMoveItemBehaviour>();
+          advancedBehaviour.Priority = 4;
+          advancedBehaviour.EnabledOnAwake = false;
+          var networkObject = __instance.gameObject.GetComponent<NetworkObject>();
+          advancedBehaviour.beh = __instance.behaviour;
+          advancedBehaviour.beh.Npc = __instance;
+          advancedBehaviour.onEnable.AddListener(() => __instance.behaviour.AddEnabledBehaviour(advancedBehaviour));
+          advancedBehaviour.onDisable.AddListener(() => __instance.behaviour.RemoveEnabledBehaviour(advancedBehaviour));
+          ManagedObjects.InitializePrefab(networkObject, -1);
+          __instance.MoveItemBehaviour = advancedBehaviour;
+          (__instance.MoveItemBehaviour as AdvancedMoveItemBehaviour).employee = __instance;
+          if (InstanceFinder.IsServer)
+            __instance.MoveItemBehaviour.Preinitialize_Internal(networkObject, true);
+          else
+            __instance.MoveItemBehaviour.Preinitialize_Internal(networkObject, false);
+          __instance.MoveItemBehaviour.NetworkInitializeIfDisabled();
+          __instance.behaviour.behaviourStack.Add(__instance.MoveItemBehaviour);
+          __instance.behaviour.behaviourStack = __instance.behaviour.behaviourStack.OrderByDescending((Behaviour x) => x.Priority).ToList();
+          ActiveMoveItemBehaviours[__instance.GUID] = __instance.MoveItemBehaviour;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour: Initialized for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+        if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employeeAdapter))
+        {
+          employeeAdapter = new PackagerAdapter(__instance);
+          EmployeeAdapters[__instance.GUID] = employeeAdapter;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Registered PackagerAdapter for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+        if (!ActiveBehaviours.TryGetValue(__instance.GUID, out var employeeBehaviour))
+        {
+          employeeBehaviour = new PackagerBehaviour(__instance, employeeAdapter);
+          ActiveBehaviours[__instance.GUID] = employeeBehaviour;
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Initialized PackagerBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+        //base
+        if (__instance.Fired || (!(__instance.behaviour.activeBehaviour == null) && !(__instance.behaviour.activeBehaviour == __instance.WaitOutside)))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: __instance.Fired || (!(__instance.behaviour.activeBehaviour == null) && !(__instance.behaviour.activeBehaviour == __instance.WaitOutside)) {__instance.Fired} | {!(__instance.behaviour.activeBehaviour == null)} | {!(__instance.behaviour.activeBehaviour == __instance.WaitOutside)} for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          return false;
+        }
+
+        bool flag = false;
+        bool flag2 = false;
+        if (__instance.GetBed() == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: __instance.GetBed() == null for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          flag = true;
+          __instance.SubmitNoWorkReason("I haven't been assigned a bed", "You can use your management clipboard to assign me a bed.");
+        }
+        else if (NetworkSingleton<ScheduleOne.GameTime.TimeManager>.Instance.IsEndOfDay)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: NetworkSingleton<ScheduleOne.GameTime.TimeManager>.Instance.IsEndOfDay for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          flag = true;
+          __instance.SubmitNoWorkReason("Sorry boss, my shift ends at 4AM.", string.Empty);
+        }
+        else if (!__instance.PaidForToday)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: !__instance.PaidForToday for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          if (__instance.IsPayAvailable())
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: __instance.IsPayAvailable() for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+            flag2 = true;
+          }
+          else
+          {
+            flag = true;
+            __instance.SubmitNoWorkReason("I haven't been paid yet", "You can place cash in my briefcase on my bed.");
+          }
+        }
+
+        if (flag)
+        {
+          __instance.SetWaitOutside(wait: true);
+        }
+        else if (InstanceFinder.IsServer && flag2 && __instance.IsPayAvailable())
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: InstanceFinder.IsServer && flag2 && __instance.IsPayAvailable() for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          __instance.RemoveDailyWage();
+          __instance.SetIsPaid();
+        }
+        if (!InstanceFinder.IsServer)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: !InstanceFinder.IsServer for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          return false;
+        }
+
+        if (__instance.PackagingBehaviour.Active)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: __instance.PackagingBehaviour.Active for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          __instance.MarkIsWorking();
+        }
+        else if (__instance.MoveItemBehaviour.Active)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: __instance.MoveItemBehaviour.Active for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          __instance.MarkIsWorking();
+        }
+        else if (EmployeeBehaviour.States.TryGetValue(__instance.GUID, out var state) && state.CurrentState != EState.Idle)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: CurrentState {state.CurrentState} != EState.Idle for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+          employeeBehaviour.Update(__instance);
+          __instance.MarkIsWorking();
+        }
+        else if (__instance.Fired)
+        {
+          __instance.LeavePropertyAndDespawn();
+        }
+        else
+        {
+          if (!__instance.CanWork())
+          {
+            __instance.SubmitNoWorkReason("I am unable to work right now", "Check my status to see why I can't work.");
+            __instance.SetIdle(true);
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: !__instance.CanWork() for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+            return false;
+          }
+
+          PackagingStation stationToAttend = __instance.GetStationToAttend();
+          if (stationToAttend != null)
+          {
+            __instance.StartPackaging(stationToAttend);
+            return false;
+          }
+
+          BrickPress brickPress = __instance.GetBrickPress();
+          if (brickPress != null)
+          {
+            __instance.StartPress(brickPress);
+            return false;
+          }
+
+          PackagingStation stationMoveItems = __instance.GetStationMoveItems();
+          if (stationMoveItems != null)
+          {
+            __instance.StartMoveItem(stationMoveItems);
+            return false;
+          }
+
+          BrickPress brickPressMoveItems = __instance.GetBrickPressMoveItems();
+          if (brickPressMoveItems != null)
+          {
+            __instance.StartMoveItem(brickPressMoveItems);
+            return false;
+          }
+
+          ItemInstance item;
+          AdvancedTransitRoute transitRouteReady = __instance.GetTransitRouteReady(out item);
+          if (transitRouteReady != null)
+          {
+            __instance.MoveItemBehaviour.Initialize(transitRouteReady, item, item.Quantity);
+            __instance.MoveItemBehaviour.Enable_Networked(null);
+          }
+          /* else
+          {
+            __instance.SubmitNoWorkReason("There's nothing for me to do right now.", "I need one of my assigned stations to have enough product and packaging to get to work.");
+            __instance.SetIdle(idle: true);
+          } */
+        }
+        return false;
+      }
+      catch (Exception e)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefixPrefixPrefix: Failed for packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Chemist);
+        if (__instance != null)
+          __instance.SetIdle(true);
+        return false;
+      }
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch("Fire")]
+    public static void FirePostfix(Packager __instance)
+    {
+      try
+      {
+        if (ActiveBehaviours.TryGetValue(__instance.GUID, out var behaviour))
+        {
+          if (ActiveMoveItemBehaviours.TryGetValue(__instance.GUID, out var moveItemBehaviour))
+          {
+            behaviour.Disable(__instance);
+          }
+          ActiveBehaviours.Remove(__instance.GUID);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerFirePatch: Disabled PackagerBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+        if (EmployeeAdapters.ContainsKey(__instance.GUID))
+        {
+          EmployeeAdapters.Remove(__instance.GUID);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerFirePatch: Removed PackagerAdapter for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+        if (ActiveMoveItemBehaviours.ContainsKey(__instance.GUID))
+        {
+          ActiveMoveItemBehaviours.Remove(__instance.GUID);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerFirePatch: Removed AdvancedMoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
+        }
+      }
+      catch (Exception e)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerFirePatch: Failed for Packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Packager);
+      }
+    }
+
     [HarmonyPrefix]
     [HarmonyPatch("GetStationToAttend")]
     public static bool GetStationToAttendPrefix(Packager __instance, ref PackagingStation __result)
@@ -503,7 +627,7 @@ namespace NoLazyWorkers.Employees
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetStationToAttendPrefix: Station {station.GUID} in use or active, skipping", DebugLogger.Category.Packager);
             continue;
           }
-          if (packagerAdapter.GetEmployeeBehaviour(__instance, station, out var employeeBehaviour))
+          if (packagerAdapter.GetEmployeeBehaviour(__instance, out var employeeBehaviour))
           {
             var packagingBehaviour = employeeBehaviour as PackagingBehaviour;
             if (packagingBehaviour != null && packagingBehaviour.IsStationReady(station))
@@ -544,7 +668,7 @@ namespace NoLazyWorkers.Employees
         {
           adapter = new PackagerAdapter(__instance);
           EmployeeAdapters[__instance.GUID] = adapter;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Registered adapter for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
+          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerPatch.GetStationMoveItemsPrefix: Registered adapter for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
         }
 
         var packagerAdapter = adapter as PackagerAdapter;
@@ -563,6 +687,7 @@ namespace NoLazyWorkers.Employees
         var state = EmployeeBehaviour.States[__instance.GUID];
 
         int maxRoutes = Mathf.Min(EmployeeBehaviour.MAX_ROUTES_PER_CYCLE, __instance.Inventory.ItemSlots.Count(s => s.ItemInstance == null));
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetStationMoveItemsPrefix: maxRoutes={maxRoutes} for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
         foreach (PackagingStation station in __instance.configuration.AssignedStations ?? Enumerable.Empty<PackagingStation>())
         {
           if (station == null)
@@ -615,6 +740,7 @@ namespace NoLazyWorkers.Employees
               TransitRoute = new AdvancedTransitRoute(source, destination)
             };
             state.ActiveRoutes.Add(route);
+            EmployeeBehaviour.States[__instance.GUID] = state;
             DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetStationMoveItemsPrefix: Created route for {quantity} of {item.ID} to station {station.GUID}", DebugLogger.Category.Packager);
             __result = null;
             return false;
@@ -622,6 +748,7 @@ namespace NoLazyWorkers.Employees
 
           if (state.ActiveRoutes.Count >= maxRoutes)
           {
+            EmployeeBehaviour.States[__instance.GUID] = state;
             __result = null;
             return false;
           }
@@ -653,18 +780,17 @@ namespace NoLazyWorkers.Employees
           __result = null;
           return false;
         }
-
         if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var adapter))
         {
           adapter = new PackagerAdapter(__instance);
           EmployeeAdapters[__instance.GUID] = adapter;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"Registered adapter for NPC {__instance.fullName}, type=Packager", DebugLogger.Category.Packager);
         }
-
         var packagerAdapter = adapter as PackagerAdapter;
-        if (packagerAdapter == null)
+        packagerAdapter.GetEmployeeBehaviour(__instance, out var employeeBehaviour);
+        if (employeeBehaviour == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerPatch.GetTransitRouteReadyPrefix: Failed to cast adapter for NPC {__instance.fullName}", DebugLogger.Category.Packager);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetMixStationsReadyToMove: No PackagerBehaviour for {__instance.fullName}", DebugLogger.Category.Packager);
           __result = null;
           return false;
         }
@@ -679,10 +805,16 @@ namespace NoLazyWorkers.Employees
         if (state.ActiveRoutes.Count < maxRoutes)
         {
           state.CurrentState = EState.Planning;
-          packagerAdapter.HandlePlanning(__instance.MoveItemBehaviour, state);
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetTransitRouteReadyPrefix: Entering Planning with Routes={state.ActiveRoutes.Count} for NPC {__instance.fullName}", DebugLogger.Category.Packager);
+          packagerAdapter.HandlePlanning(__instance, state);
+        }
+        if (state.ActiveRoutes.Count <= 0)
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetTransitRouteReadyPrefix: No routes ready for NPC {__instance.fullName}", DebugLogger.Category.Packager);
+        else
+        {
+          employeeBehaviour.TransitionState(__instance, state, EState.Transfer, "Shelf/packaging delivery planned");
         }
         __result = null;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PackagerPatch.GetTransitRouteReadyPrefix: No routes ready for NPC {__instance.fullName}", DebugLogger.Category.Packager);
         return false;
       }
       catch (Exception e)

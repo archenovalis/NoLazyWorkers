@@ -61,12 +61,12 @@ namespace NoLazyWorkers.Stations
       public int MaxProductQuantity => 20;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
-      public List<ItemField> GetInputItemForProduct() => [MixingStationUtilities.GetInputItemForProductSlot(this)];
+      public List<ItemField> GetInputItemForProduct() => [GetInputItemForProductSlot(this)];
       public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
       public Type TypeOf => _station.GetType(); // example: if (adapter.TypeOf.IsAssignableFrom(typeof(MixingStation))) is true for both MixingStationMk2 and MixingStation
-      public void StartOperation(Behaviour behaviour)
+      public void StartOperation(Employee employee)
       {
-        (behaviour as StartMixingStationBehaviour).StartCook();
+        (employee as Chemist).StartMixingStationBehaviour.StartCook();
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"MixingStationAdapter.StartOperation: Started cook for station {_station.GUID}", DebugLogger.Category.MixingStation);
       }
       public List<ItemInstance> RefillList()
@@ -331,7 +331,7 @@ namespace NoLazyWorkers.Stations
       {
         restock.Shelf = shelves.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
         restock.Quantity = math.min(shelves[restock.Shelf], state.QuantityWanted - invQty);
-        restock.PickupSlots = restock.Shelf.StorageEntity.ItemSlots.FindAll(s => s.ItemInstance.CanStackWithMinQuality(targetItem));
+        restock.PickupSlots = restock.Shelf.StorageEntity.ItemSlots.FindAll(s => s.ItemInstance.CanStackWithMinQuality(targetItem, checkQuantities: false));
       }
       return canStart || canRestock;
     }
@@ -390,7 +390,6 @@ namespace NoLazyWorkers.Stations
     public Button AddButton;
     private List<List<MixingRoute>> RoutesLists;
     private List<MixingStationConfiguration> Configs;
-    private UnityAction OnChanged;
 
     private void Start()
     {
@@ -414,6 +413,7 @@ namespace NoLazyWorkers.Stations
       MultiEditBlocker = transform.Find("Blocker")?.GetComponent<RectTransform>();
       MultiEditBlocker?.gameObject.SetActive(false);
       AddButton = transform.Find("Contents/AddNew")?.GetComponent<Button>();
+      AddButton?.onClick.RemoveAllListeners();
       AddButton?.onClick.AddListener(AddClicked);
 
       DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -421,11 +421,10 @@ namespace NoLazyWorkers.Stations
           DebugLogger.Category.MixingStation);
     }
 
-    public void Bind(List<List<MixingRoute>> routesLists, List<MixingStationConfiguration> configs, UnityAction onChangedCallback)
+    public void Bind(List<List<MixingRoute>> routesLists, List<MixingStationConfiguration> configs)
     {
       RoutesLists = routesLists?.Select(list => list ?? []).ToList() ?? [];
       Configs = configs ?? [];
-      OnChanged = onChangedCallback;
 
       RouteEntries = transform.Find("Contents").GetComponentsInChildren<MixingRouteEntryUI>(true);
       if (RouteEntries == null || RouteEntries.Length == 0)
@@ -481,37 +480,10 @@ namespace NoLazyWorkers.Stations
         }
       }
 
-      foreach (var routes in RoutesLists)
-      {
-        foreach (var route in routes)
-        {
-          if (route != null)
-          {
-            route.Product.onItemChanged.RemoveAllListeners();
-            route.MixerItem.onItemChanged.RemoveAllListeners();
-            route.Product.onItemChanged.AddListener(item => RefreshChanged(item, route));
-            route.MixerItem.onItemChanged.AddListener(item => RefreshChanged(item, route));
-          }
-        }
-      }
-
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"MixingRouteListFieldUI: Bind completed, RoutesLists count={RoutesLists.Count}, RouteEntries count={RouteEntries.Length}",
           DebugLogger.Category.MixingStation);
       Refresh();
-    }
-
-    private void RefreshChanged(ItemDefinition item, MixingRoute route)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"MixingRouteListFieldUI: RefreshChanged triggered for item={item?.Name ?? "null"}, route={route}",
-          DebugLogger.Category.MixingStation);
-      Refresh();
-      OnChanged?.Invoke();
-      foreach (var config in Configs)
-      {
-        ConfigurationExtensions.InvokeChanged(config);
-      }
     }
 
     public void Refresh()
@@ -590,17 +562,17 @@ namespace NoLazyWorkers.Stations
           {
             StationRefills[Configs[i].station.GUID].Add(null);
             MixingRoute route = new(Configs[i]);
-            RoutesLists[i].Add(route);
+            MixingRoutes[Configs[i].station.GUID].AddUnique(route);
+            RoutesLists[i].AddUnique(route);
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"MixingRouteListFieldUI: Added new route for config {i}",
                 DebugLogger.Category.MixingStation);
           }
         }
         Refresh();
-        OnChanged?.Invoke();
         foreach (var config in Configs)
         {
-          ConfigurationExtensions.InvokeChanged(config);
+          config.InvokeChanged();
         }
       }
     }
@@ -611,12 +583,12 @@ namespace NoLazyWorkers.Stations
       {
         route.RemoveAt(index);
       }
+      Refresh();
       foreach (var config in Configs)
       {
+        MixingRoutes[config.station.GUID].RemoveAt(index);
         StationRefills[config.station.GUID].RemoveAt(index);
-        Refresh();
-        OnChanged?.Invoke();
-        ConfigurationExtensions.InvokeChanged(config);
+        config.InvokeChanged();
       }
     }
 
@@ -963,38 +935,34 @@ namespace NoLazyWorkers.Stations
           DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: Initialized empty MixingRoutes for station={guid}", DebugLogger.Category.MixingStation);
         }
 
-        var routes = MixingRoutes[guid];
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Found {routes.Count} routes for station={guid}", DebugLogger.Category.MixingStation);
-
         JArray mixingRoutesArray = [];
-        foreach (var route in routes)
+        if (MixingRoutes.TryGetValue(guid, out var routes) && routes.Any())
         {
-          if (route == null)
+          foreach (var route in routes)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MixingStationConfigurationGetSaveStringPatch: Null route in MixingRoutes for station={guid}", DebugLogger.Category.MixingStation);
-            continue;
+            string productItemID = route.Product.GetData()?.ItemID ?? "null";
+            string mixerItemID = route.MixerItem.GetData()?.ItemID ?? "null";
+
+            var routeObject = new JObject
+            {
+              ["Product"] = productItemID,
+              ["MixerItem"] = mixerItemID
+            };
+            mixingRoutesArray.Add(routeObject);
           }
-
-          string productItemID = route.Product?.GetData()?.ItemID ?? "null";
-          string mixerItemID = route.MixerItem?.GetData()?.ItemID ?? "null";
-
-          var routeObject = new JObject
-          {
-            ["Product"] = productItemID,
-            ["MixerItem"] = mixerItemID
-          };
-          mixingRoutesArray.Add(routeObject);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"MixingStationConfigurationGetSaveStringPatch: Added route Product={productItemID}, MixerItem={mixerItemID} for station={guid}", DebugLogger.Category.MixingStation);
         }
 
+        // Create the config data
         MixingStationConfigurationData data = new(
             __instance.Destination.GetData(),
             __instance.StartThrehold.GetData()
         );
 
+        // Serialize config data to JSON
         string configJson = JsonUtility.ToJson(data, true);
-        JObject jsonObject = JObject.Parse(configJson);
 
+        // Combine config data with additional fields using Newtonsoft.Json
+        JObject jsonObject = JObject.Parse(configJson);
         if (mixingRoutesArray.Count > 0)
           jsonObject["MixingRoutes"] = mixingRoutesArray;
         else
@@ -1130,7 +1098,7 @@ namespace NoLazyWorkers.Stations
           configList.Add(config);
           qualityList.Add(QualityFields[guid]);
         }
-        customRouteListUI.Bind(routesLists, configList, () => configs.ForEach(c => ConfigurationExtensions.InvokeChanged(c)));
+        customRouteListUI.Bind(routesLists, configList);
         qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityList);
         qualityUIObj.transform.Find("Title").GetComponent<TextMeshProUGUI>().text = "Min Quality";
 

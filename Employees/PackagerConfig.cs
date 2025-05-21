@@ -42,76 +42,52 @@ namespace NoLazyWorkers.Employees
       public Property AssignedProperty => _packager.AssignedProperty;
       public NpcSubType SubType => NpcSubType.Packager;
 
-      public bool GetEmployeeBehaviour(NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_packager, this, npc, station, out employeeBehaviour);
-      public bool HandleIdle(Behaviour behaviour, StateData state) => false;
-      public bool HandlePlanning(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Planning(behaviour, state);
-      public bool HandleMoving(Behaviour behaviour, StateData state) => false;
-      public bool HandleGrabbing(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Grabbing(behaviour, state);
-      public bool HandleDelivery(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Inserting(behaviour, state);
-      public bool HandleOperating(Behaviour behaviour, StateData state) => GetPackagerBehaviour(_packager).Operating(behaviour, state);
-      public bool HandleCompleted(Behaviour behaviour, StateData state) => false;
-      public bool HandleInventoryItems(Behaviour behaviour, StateData state) => false;
+      public bool GetEmployeeBehaviour(NPC npc, out EmployeeBehaviour employeeBehaviour) => RetrieveBehaviour(_packager, this, out employeeBehaviour);
+      public bool HandleIdle(Employee employee, StateData state) => false;
+      public bool HandlePlanning(Employee employee, StateData state) => GetPackagerBehaviour(_packager, this).Planning(employee, state);
+      public bool HandleMoving(Employee employee, StateData state) => false;
+      public bool HandleTransfer(Employee employee, StateData state) => false;
+      public bool HandleDelivery(Employee employee, StateData state) => false;
+      public bool HandleOperating(Employee employee, StateData state) => GetPackagerBehaviour(_packager, this).Operating(employee, state);
+      public bool HandleCompleted(Employee employee, StateData state) => false;
+      public bool HandleInventoryItems(Employee employee, StateData state) => false;
     }
   }
 
   public static class PackagerUtilities
   {
-    public static bool RetrieveBehaviour(Packager packager, PackagerAdapter employee, NPC npc, BuildableItem station, out EmployeeBehaviour employeeBehaviour)
+    public static bool RetrieveBehaviour(Packager packager, PackagerAdapter adapter, out EmployeeBehaviour employeeBehaviour)
     {
       employeeBehaviour = null;
-      if (npc == null || station == null)
+      if (packager == null)
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error, $"RetrieveBehaviour: Invalid NPC or station for packager {packager?.fullName ?? "null"}", DebugLogger.Category.Packager);
         return false;
       }
-      if (npc != packager)
+      if (!EmployeeAdapters.TryGetValue(packager.GUID, out var adaptr) || adaptr == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"RetrieveBehaviour: NPC mismatch. Expected {packager?.fullName ?? "null"}, got {npc.fullName}", DebugLogger.Category.Packager);
-        return false;
+        EmployeeAdapters[packager.GUID] = adapter;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created adapter for NPC {packager.fullName}", DebugLogger.Category.Packager);
       }
-      if (!(station is PackagingStation packagingStation))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"RetrieveBehaviour: Invalid station type {station?.GetType().Name ?? "null"} for packager {packager.fullName}", DebugLogger.Category.Packager);
-        return false;
-      }
-      if (!EmployeeAdapters.TryGetValue(npc.GUID, out var adapter) || adapter == null)
-      {
-        adapter = new PackagerAdapter(npc as Packager);
-        EmployeeAdapters[npc.GUID] = adapter;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created adapter for NPC {npc.fullName}", DebugLogger.Category.Packager);
-      }
-      var packagerBehaviour = ActiveBehaviours.TryGetValue(npc.GUID, out var beh) ? beh as PackagerBehaviour : null;
+      var packagerBehaviour = ActiveBehaviours.TryGetValue(packager.GUID, out var beh) ? beh as PackagerBehaviour : null;
       if (packagerBehaviour == null)
       {
-        if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
-        {
-
-          if (station is PackagingStation)
-            stationAdapter = new PackagingStationAdapter(station as PackagingStation);
-          /* else if (station is ChemistryStation)
-            stationAdapter = new ChemistryStationAdapter(station as ChemistryStation);
-          else if (station is LabOven)
-            stationAdapter = new LabOvenAdapter(station as LabOven);
-          else if (station is Cauldron)
-            stationAdapter = new CauldronAdapter(station as Cauldron); */
-          StationAdapters[station.GUID] = stationAdapter;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created station adapter for station {station.GUID}", DebugLogger.Category.Packager);
-        }
-        packagerBehaviour = new PackagerBehaviour(packager, stationAdapter, employee);
-        ActiveBehaviours[npc.GUID] = packagerBehaviour;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created PackagerBehaviour for NPC {npc.fullName} and station {station.GUID}", DebugLogger.Category.Packager);
+        packagerBehaviour = new PackagerBehaviour(packager, adapter);
+        ActiveBehaviours[packager.GUID] = packagerBehaviour;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created PackagerBehaviour for NPC {packager.fullName}", DebugLogger.Category.Packager);
       }
       employeeBehaviour = packagerBehaviour;
       return true;
     }
 
-    public static PackagerBehaviour GetPackagerBehaviour(Packager packager)
+    public static PackagerBehaviour GetPackagerBehaviour(Packager packager, PackagerAdapter adapter)
     {
       var packagerBehaviour = ActiveBehaviours.TryGetValue(packager.GUID, out var beh) ? beh as PackagerBehaviour : null;
       if (packagerBehaviour == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"HandlePlanning: No PackagerBehaviour for NPC {packager.fullName}", DebugLogger.Category.Packager);
-        return null;
+        packagerBehaviour = new PackagerBehaviour(packager, adapter);
+        ActiveBehaviours[packager.GUID] = packagerBehaviour;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created PackagerBehaviour for NPC {packager.fullName}", DebugLogger.Category.Packager);
       }
       return packagerBehaviour;
     }

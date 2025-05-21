@@ -37,6 +37,9 @@ using NoLazyWorkers.Stations;
 using System.Reflection;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.PackagingStationExtensions;
+using static NoLazyWorkers.Stations.MixingStationExtensions;
+using ScheduleOne.Employees;
 
 namespace NoLazyWorkers.Stations
 {
@@ -56,7 +59,7 @@ namespace NoLazyWorkers.Stations
       bool IsInUse { get; }
       bool HasActiveOperation { get; }
       int StartThreshold { get; }
-      void StartOperation(Behaviour behaviour);
+      void StartOperation(Employee employee);
       int GetInputQuantity();
       List<ItemField> GetInputItemForProduct();
       int MaxProductQuantity { get; }
@@ -71,12 +74,29 @@ namespace NoLazyWorkers.Stations
 
   public static class StationUtilities
   {
-    public static IStationAdapter GetStation(Behaviour behaviour)
+    public static void GetStationAdapter(BuildableItem station, out IStationAdapter adapter)
     {
-      var adapter = EmployeeExtensions.StationAdapterBehaviours.FirstOrDefault(a => a.Value == behaviour).Key;
+      if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
+      {
+        if (station is PackagingStation)
+          stationAdapter = new PackagingStationAdapter(station as PackagingStation);
+        else if (station is MixingStation)
+          stationAdapter = new MixingStationAdapter(station as MixingStation);
+        /*else if (station is LabOven)
+          stationAdapter = new LabOvenAdapter(station as LabOven);
+        else if (station is Cauldron)
+          stationAdapter = new CauldronAdapter(station as Cauldron); */
+        StationAdapters[station.GUID] = stationAdapter;
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RetrieveBehaviour: Created station adapter for station {station.GUID}", DebugLogger.Category.Packager);
+      }
+      adapter = stationAdapter;
+    }
+    public static IStationAdapter GetStationBehaviour(Employee employee)
+    {
+      var adapter = EmployeeExtensions.StationAdapterBehaviours.FirstOrDefault(a => a.Value == employee).Key;
       if (adapter == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetStation: No station adapter found for behaviour {behaviour.GetHashCode()} (Type={behaviour.GetType().Name})", DebugLogger.Category.AllEmployees);
+        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetStation: No station adapter found for behaviour {employee.GetHashCode()} (Type={employee.GetType().Name})", DebugLogger.Category.AllEmployees);
         foreach (var entry in EmployeeExtensions.StationAdapterBehaviours)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetStation: Registered behaviour {entry.Value.GetHashCode()} (Type={entry.Value.GetType().Name}) for adapter {entry.Key.GUID}", DebugLogger.Category.AllEmployees);

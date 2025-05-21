@@ -52,7 +52,7 @@ namespace NoLazyWorkers.Employees
       public int StartThreshold => 1;
       public int GetInputQuantity() => _station.InputSlots.Sum(s => s.Quantity);
       public List<ItemField> GetInputItemForProduct() => ItemFields[GUID];
-      public void StartOperation(Behaviour behaviour) => (behaviour as PackagingStationBehaviour).StartPackaging();
+      public void StartOperation(Employee employee) => (employee as Packager).PackagingBehaviour.StartPackaging();
       public int MaxProductQuantity => 20;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
       public List<ItemInstance> RefillList() => GetRefillList(_station);

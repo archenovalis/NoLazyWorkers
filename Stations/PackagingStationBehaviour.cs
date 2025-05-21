@@ -30,7 +30,6 @@ namespace NoLazyWorkers.Stations
     private static readonly int BAGGIE_THRESHOLD = 4;
     private static readonly int BAGGIE_UNPACKAGE_THRESHOLD = 5;
     private static readonly Dictionary<Guid, bool> _isFetchingPackaging = new();
-
     private readonly Packager _packager;
     private readonly IStationAdapter _stationAdapter;
 
@@ -207,11 +206,5 @@ namespace NoLazyWorkers.Stations
       outputSlot.ChangeQuantity(-quantity, false);
       _isFetchingPackaging.Remove(adapter.GUID);
     }
-  }
-
-  [HarmonyPatch(typeof(PackagingBehaviour))]
-  public class PackagingStationBehaviourPatch
-  {
-
   }
 }
