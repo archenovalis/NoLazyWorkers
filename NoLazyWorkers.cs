@@ -853,7 +853,7 @@ namespace NoLazyWorkers
     }
   }
 
-  [HarmonyPatch(typeof(MoveItemBehaviour))]
+  /* [HarmonyPatch(typeof(MoveItemBehaviour))]
   public class MoveItemBehaviourTestPatch
   {
     [HarmonyPrefix]
@@ -1481,7 +1481,7 @@ namespace NoLazyWorkers
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"TransitRoute.ValidateEntities: Completed, {sourceInfo}, {destInfo}",
             DebugLogger.Category.AllEmployees);
-      } */
+      }
     }
-  }
+  } */
 }

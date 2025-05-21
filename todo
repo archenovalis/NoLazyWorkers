@@ -1,10 +1,10 @@
-# employees
+# todo
 
 add none and any choice to packaging station options
-chemist stuck in front of mixing station that only has product, found mixer item, should be grabbing, need route from shelf to station?
-test saving
 
-## packagers
+## employees
+
+### packagers
 
 move items from any shelf to assigned shelf
 move items from loading dock to assigned/any shelf
@@ -14,9 +14,26 @@ package product and move to assigned/any shelf
 - if packaging station is assigned jars and less than 5 unpackaged product are in the station, then packager will get baggies and package them into baggies
 move packaged product to assigned/any shelf
 
-## botanists
+### botanists
 
 get pot supplies from any/assigned shelf
 deliver harvest to assigned/any shelf
 start the dry process
 deliver dried product to destination
+
+## bugs
+
+packager only grabbed 4 from a shelf when taking product to a packaging station, 16 were available. he then stood in front of the packaging station doing nothing. should have tried to switch the jars (used when product >= 5) for baggies. since there are no baggies, should have gone back to idle (or tried to add more of the same product).
+
+chemist, should immediately start the mixing station after adding mixing ingredients to it. currently heads back outside, then turns around and starts cooking.
+
+chemist, fails to find shelves to deliver product to when no packaging stations are available
+[03:04:08.508] [NoLazyWorkers] [Chemist] GetMixStationsReadyToMove: Failed for chemist: Karen Green, error: System.ArgumentNullException: Value cannot be null.
+Parameter name: source
+  at System.Linq.Enumerable.TryGetFirst[TSource] (System.Collections.Generic.IEnumerable`1[T] source, System.Func`2[T,TResult] predicate, System.Boolean& found) [0x0000d] in <53d9c9e3ddfd44bba9f7bd7413478f07>:0
+  at System.Linq.Enumerable.FirstOrDefault[TSource] (System.Collections.Generic.IEnumerable`1[T] source, System.Func`2[T,TResult] predicate) [0x00000] in <53d9c9e3ddfd44bba9f7bd7413478f07>:0
+  at NoLazyWorkers.Employees.EmployeeUtilities.FindPackagingStation
+
+mixing station getsavestring is failing to find the routes and quality:
+[03:06:00.025] [NoLazyWorkers] [MixingStation] MixingStationConfigurationGetSaveStringPatch: No routes to serialize for station=aced68cb-32d3-445b-856a-a6af37047565
+[03:06:00.026] [NoLazyWorkers] [MixingStation] MixingStationConfigurationGetSaveStringPatch: No quality field found for station=aced68cb-32d3-445b-856a-a6af37047565

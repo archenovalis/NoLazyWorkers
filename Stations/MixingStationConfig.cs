@@ -936,7 +936,7 @@ namespace NoLazyWorkers.Stations
         }
 
         JArray mixingRoutesArray = [];
-        if (MixingRoutes.TryGetValue(guid, out var routes) && routes.Any())
+        if (MixingRoutes.TryGetValue(guid, out var routes))
         {
           foreach (var route in routes)
           {

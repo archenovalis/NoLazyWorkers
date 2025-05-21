@@ -60,6 +60,7 @@ namespace NoLazyWorkers.Employees
         }
         if (__instance.MoveItemBehaviour is not AdvancedMoveItemBehaviour)
         {
+          __instance.behaviour.behaviourStack.Remove(__instance.MoveItemBehaviour);
           Object.Destroy(__instance.MoveItemBehaviour);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Removed existing MoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
           var advancedBehaviour = __instance.gameObject.AddComponent<AdvancedMoveItemBehaviour>();
@@ -67,15 +68,21 @@ namespace NoLazyWorkers.Employees
           advancedBehaviour.Priority = 4;
           advancedBehaviour.EnabledOnAwake = false;
           var networkObject = __instance.gameObject.GetComponent<NetworkObject>();
+          advancedBehaviour.beh = __instance.behaviour;
+          advancedBehaviour.beh.Npc = __instance;
+          advancedBehaviour.onEnable.AddListener(() => __instance.behaviour.AddEnabledBehaviour(advancedBehaviour));
+          advancedBehaviour.onDisable.AddListener(() => __instance.behaviour.RemoveEnabledBehaviour(advancedBehaviour));
           ManagedObjects.InitializePrefab(networkObject, -1);
-          advancedBehaviour._transportManagerCache = __instance.NetworkManager.TransportManager;
           __instance.MoveItemBehaviour = advancedBehaviour;
           (__instance.MoveItemBehaviour as AdvancedMoveItemBehaviour).employee = __instance;
-          __instance.behaviour.behaviourStack.Add(advancedBehaviour);
-          __instance.MoveItemBehaviour.Awake();
-          __instance.MoveItemBehaviour.beh = __instance.behaviour;
-          __instance.MoveItemBehaviour.beh.Npc = __instance;
-          ActiveMoveItemBehaviours[__instance.GUID] = __instance.MoveItemBehaviour;
+          if (InstanceFinder.IsServer)
+            __instance.MoveItemBehaviour.Preinitialize_Internal(networkObject, true);
+          else
+            __instance.MoveItemBehaviour.Preinitialize_Internal(networkObject, false);
+          __instance.MoveItemBehaviour.NetworkInitializeIfDisabled();
+          __instance.behaviour.behaviourStack.Add(__instance.MoveItemBehaviour);
+          __instance.behaviour.behaviourStack = __instance.behaviour.behaviourStack.OrderByDescending((Behaviour x) => x.Priority).ToList();
+          AdvancedMoveItemBehaviours[__instance.GUID] = __instance.MoveItemBehaviour;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Initialized for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
         }
         if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employeeAdapter))
@@ -193,7 +200,7 @@ namespace NoLazyWorkers.Employees
       {
         if (ActiveBehaviours.TryGetValue(__instance.GUID, out var behaviour))
         {
-          if (ActiveMoveItemBehaviours.TryGetValue(__instance.GUID, out var moveItemBehaviour))
+          if (AdvancedMoveItemBehaviours.TryGetValue(__instance.GUID, out var moveItemBehaviour))
           {
             behaviour.Disable(__instance);
           }
@@ -205,9 +212,9 @@ namespace NoLazyWorkers.Employees
           EmployeeAdapters.Remove(__instance.GUID);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistFirePatch: Removed ChemistAdapter for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
         }
-        if (ActiveMoveItemBehaviours.ContainsKey(__instance.GUID))
+        if (AdvancedMoveItemBehaviours.ContainsKey(__instance.GUID))
         {
-          ActiveMoveItemBehaviours.Remove(__instance.GUID);
+          AdvancedMoveItemBehaviours.Remove(__instance.GUID);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistFirePatch: Removed AdvancedMoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
         }
       }

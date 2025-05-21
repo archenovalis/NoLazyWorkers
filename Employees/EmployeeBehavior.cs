@@ -134,7 +134,7 @@ namespace NoLazyWorkers.Employees
 
     public static Dictionary<Guid, IEmployeeAdapter> EmployeeAdapters = new();
     public static Dictionary<IStationAdapter, Employee> StationAdapterBehaviours = new();
-    public static Dictionary<Guid, MoveItemBehaviour> ActiveMoveItemBehaviours = new();
+    public static Dictionary<Guid, MoveItemBehaviour> AdvancedMoveItemBehaviours = new();
     public static Dictionary<Guid, EmployeeBehaviour> ActiveBehaviours = new();
     public static Dictionary<Guid, List<ItemSlot>> ReservedSlots = new();
     public static Dictionary<Property, List<ItemInstance>> NoDestinationCache = new();
@@ -503,7 +503,7 @@ namespace NoLazyWorkers.Employees
         state.QuantityInventory = route.Quantity;
       }
 
-      if (ActiveMoveItemBehaviours.TryGetValue(Npc.GUID, out var moveItemBehaviour))
+      if (AdvancedMoveItemBehaviours.TryGetValue(Npc.GUID, out var moveItemBehaviour))
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"HandleTransfer: Found moveItemBehaviour for NPC={Npc.fullName}, Type={moveItemBehaviour.GetType().Name}", DebugLogger.Category.AllEmployees);
         if (moveItemBehaviour is AdvancedMoveItemBehaviour advancedBehaviour)

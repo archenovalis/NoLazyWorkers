@@ -385,6 +385,7 @@ namespace NoLazyWorkers.Employees
           Object.Destroy(__instance.MoveItemBehaviour);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Removed existing MoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
           var advancedBehaviour = __instance.gameObject.AddComponent<AdvancedMoveItemBehaviour>();
+          advancedBehaviour.Name = "Advanced Move items";
           advancedBehaviour.Priority = 4;
           advancedBehaviour.EnabledOnAwake = false;
           var networkObject = __instance.gameObject.GetComponent<NetworkObject>();
@@ -402,7 +403,7 @@ namespace NoLazyWorkers.Employees
           __instance.MoveItemBehaviour.NetworkInitializeIfDisabled();
           __instance.behaviour.behaviourStack.Add(__instance.MoveItemBehaviour);
           __instance.behaviour.behaviourStack = __instance.behaviour.behaviourStack.OrderByDescending((Behaviour x) => x.Priority).ToList();
-          ActiveMoveItemBehaviours[__instance.GUID] = __instance.MoveItemBehaviour;
+          AdvancedMoveItemBehaviours[__instance.GUID] = __instance.MoveItemBehaviour;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvancedMoveItemBehaviour: Initialized for NPC={__instance.fullName}", DebugLogger.Category.Packager);
         }
         if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employeeAdapter))
@@ -559,7 +560,7 @@ namespace NoLazyWorkers.Employees
       {
         if (ActiveBehaviours.TryGetValue(__instance.GUID, out var behaviour))
         {
-          if (ActiveMoveItemBehaviours.TryGetValue(__instance.GUID, out var moveItemBehaviour))
+          if (AdvancedMoveItemBehaviours.TryGetValue(__instance.GUID, out var moveItemBehaviour))
           {
             behaviour.Disable(__instance);
           }
@@ -571,9 +572,9 @@ namespace NoLazyWorkers.Employees
           EmployeeAdapters.Remove(__instance.GUID);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerFirePatch: Removed PackagerAdapter for NPC={__instance.fullName}", DebugLogger.Category.Packager);
         }
-        if (ActiveMoveItemBehaviours.ContainsKey(__instance.GUID))
+        if (AdvancedMoveItemBehaviours.ContainsKey(__instance.GUID))
         {
-          ActiveMoveItemBehaviours.Remove(__instance.GUID);
+          AdvancedMoveItemBehaviours.Remove(__instance.GUID);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerFirePatch: Removed AdvancedMoveItemBehaviour for NPC={__instance.fullName}", DebugLogger.Category.Packager);
         }
       }
