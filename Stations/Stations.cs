@@ -37,7 +37,7 @@ using NoLazyWorkers.Stations;
 using System.Reflection;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Employees.PackagingStationExtensions;
+using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using ScheduleOne.Employees;
 using FishNet;
@@ -53,15 +53,15 @@ namespace NoLazyWorkers.Stations
     public interface IStationAdapter
     {
       Guid GUID { get; }
+      string Name { get; }
       Vector3 GetAccessPoint(NPC npc);
-      ItemSlot InsertSlot { get; }
+      List<ItemSlot> InsertSlots { get; }
       List<ItemSlot> ProductSlots { get; }
       ItemSlot OutputSlot { get; }
       bool IsInUse { get; }
       bool HasActiveOperation { get; }
       int StartThreshold { get; }
       void StartOperation(Employee employee);
-      int GetInputQuantity();
       List<ItemField> GetInputItemForProduct();
       int MaxProductQuantity { get; }
       ITransitEntity TransitEntity { get; }

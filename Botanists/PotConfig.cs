@@ -82,7 +82,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"SourceChanged(Pot): Failed for PotConfig: {potConfig}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"SourceChanged(Pot): Failed for PotConfig: {potConfig}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
 
@@ -123,7 +123,7 @@ namespace NoLazyWorkers.Botanists
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"RestoreConfigurations: Failed to restore configuration for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to restore configuration for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
         }
       }
 
@@ -164,14 +164,14 @@ namespace NoLazyWorkers.Botanists
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"RestoreConfigurations: Failed to reload Supply for pot: {guid.ToString() ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to reload Supply for pot: {guid.ToString() ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
             FailedSupply.Remove(guid);
           }
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"RestoreConfigurations: Failed to process FailedSupply entries, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to process FailedSupply entries, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
   }
@@ -206,7 +206,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotConfigurationPatch: Failed for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigurationPatch: Failed for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
 
@@ -249,7 +249,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotConfiguration GetSaveStringPatch failed: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfiguration GetSaveStringPatch failed: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
 
@@ -278,7 +278,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
   }
@@ -329,7 +329,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotConfigPanelBindPatch: Failed, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigPanelBindPatch: Failed, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
   }
@@ -374,7 +374,7 @@ namespace NoLazyWorkers.Botanists
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotLoaderPatch: Loaded JSON: {text}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotLoaderPatch: Loaded JSON: {text}", DebugLogger.Category.Pot);
         JObject jsonObject = JObject.Parse(text);
         JToken supplyJToken = jsonObject["Supply"];
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotLoaderPatch: Extracted supplyJToken: {supplyJToken}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
@@ -436,7 +436,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
       }
     }
   }

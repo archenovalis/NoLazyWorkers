@@ -77,7 +77,7 @@ namespace NoLazyWorkers.Botanists
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
             $"BotanistConfigPanelBindPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Settings, DebugLogger.Category.Stacktrace);
+            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
       }
     }
   }
@@ -117,7 +117,7 @@ namespace NoLazyWorkers.Botanists
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
             $"QuestBotanistsMinPassPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot, DebugLogger.Category.Stacktrace);
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
         return true;
       }
     }
@@ -186,7 +186,7 @@ namespace NoLazyWorkers.Botanists
       {
         DebugLogger.Log(DebugLogger.LogLevel.Error,
             $"BotanistGetDryableInSuppliesPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot, DebugLogger.Category.Stacktrace);
+            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
         __result = null;
         return false;
       }

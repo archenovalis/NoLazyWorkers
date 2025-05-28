@@ -1,0 +1,858 @@
+using NoLazyWorkers.Employees;
+using ScheduleOne;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.Employees;
+using ScheduleOne.ItemFramework;
+using ScheduleOne.Management;
+using ScheduleOne.ObjectScripts;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.EmployeeExtensions;
+using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.Stations.PackagingStationExtensions;
+using static NoLazyWorkers.General.StorageUtilities;
+using System.Threading.Tasks;
+using Unity.Services.Qos.Internal;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using FishNet;
+using FishNet.Object.Prediction;
+using ScheduleOne.Product;
+using UnityEngine;
+
+namespace NoLazyWorkers.Employees.Tasks.Packagers
+{
+  public static class PackagingStationTask
+  {
+    public static readonly string JAR_ITEM_ID = "jar"; // ID for jar packaging item
+    public static readonly string BAGGIE_ITEM_ID = "baggie"; // ID for baggie packaging item
+    private const int JAR_QUANTITY_THRESHOLD = 5; // Minimum quantity for jar packaging
+    private const float UNPACKAGING_TIME = 3f; // Duration for unpackaging animation
+    private const float OPERATION_TIMEOUT_SECONDS = 30f; // Timeout for packaging operations
+    public static readonly Dictionary<Guid, bool> IsFetchingPackaging = new(); // Tracks stations fetching packaging
+
+    // Enum for task steps
+    public enum PackagingStationSteps
+    {
+      CheckStation,      // Validate station readiness
+      FetchPackaging,   // Fetch packaging items or product
+      UnpackageBaggies, // Unpack baggies to reach jar threshold
+      StartPackaging,   // Perform packaging operation
+      DeliverOutput,    // Deliver packaged output
+      End               // Cleanup and disable
+    }
+
+    // Creates a type-safe packaging task
+    public static IEmployeeTask Create(Packager packager, int priority)
+    {
+      // Define work steps with type-safe transitions
+      var workSteps = new List<WorkStep<PackagingStationSteps>>
+            {
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.CheckStation,
+                    Validate = Logic.ValidateCheckStation,
+                    Execute = Logic.ExecuteCheckStation,
+                    Transitions = {
+                        { "Success", PackagingStationSteps.StartPackaging },
+                        { "Fetch", PackagingStationSteps.FetchPackaging },
+                        { "Unpackage", PackagingStationSteps.UnpackageBaggies },
+                        { "Refill", PackagingStationSteps.FetchPackaging }
+                    }
+                },
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.FetchPackaging,
+                    Validate = Logic.ValidateFetchPackaging,
+                    Execute = Logic.ExecuteFetchPackaging,
+                    Transitions = { { "Success", PackagingStationSteps.CheckStation } }
+                },
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.UnpackageBaggies,
+                    Validate = Logic.ValidateUnpackageBaggies,
+                    Execute = Logic.ExecuteUnpackageBaggies,
+                    Transitions = { { "Success", PackagingStationSteps.CheckStation } }
+                },
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.StartPackaging,
+                    Validate = Logic.ValidateStartPackaging,
+                    Execute = Logic.ExecuteStartPackaging,
+                    Transitions = { { "Success", PackagingStationSteps.DeliverOutput } }
+                },
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.DeliverOutput,
+                    Validate = Logic.ValidateDeliverOutput,
+                    Execute = Logic.ExecuteDeliverOutput,
+                    Transitions = { { "Success", PackagingStationSteps.End } }
+                },
+                new WorkStep<PackagingStationSteps>
+                {
+                    Step = PackagingStationSteps.End,
+                    Validate = async (emp, state) => true,
+                    Execute = Logic.ExecuteEnd,
+                    Transitions = { }
+                }
+            };
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"CreatePackagingStationTask: Created task for packager={packager?.fullName ?? "null"} with {workSteps.Count} steps, priority={priority}",
+          DebugLogger.Category.Packager);
+
+      return new EmployeeTask<PackagingStationSteps>(packager, "PackagingStation", priority, workSteps);
+    }
+
+    private static class Utilities
+    {
+      // Checks if station is ready for packaging or needs action
+      public static async Task<(bool isReady, string nextStep, string packagingId, ItemInstance productItem)> IsStationReady(PackagingStation station, Packager packager, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"IsStationReady: Checking station={station?.GUID.ToString() ?? "null"} for packager={packager?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (station == null || packager == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "IsStationReady: Invalid station or packager", DebugLogger.Category.Packager);
+          return (false, null, null, null);
+        }
+
+        int productCount = station.ProductSlot?.Quantity ?? 0;
+        ItemInstance productItem = station.ProductSlot?.ItemInstance;
+
+        if (productCount == 0 || productItem == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"IsStationReady: No product in station={station.GUID}",
+              DebugLogger.Category.Packager);
+          return (false, null, null, null);
+        }
+
+        if (IsFetchingPackaging.TryGetValue(station.GUID, out var isFetching) && isFetching)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"IsStationReady: Station={station.GUID} is fetching packaging",
+              DebugLogger.Category.Packager);
+          return (false, null, null, null);
+        }
+
+        // Check packaging availability and determine action
+        var packagingResult = await CheckPackagingAvailability(station, packager, productCount, productItem);
+        if (packagingResult.canPackage)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"IsStationReady: Station={station.GUID} ready for packaging with {packagingResult.packagingId}",
+              DebugLogger.Category.Packager);
+          return (true, "Success", packagingResult.packagingId, productItem);
+        }
+
+        if (packagingResult.needsUnpack)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"IsStationReady: Station={station.GUID} needs baggie unpackaging",
+              DebugLogger.Category.Packager);
+          return (false, "Unpackage", JAR_ITEM_ID, productItem);
+        }
+
+        if (packagingResult.needsBaggieSwap)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"IsStationReady: Station={station.GUID} needs baggie swap",
+              DebugLogger.Category.Packager);
+          return (false, "Fetch", BAGGIE_ITEM_ID, productItem);
+        }
+
+        if (productCount < productItem.StackLimit)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"IsStationReady: Station={station.GUID} needs product refill for {productItem.ID}",
+              DebugLogger.Category.Packager);
+          return (false, "Refill", null, productItem);
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"IsStationReady: Station={station.GUID} needs packaging {packagingResult.packagingId}",
+            DebugLogger.Category.Packager);
+        return (false, "Fetch", packagingResult.packagingId, productItem);
+      }
+
+      // Checks packaging availability and determines if unpack or swap is needed
+      public static async Task<(bool canPackage, string packagingId, bool needsUnpack, bool needsBaggieSwap)> CheckPackagingAvailability(PackagingStation station, Packager packager, int productCount, ItemInstance productItem)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"CheckPackagingAvailability: Checking for station={station?.GUID.ToString() ?? "null"}, productCount={productCount}",
+            DebugLogger.Category.Packager);
+
+        bool preferJars = productCount >= JAR_QUANTITY_THRESHOLD || (productCount > 0 && productCount < JAR_QUANTITY_THRESHOLD);
+        bool hasJars = false;
+        bool hasBaggies = false;
+        bool needsBaggieSwap = false;
+        string requiredPackagingId = preferJars ? JAR_ITEM_ID : BAGGIE_ITEM_ID;
+
+        // Check current packaging slot
+        if (station.PackagingSlot?.Quantity > 0)
+        {
+          if (station.PackagingSlot.ItemInstance.ID == JAR_ITEM_ID)
+            hasJars = true;
+          else if (station.PackagingSlot.ItemInstance.ID == BAGGIE_ITEM_ID)
+            hasBaggies = true;
+        }
+
+        if (preferJars && productCount < JAR_QUANTITY_THRESHOLD)
+        {
+          // Check for baggies to unpack
+          if (CheckBaggieUnpackaging(station, packager, productItem))
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"CheckPackagingAvailability: Baggie unpackaging needed for station={station.GUID}",
+                DebugLogger.Category.Packager);
+            return (false, JAR_ITEM_ID, true, false);
+          }
+
+          // Check for additional product to reach jar threshold
+          int neededForJars = JAR_QUANTITY_THRESHOLD - productCount;
+          var shelf = FindStorageWithItem(packager, productItem, neededForJars);
+          if (shelf.Key != null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"CheckPackagingAvailability: Found shelf={shelf.Key.GUID} with {shelf.Value} of {productItem.ID}",
+                DebugLogger.Category.Packager);
+            return (false, JAR_ITEM_ID, false, false);
+          }
+
+          // Fallback to baggies if jars not feasible
+          if (hasJars)
+          {
+            needsBaggieSwap = true;
+            requiredPackagingId = BAGGIE_ITEM_ID;
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"CheckPackagingAvailability: Swapping jars for baggies in station={station.GUID}",
+                DebugLogger.Category.Packager);
+          }
+          preferJars = false;
+        }
+
+        if (preferJars && hasJars)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"CheckPackagingAvailability: Using jars for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          return (true, JAR_ITEM_ID, false, false);
+        }
+        if (!preferJars && hasBaggies)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"CheckPackagingAvailability: Using baggies for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          return (true, BAGGIE_ITEM_ID, false, false);
+        }
+
+        // Check for packaging item on shelves
+        var packagingItem = Registry.GetItem(requiredPackagingId).GetDefaultInstance();
+        var packagingShelf = FindStorageWithItem(packager, packagingItem, 1);
+        if (packagingShelf.Key != null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"CheckPackagingAvailability: Found shelf={packagingShelf.Key.GUID} with {requiredPackagingId}",
+              DebugLogger.Category.Packager);
+          return (false, requiredPackagingId, false, needsBaggieSwap);
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"CheckPackagingAvailability: No packaging available for {requiredPackagingId} in station={station.GUID}",
+            DebugLogger.Category.Packager);
+        return (false, requiredPackagingId, false, needsBaggieSwap);
+      }
+
+      // Checks if baggies can be unpackaged to reach jar threshold
+      public static bool CheckBaggieUnpackaging(PackagingStation station, Packager packager, ItemInstance targetProduct)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"CheckBaggieUnpackaging: Checking for station={station?.GUID.ToString() ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        var packagingSlot = station.PackagingSlot;
+        if (packagingSlot == null || packagingSlot.Quantity < 1 || (packagingSlot.ItemInstance as ProductItemInstance)?.AppliedPackaging?.ID != BAGGIE_ITEM_ID)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"CheckBaggieUnpackaging: No valid baggies in station={station.GUID}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        int currentQuantity = station.ProductSlot.Quantity;
+        int stackLimit = targetProduct?.StackLimit ?? 20;
+        int targetQuantity = Math.Min(stackLimit, ((currentQuantity / JAR_QUANTITY_THRESHOLD) + 1) * JAR_QUANTITY_THRESHOLD);
+        int neededQuantity = targetQuantity - currentQuantity;
+        int availableBaggies = packagingSlot.Quantity;
+
+        if (neededQuantity <= 0 || availableBaggies < 1)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              $"CheckBaggieUnpackaging: No unpack needed, neededQuantity={neededQuantity}, availableBaggies={availableBaggies}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        int unpackCount = Math.Min(availableBaggies, (neededQuantity + JAR_QUANTITY_THRESHOLD - 1) / JAR_QUANTITY_THRESHOLD);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"CheckBaggieUnpackaging: Can unpackage {unpackCount} baggies for station={station.GUID}, adding {unpackCount * JAR_QUANTITY_THRESHOLD} product",
+            DebugLogger.Category.Packager);
+        return true;
+      }
+
+      // Initiates retrieval of packaging or product
+      public static async Task<bool> InitiatePackagingRetrieval(PackagingStation station, Packager packager, string itemId, StateData state, ItemInstance productItem = null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"InitiatePackagingRetrieval: Retrieving itemId={itemId} for station={station?.GUID.ToString() ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        ItemInstance item = productItem ?? Registry.GetItem(itemId).GetDefaultInstance();
+        int quantityNeeded = productItem != null ? Math.Max(1, item.StackLimit - (station.ProductSlot?.Quantity ?? 0)) : 1;
+        var shelf = FindStorageWithItem(packager, item, quantityNeeded);
+
+        if (shelf.Key == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"InitiatePackagingRetrieval: No shelf for item={item.ID}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        var sourceSlots = GetOutputSlotsContainingTemplateItem(shelf.Key, item);
+        if (sourceSlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"InitiatePackagingRetrieval: No source slots for item={item.ID} on shelf={shelf.Key.GUID}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        List<ItemSlot> packagingSlot = [station.PackagingSlot];
+        var deliverySlots = packagingSlot.AdvReserveInputSlotsForItem(item, packager.NetworkObject);
+        if (deliverySlots == null || deliverySlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"InitiatePackagingRetrieval: No delivery slots for item={item.ID} at station={station.GUID}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        int quantity = Math.Min(shelf.Value, quantityNeeded);
+        if (quantity <= 0 || packager.Inventory.HowManyCanFit(item) < quantity)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"InitiatePackagingRetrieval: Invalid quantity={quantity} or insufficient inventory for item={item.ID}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        var inventorySlot = packager.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
+        if (inventorySlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"InitiatePackagingRetrieval: No inventory slot for packager={packager.fullName}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        foreach (var pickupSlot in sourceSlots)
+          pickupSlot.ApplyLock(packager.NetworkObject, "pickup");
+
+        var request = TransferRequest.Get(packager, item, quantity, inventorySlot, shelf.Key, sourceSlots, station, deliverySlots);
+        state.EmployeeState.TaskContext = state.EmployeeState.TaskContext ?? new TaskContext();
+        state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
+        state.EmployeeState.TaskContext.Item = item;
+        IsFetchingPackaging[station.GUID] = true;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"InitiatePackagingRetrieval: Initiated transfer of {quantity} {item.ID} to station={station.GUID}",
+            DebugLogger.Category.Packager);
+        return true;
+      }
+    }
+
+    private static class Logic
+    {
+      // Validates if a station is ready for packaging
+      public static async Task<bool> ValidateCheckStation(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateCheckStation: Validating for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateCheckStation: Employee is not a Packager",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        var stations = packager.configuration.AssignedStations?.OfType<PackagingStation>() ?? Enumerable.Empty<PackagingStation>();
+        foreach (var station in stations)
+        {
+          if (station == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"ValidateCheckStation: Null station for packager={packager.fullName}",
+                DebugLogger.Category.Packager);
+            continue;
+          }
+
+          if (((IUsable)station).IsInUse || packager.PackagingBehaviour.PackagingInProgress)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"ValidateCheckStation: Station={station.GUID} in use or packaging in progress",
+                DebugLogger.Category.Packager);
+            continue;
+          }
+
+          if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
+          {
+            stationAdapter = new PackagingStationAdapter(station);
+            StationAdapters[station.GUID] = stationAdapter;
+          }
+
+          var (isReady, _, _, _) = await Utilities.IsStationReady(station, packager, state);
+          if (isReady)
+          {
+            state.EmployeeState.TaskContext = new TaskContext { Station = stationAdapter };
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"ValidateCheckStation: Station={station.GUID} is ready for packager={packager.fullName}",
+                DebugLogger.Category.Packager);
+            return true;
+          }
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateCheckStation: No valid stations for packager={packager.fullName}",
+            DebugLogger.Category.Packager);
+        return false;
+      }
+
+      // Determines next action for the station
+      public static async Task ExecuteCheckStation(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteCheckStation: Executing for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteCheckStation: Invalid packager or station, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        var (isReady, nextStep, packagingId, productItem) = await Utilities.IsStationReady(station, packager, state);
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteCheckStation: Station={station.GUID}, isReady={isReady}, nextStep={nextStep}",
+            DebugLogger.Category.Packager);
+
+        if (!isReady)
+        {
+          if (nextStep == "Unpackage")
+          {
+            state.EmployeeState.CurrentWorkStep = PackagingStationSteps.UnpackageBaggies;
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"ExecuteCheckStation: Transitioning to UnpackageBaggies for station={station.GUID}",
+                DebugLogger.Category.Packager);
+            return;
+          }
+
+          if (nextStep == "Fetch" || nextStep == "Refill")
+          {
+            if (await Utilities.InitiatePackagingRetrieval(station, packager, nextStep == "Refill" ? productItem.ID : packagingId, state, nextStep == "Refill" ? productItem : null))
+            {
+              state.EmployeeState.CurrentWorkStep = PackagingStationSteps.FetchPackaging;
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"ExecuteCheckStation: Initiating {(nextStep == "Refill" ? "product refill" : "packaging fetch")} for {packagingId ?? productItem.ID} to station={station.GUID}",
+                  DebugLogger.Category.Packager);
+              return;
+            }
+          }
+
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteCheckStation: No actions available for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        state.EmployeeState.CurrentWorkStep = PackagingStationSteps.StartPackaging;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteCheckStation: Transitioning to StartPackaging for station={station.GUID}",
+            DebugLogger.Category.Packager);
+      }
+
+      // Validates fetch packaging step
+      public static async Task<bool> ValidateFetchPackaging(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateFetchPackaging: Validating for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        bool isValid = state.EmployeeState.TaskContext?.Requests?.Count > 0;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateFetchPackaging: Has requests={isValid} for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+        return isValid;
+      }
+
+      // Executes fetch packaging or product
+      public static async Task ExecuteFetchPackaging(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteFetchPackaging: Executing for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Requests == null || state.EmployeeState.TaskContext.Requests.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteFetchPackaging: Invalid packager or no requests, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        var requests = state.EmployeeState.TaskContext.Requests;
+
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 100),
+            nextStep: PackagingStationSteps.CheckStation,
+            onComplete: async (emp, s, status) =>
+            {
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ExecuteFetchPackaging: Movement completed with status={status} for packager={emp.fullName}",
+              DebugLogger.Category.Packager);
+
+              foreach (var req in requests)
+                TransferRequest.Release(req);
+              IsFetchingPackaging.Remove(station.GUID);
+              await s.EmployeeBeh.ExecuteTask();
+            });
+      }
+
+      // Validates unpackaging baggies
+      public static async Task<bool> ValidateUnpackageBaggies(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateUnpackageBaggies: Validating for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ValidateUnpackageBaggies: Invalid packager or station, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        bool canUnpack = Utilities.CheckBaggieUnpackaging(station, packager, station.ProductSlot?.ItemInstance);
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateUnpackageBaggies: Can unpack={canUnpack} for station={station.GUID}",
+            DebugLogger.Category.Packager);
+        return canUnpack;
+      }
+
+      // Unpackages baggies to reach jar threshold
+      public static async Task ExecuteUnpackageBaggies(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteUnpackageBaggies: Executing for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteUnpackageBaggies: Invalid packager or station, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        var productSlot = station.ProductSlot;
+
+        if (productSlot == null || productSlot.ItemInstance == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteUnpackageBaggies: No valid product slot for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        if (!Utilities.CheckBaggieUnpackaging(station, packager, productSlot.ItemInstance))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ExecuteUnpackageBaggies: No unpack needed for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.CheckStation;
+          return;
+        }
+
+        packager.PackagingBehaviour.PackagingInProgress = true;
+
+        IEnumerator UnpackageCoroutine()
+        {
+          packager.Avatar.Anim.SetBool("UsePackagingStation", true);
+          float unpackageTime = UNPACKAGING_TIME / packager.PackagingSpeedMultiplier * station.PackagerEmployeeSpeedMultiplier;
+          float elapsed = 0f;
+
+          while (elapsed < unpackageTime)
+          {
+            packager.Avatar.LookController.OverrideLookTarget(station.Container.position, 0);
+            elapsed += Time.deltaTime;
+            yield return null;
+          }
+
+          packager.Avatar.Anim.SetBool("UsePackagingStation", false);
+          if (InstanceFinder.IsServer)
+            station.Unpack();
+
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ExecuteUnpackageBaggies: Unpackaging completed for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          packager.PackagingBehaviour.PackagingInProgress = false;
+        }
+
+        packager.StartCoroutine(UnpackageCoroutine());
+        float timeout = 0f;
+        while (packager.PackagingBehaviour.PackagingInProgress && timeout < OPERATION_TIMEOUT_SECONDS)
+        {
+          await Task.Delay(100);
+          timeout += 0.1f;
+        }
+
+        if (packager.PackagingBehaviour.PackagingInProgress)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteUnpackageBaggies: Unpackaging timed out for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          packager.PackagingBehaviour.StopPackaging();
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        state.EmployeeState.CurrentWorkStep = PackagingStationSteps.CheckStation;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteUnpackageBaggies: Transitioning to CheckStation for packager={packager.fullName}",
+            DebugLogger.Category.Packager);
+      }
+
+      // Validates packaging operation
+      public static async Task<bool> ValidateStartPackaging(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateStartPackaging: Validating for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ValidateStartPackaging: Invalid packager or station, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        var (isReady, _, packagingId, _) = await Utilities.IsStationReady(station, packager, state);
+
+        bool isValid = isReady && station.GetState(PackagingStation.EMode.Package) == PackagingStation.EState.CanBegin;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateStartPackaging: Is valid={isValid}, packagingId={packagingId} for station={station.GUID}",
+            DebugLogger.Category.Packager);
+        return isValid;
+      }
+
+      // Starts packaging operation
+      public static async Task ExecuteStartPackaging(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteStartPackaging: Executing for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteStartPackaging: Invalid packager or station, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        int productCount = station.ProductSlot?.Quantity ?? 0;
+        var productItem = station.ProductSlot?.ItemInstance;
+
+        if (productCount == 0 || productItem == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteStartPackaging: No valid product for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        bool preferJars = productCount >= JAR_QUANTITY_THRESHOLD || (productCount > 0 && productCount < JAR_QUANTITY_THRESHOLD);
+        string packagingId = preferJars ? JAR_ITEM_ID : BAGGIE_ITEM_ID;
+
+        if (station.PackagingSlot == null || station.PackagingSlot.Quantity <= 0 || station.PackagingSlot.ItemInstance.ID != packagingId)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteStartPackaging: Invalid packaging slot for {packagingId} in station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        packager.PackagingBehaviour.BeginPackaging();
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteStartPackaging: Started packaging {productCount} of {productItem.ID} in {packagingId} for station={station.GUID}",
+            DebugLogger.Category.Packager);
+
+        float timeout = 0f;
+        while (packager.PackagingBehaviour.PackagingInProgress && timeout < OPERATION_TIMEOUT_SECONDS)
+        {
+          await Task.Delay(100);
+          timeout += 0.1f;
+        }
+
+        if (packager.PackagingBehaviour.PackagingInProgress)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteStartPackaging: Packaging timed out for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          packager.PackagingBehaviour.StopPackaging();
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        if (station.OutputSlot?.ItemInstance == null || station.OutputSlot.Quantity <= 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteStartPackaging: No output produced for station={station.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        state.EmployeeState.CurrentWorkStep = PackagingStationSteps.DeliverOutput;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteStartPackaging: Transitioning to DeliverOutput for station={station.GUID}",
+            DebugLogger.Category.Packager);
+      }
+
+      // Validates output delivery
+      public static async Task<bool> ValidateDeliverOutput(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateDeliverOutput: Validating for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager) || state.EmployeeState.TaskContext?.Station == null ||
+            state.EmployeeState.TaskContext.Station.OutputSlot?.ItemInstance == null ||
+            state.EmployeeState.TaskContext.Station.OutputSlot.Quantity <= 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ValidateDeliverOutput: Invalid state or no output, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          return false;
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateDeliverOutput: Valid output for packager={employee.fullName}",
+            DebugLogger.Category.Packager);
+        return true;
+      }
+
+      // Delivers packaged output
+      public static async Task ExecuteDeliverOutput(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteDeliverOutput: Executing for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null ||
+            state.EmployeeState.TaskContext.Station.OutputSlot?.ItemInstance == null ||
+            state.EmployeeState.TaskContext.Station.OutputSlot.Quantity <= 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteDeliverOutput: Invalid state or no output, packager={employee?.fullName ?? "null"}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
+        var packagedItem = station.OutputSlot.ItemInstance;
+        int quantity = station.OutputSlot.Quantity;
+
+        var shelf = FindStorageWithItem(packager, packagedItem, quantity);
+        if (shelf.Key == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverOutput: No storage for item={packagedItem.ID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var deliverySlots = shelf.Key.InputSlots.AdvReserveInputSlotsForItem(packagedItem, packager.NetworkObject);
+        if (deliverySlots == null || deliverySlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverOutput: No delivery slots at shelf={shelf.Key.GUID}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        var inventorySlot = packager.Inventory.ItemSlots.Find(s => s.ItemInstance == null);
+        if (inventorySlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverOutput: No inventory slot for packager={packager.fullName}",
+              DebugLogger.Category.Packager);
+          state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
+          return;
+        }
+
+        station.OutputSlot.ApplyLock(packager.NetworkObject, "pickup");
+        var request = TransferRequest.Get(packager, packagedItem, quantity, inventorySlot, station, new List<ItemSlot> { station.OutputSlot }, shelf.Key, deliverySlots);
+        var requests = new List<TransferRequest> { request };
+        state.EmployeeState.TaskContext.Requests = requests;
+
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 100),
+                nextStep: PackagingStationSteps.End);
+      }
+
+      // Cleans up resources and disables behavior
+      public static async Task ExecuteEnd(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteEnd: Cleaning up for packager={employee?.fullName ?? "null"}",
+            DebugLogger.Category.Packager);
+
+        state.EmployeeState.TaskContext?.Cleanup(employee);
+        if (state.EmployeeState.TaskContext?.Station != null)
+          IsFetchingPackaging.Remove(state.EmployeeState.TaskContext.Station.GUID);
+
+        await state.EmployeeBeh.Disable();
+      }
+    }
+  }
+}

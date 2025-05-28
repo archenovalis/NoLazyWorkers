@@ -1,0 +1,777 @@
+using FishNet;
+using HarmonyLib;
+using ScheduleOne.Employees;
+using ScheduleOne.ItemFramework;
+using ScheduleOne.Management;
+using ScheduleOne.NPCs.Behaviour;
+using ScheduleOne.ObjectScripts;
+using ScheduleOne.Product;
+using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.MixingStationExtensions;
+using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
+using NoLazyWorkers.Employees;
+using ScheduleOne.NPCs;
+using static NoLazyWorkers.Employees.EmployeeExtensions;
+using NoLazyWorkers.General;
+using ScheduleOne.DevUtilities;
+using UnityEngine;
+using ScheduleOne;
+using static NoLazyWorkers.Stations.PackagingStationExtensions;
+using ScheduleOne.EntityFramework;
+using System.Threading.Tasks;
+
+namespace NoLazyWorkers.Employees.Tasks.Chemists
+{
+  public static class MixingStationTaskUtilities
+  {
+    public class ValidationResult
+    {
+      public bool IsValid { get; set; }
+      public bool CanStart { get; set; }
+      public bool CanRestock { get; set; }
+      public bool HasOutput { get; set; }
+      public ItemInstance RestockItem { get; set; }
+      public int RestockQuantity { get; set; }
+      public ITransitEntity RestockShelf { get; set; }
+      public List<ItemSlot> RestockPickupSlots { get; set; }
+    }
+
+    public static async Task<ValidationResult> ValidateStationState(Chemist chemist, IStationAdapter stationAdapter)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"ValidateStationState: Entered for chemist={chemist?.fullName ?? "null"}, type={stationAdapter?.TypeOf}, station={stationAdapter?.GUID.ToString() ?? "null"}",
+          DebugLogger.Category.MixingStation);
+
+      var result = new ValidationResult();
+      if (chemist == null || stationAdapter == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"ValidateStationState: Invalid chemist or station adapter, chemist={chemist?.fullName ?? "null"}, station={stationAdapter?.GUID.ToString() ?? "null"}",
+            DebugLogger.Category.MixingStation);
+        return result;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateStationState: Checking station state for {stationAdapter.GUID}, inUse={stationAdapter.IsInUse}, hasActiveOperation={stationAdapter.HasActiveOperation}",
+          DebugLogger.Category.MixingStation);
+
+      if (stationAdapter.IsInUse || stationAdapter.HasActiveOperation)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateStationState: Station in use or active for station={stationAdapter.GUID}",
+            DebugLogger.Category.MixingStation);
+        return result;
+      }
+
+      var state = EmployeeBehaviour.GetState(chemist);
+      if (stationAdapter.OutputSlot.Quantity > 0)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateStationState: Station {stationAdapter.GUID} has output, quantity={stationAdapter.OutputSlot.Quantity}",
+            DebugLogger.Category.MixingStation);
+        result.IsValid = true;
+        result.HasOutput = true;
+
+        state.EmployeeState.TaskContext = new TaskContext
+        {
+          Station = stationAdapter,
+          ValidationResult = result
+        };
+        return result;
+      }
+
+      var inputItems = stationAdapter.GetInputItemForProduct();
+      if (inputItems == null || inputItems.Count == 0 || inputItems[0]?.SelectedItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ValidateStationState: Input item null or empty for station={stationAdapter.GUID}",
+            DebugLogger.Category.MixingStation);
+        return result;
+      }
+
+      ItemField inputItem = inputItems[0];
+      ItemInstance targetItem = inputItem.SelectedItem.GetDefaultInstance();
+      if (targetItem == null)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Error,
+            $"ValidateStationState: Target item null for station={stationAdapter.GUID}",
+            DebugLogger.Category.MixingStation);
+        return result;
+      }
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ValidateStationState: Processing input item {targetItem.ID} for station {stationAdapter.GUID}", DebugLogger.Category.MixingStation);
+
+      int threshold = stationAdapter.StartThreshold;
+      int desiredQty = Math.Min(stationAdapter.MaxProductQuantity, stationAdapter.ProductSlots[0].Quantity);
+      int invQty = chemist.Inventory.GetIdenticalItemAmount(targetItem);
+      int inputQty = stationAdapter.InsertSlots[0].Quantity;
+      int quantityNeeded = Math.Max(0, threshold - inputQty - invQty);
+      int quantityWanted = Math.Max(0, desiredQty - inputQty - invQty);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateStationState: Quantities for station {stationAdapter.GUID}, inputQty={inputQty}, invQty={invQty}, threshold={threshold}, desiredQty={desiredQty}, needed={quantityNeeded}, wanted={quantityWanted}",
+          DebugLogger.Category.MixingStation);
+
+      if (desiredQty < threshold)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            $"ValidateStationState: Below threshold for station={stationAdapter.GUID}, inputQty={inputQty}, threshold={threshold}",
+            DebugLogger.Category.MixingStation);
+        return result;
+      }
+
+      var shelf = FindStorageWithItem(chemist, targetItem, quantityNeeded, quantityWanted);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateStationState: Shelf search for item {targetItem.ID}, found={shelf.Key != null}, availableQty={shelf.Value}",
+          DebugLogger.Category.MixingStation);
+
+      if (inputQty >= threshold && desiredQty >= threshold)
+      {
+        if (inputQty >= desiredQty)
+        {
+          result.CanStart = true;
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ValidateStationState: Can start operation for station {stationAdapter.GUID}, inputQty={inputQty}, desiredQty={desiredQty}",
+              DebugLogger.Category.MixingStation);
+        }
+        else if (shelf.Key != null)
+        {
+          result.CanRestock = true;
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ValidateStationState: Can restock station {stationAdapter.GUID}, shelf={shelf.Key?.GUID}",
+              DebugLogger.Category.MixingStation);
+        }
+        else
+        {
+          result.CanStart = true;
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ValidateStationState: Can start operation (no restock needed) for station {stationAdapter.GUID}",
+              DebugLogger.Category.MixingStation);
+        }
+      }
+      else if (shelf.Key != null && shelf.Value >= quantityNeeded)
+      {
+        result.CanRestock = true;
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateStationState: Can restock station {stationAdapter.GUID}, shelf={shelf.Key?.GUID}, neededQty={quantityNeeded}, invQty={invQty}",
+            DebugLogger.Category.MixingStation);
+      }
+
+      if (result.CanRestock)
+      {
+        result.RestockItem = targetItem;
+        result.RestockShelf = shelf.Key;
+        result.RestockQuantity = Math.Min(shelf.Value, quantityWanted);
+        result.RestockPickupSlots = shelf.Key?.StorageEntity.ItemSlots
+            .FindAll(s => s.ItemInstance != null && targetItem.AdvCanStackWith(s.ItemInstance, allowHigherQuality: true));
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateStationState: Restock configured for station {stationAdapter.GUID}, item={targetItem.ID}, quantity={result.RestockQuantity}, shelf={shelf.Key?.GUID}, pickupSlots={result.RestockPickupSlots?.Count ?? 0}",
+            DebugLogger.Category.MixingStation);
+
+        if (result.RestockPickupSlots == null || result.RestockPickupSlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ValidateStationState: No valid pickup slots for restock on shelf {shelf.Key?.GUID}",
+              DebugLogger.Category.MixingStation);
+          result.CanRestock = false;
+        }
+      }
+
+      result.IsValid = result.CanStart || result.CanRestock || result.HasOutput;
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"ValidateStationState: Completed for chemist={chemist.fullName}, station={stationAdapter.GUID}, isValid={result.IsValid}, canStart={result.CanStart}, canRestock={result.CanRestock}, hasOutput={result.HasOutput}",
+          DebugLogger.Category.MixingStation);
+      if (result.IsValid)
+        state.EmployeeState.TaskContext = new TaskContext
+        {
+          Station = stationAdapter,
+          Item = targetItem,
+          QuantityNeeded = quantityNeeded,
+          QuantityWanted = quantityWanted,
+          ValidationResult = result
+        };
+      return result;
+    }
+  }
+
+  public static class MixingStationTask
+  {
+    private const float OPERATION_TIMEOUT_SECONDS = 30f; // Timeout for station operations
+
+    // Enum for task steps
+    public enum MixingStationSteps
+    {
+      CheckStationState, // Validate station status
+      RestockIngredients, // Restock required ingredients
+      OperateStation,    // Start mixing operation
+      HandleOutput,     // Process station output
+      DeliverProduct,   // Deliver output to shelf
+      End,              // Cleanup and disable
+      OnComplete        // StartMoving uses custom onComplete
+    }
+
+    // Creates a type-safe mixing task
+    public static EmployeeTask<MixingStationSteps> Create(Chemist chemist, int priority, int index)
+    {
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          $"CreateMixingStationTask: Creating for chemist={chemist?.fullName ?? "null"}, priority={priority}, index={index}",
+          DebugLogger.Category.MixingStation);
+
+      var workSteps = new List<WorkStep<MixingStationSteps>>
+            {
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.CheckStationState,
+                    Validate = Logic.ValidateCheckStationState,
+                    Execute = Logic.ExecuteCheckStationState,
+                    Transitions = {
+                        { "Restock", MixingStationSteps.RestockIngredients },
+                        { "Start", MixingStationSteps.OperateStation },
+                        { "Output", MixingStationSteps.HandleOutput }
+                    }
+                },
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.RestockIngredients,
+                    Validate = Logic.ValidateRestockIngredients,
+                    Execute = Logic.ExecuteRestockIngredients,
+                    Transitions = { { "Success", MixingStationSteps.OperateStation } }
+                },
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.OperateStation,
+                    Validate = Logic.ValidateOperateStation,
+                    Execute = Logic.ExecuteOperateStation,
+                    Transitions = { { "Success", MixingStationSteps.CheckStationState } }
+                },
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.HandleOutput,
+                    Validate = Logic.ValidateHandleOutput,
+                    Execute = Logic.ExecuteHandleOutput,
+                    Transitions = {
+                        { "Success", MixingStationSteps.CheckStationState },
+                        { "Deliver", MixingStationSteps.DeliverProduct }
+                    }
+                },
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.DeliverProduct,
+                    Validate = Logic.ValidateDeliverProduct,
+                    Execute = Logic.ExecuteDeliverProduct,
+                    Transitions = { { "Success", MixingStationSteps.End } }
+                },
+                new WorkStep<MixingStationSteps>
+                {
+                    Step = MixingStationSteps.End,
+                    Validate = async (emp, state) => true,
+                    Execute = Logic.ExecuteEnd,
+                    Transitions = { }
+                }
+            };
+
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          $"CreateMixingStationTask: Created task for chemist={chemist?.fullName ?? "null"} with {workSteps.Count} steps",
+          DebugLogger.Category.MixingStation);
+
+      return new EmployeeTask<MixingStationSteps>(chemist, "MixingStation", priority, workSteps);
+    }
+
+    private static class Logic
+    {
+      // Validates station state
+      public static async Task<bool> ValidateCheckStationState(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateCheckStationState: Validating for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateCheckStationState: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var stations = chemist.configuration.MixStations;
+        foreach (var station in stations)
+        {
+          if (station == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"ValidateCheckStationState: Null station for chemist={chemist.fullName}",
+                DebugLogger.Category.MixingStation);
+            continue;
+          }
+          var adapter = StationAdapters[station.GUID];
+          if (adapter.IsInUse || adapter.HasActiveOperation)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                $"ValidateCheckStationState: Station={adapter.GUID} in use or active",
+                DebugLogger.Category.MixingStation);
+            continue;
+          }
+
+          var result = await MixingStationTaskUtilities.ValidateStationState(chemist, adapter);
+          if (result.IsValid)
+          {
+            state.EmployeeState.TaskContext = new TaskContext
+            {
+              Station = adapter,
+              ValidationResult = result
+            };
+            DebugLogger.Log(DebugLogger.LogLevel.Info,
+                $"ValidateCheckStationState: Valid station={adapter.GUID} for chemist={chemist.fullName}",
+                DebugLogger.Category.MixingStation);
+            return true;
+          }
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateCheckStationState: No valid stations for chemist={chemist.fullName}",
+            DebugLogger.Category.MixingStation);
+        return false;
+      }
+
+      // Determines next action based on station state
+      public static async Task ExecuteCheckStationState(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteCheckStationState: Executing for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        if (result == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteCheckStationState: Null validation result for chemist={employee?.fullName ?? "null"}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        state.EmployeeState.CurrentWorkStep = result.HasOutput ? MixingStationSteps.HandleOutput :
+                                             result.CanRestock ? MixingStationSteps.RestockIngredients :
+                                             result.CanStart ? MixingStationSteps.OperateStation :
+                                             MixingStationSteps.End;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteCheckStationState: Transitioning to {state.EmployeeState.CurrentWorkStep} for chemist={employee.fullName}",
+            DebugLogger.Category.MixingStation);
+      }
+
+      // Validates restock conditions
+      public static async Task<bool> ValidateRestockIngredients(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateRestockIngredients: Validating for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateRestockIngredients: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        bool isValid = result?.CanRestock == true && result.RestockShelf != null && result.RestockPickupSlots?.Count > 0;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateRestockIngredients: Is valid={isValid}, canRestock={result?.CanRestock}, shelf={result?.RestockShelf != null}, pickupSlots={result?.RestockPickupSlots?.Count ?? 0}",
+            DebugLogger.Category.MixingStation);
+        return isValid;
+      }
+
+      // Restocks ingredients
+      public static async Task ExecuteRestockIngredients(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteRestockIngredients: Executing for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ExecuteRestockIngredients: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        if (result == null || result.RestockShelf == null || result.RestockPickupSlots == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteRestockIngredients: Invalid restock conditions for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var inventorySlot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+        if (inventorySlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteRestockIngredients: No inventory slot for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var deliverySlots = state.EmployeeState.TaskContext.Station.InsertSlots[0].GetCapacityForItem(result.RestockItem) > 0
+            ? new List<ItemSlot> { state.EmployeeState.TaskContext.Station.InsertSlots[0] }
+            : null;
+
+        if (deliverySlots == null || deliverySlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteRestockIngredients: No delivery slots for station={state.EmployeeState.TaskContext.Station.GUID}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        int quantity = Math.Min(result.RestockQuantity, result.RestockPickupSlots.Sum(s => s.Quantity));
+        foreach (var pickupSlot in result.RestockPickupSlots)
+          pickupSlot.ApplyLock(chemist.NetworkObject, "pickup");
+
+        var request = TransferRequest.Get(chemist, result.RestockItem, quantity, inventorySlot,
+            result.RestockShelf, result.RestockPickupSlots,
+            state.EmployeeState.TaskContext.Station.TransitEntity, deliverySlots);
+
+        state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
+
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
+                async (emp, s, status) =>
+                {
+                  DebugLogger.Log(DebugLogger.LogLevel.Info,
+                              $"ExecuteRestockIngredients: Movement completed with status={status} for chemist={emp.fullName}",
+                              DebugLogger.Category.MixingStation);
+
+                  s.EmployeeState.CurrentWorkStep = status == Status.Success
+                              ? MixingStationSteps.OperateStation
+                              : MixingStationSteps.End;
+                  await s.EmployeeBeh.ExecuteTask();
+                });
+      }
+
+      // Validates operation start
+      public static async Task<bool> ValidateOperateStation(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateOperateStation: Validating for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateOperateStation: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        bool isValid = result?.CanStart == true;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateOperateStation: Is valid={isValid}, canStart={result?.CanStart}",
+            DebugLogger.Category.MixingStation);
+        return isValid;
+      }
+
+      // Starts mixing operation
+      public static async Task ExecuteOperateStation(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteOperateStation: Executing for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ExecuteOperateStation: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var station = state.EmployeeState.TaskContext?.Station;
+        if (station == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteOperateStation: No station for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        station.StartOperation(chemist);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteOperateStation: Started operation on station={station.GUID} for chemist={chemist.fullName}",
+            DebugLogger.Category.MixingStation);
+
+        float elapsed = 0f;
+        while (!station.IsInUse && elapsed < OPERATION_TIMEOUT_SECONDS)
+        {
+          await Task.Delay(100);
+          elapsed += 0.1f;
+        }
+
+        if (!station.IsInUse)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteOperateStation: Station={station.GUID} failed to start for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        elapsed = 0f;
+        while (station.IsInUse && elapsed < OPERATION_TIMEOUT_SECONDS)
+        {
+          await Task.Delay(100);
+          elapsed += 0.1f;
+        }
+
+        if (station.IsInUse)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteOperateStation: Operation timed out on station={station.GUID} for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteOperateStation: Operation completed on station={station.GUID} for chemist={chemist.fullName}",
+            DebugLogger.Category.MixingStation);
+
+        state.EmployeeState.CurrentWorkStep = MixingStationSteps.CheckStationState;
+      }
+
+      // Validates output handling
+      public static async Task<bool> ValidateHandleOutput(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateHandleOutput: Validating for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateHandleOutput: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        bool isValid = result?.HasOutput == true && state.EmployeeState.TaskContext?.Station?.OutputSlot?.ItemInstance != null;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateHandleOutput: Is valid={isValid}, hasOutput={result?.HasOutput}",
+            DebugLogger.Category.MixingStation);
+        return isValid;
+      }
+
+      // Handles station output
+      public static async Task ExecuteHandleOutput(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteHandleOutput: Executing for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ExecuteHandleOutput: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var outputItem = state.EmployeeState.TaskContext?.Station?.OutputSlot?.ItemInstance;
+        if (outputItem == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteHandleOutput: No output item for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var deliverySlot = state.EmployeeState.TaskContext?.Station?.ProductSlots?.FirstOrDefault();
+        if (deliverySlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              $"ExecuteHandleOutput: No delivery slot for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        if (deliverySlot.ItemInstance == null || state.Station.CanRefill(outputItem))
+        {
+          var inventorySlot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null || outputItem.AdvCanStackWith(s.ItemInstance, checkQuantities: true));
+          if (inventorySlot == null)
+          {
+            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                $"ExecuteHandleOutput: No inventory slot for chemist={chemist.fullName}",
+                DebugLogger.Category.MixingStation);
+            state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+            return;
+          }
+
+          int quantity = Math.Min(state.EmployeeState.TaskContext.Station.OutputSlot.Quantity, deliverySlot.GetCapacityForItem(outputItem));
+          state.EmployeeState.TaskContext.Station.OutputSlot.ApplyLock(chemist.NetworkObject, "pickup");
+
+          var request = TransferRequest.Get(chemist, outputItem, quantity, inventorySlot,
+              state.EmployeeState.TaskContext.Station.TransitEntity,
+              new List<ItemSlot> { state.EmployeeState.TaskContext.Station.OutputSlot },
+              state.EmployeeState.TaskContext.Station.TransitEntity,
+              new List<ItemSlot> { deliverySlot });
+
+          state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
+
+          state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
+                  async (emp, s, status) =>
+                  {
+                    DebugLogger.Log(DebugLogger.LogLevel.Info,
+                                  $"ExecuteHandleOutput: Movement completed with status={status} for chemist={emp.fullName}",
+                                  DebugLogger.Category.MixingStation);
+
+                    s.EmployeeState.CurrentWorkStep = status == Status.Success
+                                  ? MixingStationSteps.CheckStationState
+                                  : MixingStationSteps.End;
+                    await s.EmployeeBeh.ExecuteTask();
+                  });
+        }
+        else
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ExecuteHandleOutput: Transitioning to DeliverProduct for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.DeliverProduct;
+        }
+      }
+
+      // Validates product delivery
+      public static async Task<bool> ValidateDeliverProduct(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ValidateDeliverProduct: Validating for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ValidateDeliverProduct: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          return false;
+        }
+
+        var result = state.EmployeeState.TaskContext?.ValidationResult as MixingStationTaskUtilities.ValidationResult;
+        bool isValid = result?.HasOutput == true && state.EmployeeState.TaskContext?.Station?.OutputSlot?.ItemInstance != null;
+
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ValidateDeliverProduct: Is valid={isValid}, hasOutput={result?.HasOutput}",
+            DebugLogger.Category.MixingStation);
+        return isValid;
+      }
+
+      // Delivers output to shelf
+      public static async Task ExecuteDeliverProduct(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+            $"ExecuteDeliverProduct: Executing for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        if (!(employee is Chemist chemist))
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Error,
+              "ExecuteDeliverProduct: Employee is not a Chemist",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var outputItem = state.EmployeeState.TaskContext?.Station?.OutputSlot?.ItemInstance;
+        if (outputItem == null || state.EmployeeState.TaskContext?.Station?.OutputSlot?.Quantity <= 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverProduct: No output item for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var inventorySlot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+        if (inventorySlot == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverProduct: No inventory slot for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        var destination = FindPackagingStation(EmployeeAdapters[chemist.GUID], outputItem)
+            ?? FindStorageForDelivery(chemist, outputItem);
+
+        if (destination == null)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverProduct: No destination for item={outputItem.ID} for chemist={chemist.fullName}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        List<ItemSlot> deliverySlots;
+        if (destination is PackagingStation station)
+        {
+          List<ItemSlot> prodSlot = [station.ProductSlot];
+          deliverySlots = prodSlot.AdvReserveInputSlotsForItem(outputItem, chemist.NetworkObject);
+        }
+        else
+          deliverySlots = destination.InputSlots.AdvReserveInputSlotsForItem(outputItem, chemist.NetworkObject);
+        if (deliverySlots == null || deliverySlots.Count == 0)
+        {
+          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              $"ExecuteDeliverProduct: No delivery slots at destination={destination.GUID}",
+              DebugLogger.Category.MixingStation);
+          state.EmployeeState.CurrentWorkStep = MixingStationSteps.End;
+          return;
+        }
+
+        int quantity = Math.Min(state.EmployeeState.TaskContext.Station.OutputSlot.Quantity,
+            deliverySlots.Sum(s => s.GetCapacityForItem(outputItem)));
+
+        state.EmployeeState.TaskContext.Station.OutputSlot.ApplyLock(chemist.NetworkObject, "pickup");
+        var request = TransferRequest.Get(chemist, outputItem, quantity, inventorySlot,
+            state.EmployeeState.TaskContext.Station.TransitEntity,
+            new List<ItemSlot> { state.EmployeeState.TaskContext.Station.OutputSlot },
+            destination, deliverySlots);
+
+        state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
+
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.End);
+      }
+
+      // Cleans up resources and disables behavior
+      public static async Task ExecuteEnd(Employee employee, StateData state)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteEnd: Cleaning up for chemist={employee?.fullName ?? "null"}",
+            DebugLogger.Category.MixingStation);
+
+        state.EmployeeState.TaskContext?.Cleanup(employee);
+        await state.EmployeeBeh.Disable();
+      }
+    }
+  }
+}

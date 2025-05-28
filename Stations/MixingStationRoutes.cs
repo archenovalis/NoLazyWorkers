@@ -59,9 +59,9 @@ namespace NoLazyWorkers.Stations
         throw new InvalidOperationException("MixingStation Configuration is null or invalid");
       }
       Quality = new QualityField(Config);
-      Quality.onValueChanged.AddListener(q =>
+      Quality.onValueChanged.AddListener(_ =>
       {
-        UpdateRefillsQuality(q);
+        UpdateRefillsQuality();
         Config.InvokeChanged();
       });
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"StationRouteManager: Initialized for station {StationGuid}", DebugLogger.Category.MixingStation);
@@ -128,7 +128,7 @@ namespace NoLazyWorkers.Stations
           DebugLogger.Category.MixingStation);
     }
 
-    private void UpdateRefillsQuality(EQuality quality)
+    private void UpdateRefillsQuality()
     {
       for (int i = 0; i < Routes.Count; i++)
       {

@@ -21,16 +21,16 @@ using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Employees;
 using FluffyUnderware.DevTools.Extensions;
 using NoLazyWorkers.General;
-using ScheduleOne.NPCs.Behaviour;
 using FishNet.Object;
-using ScheduleOne.NPCs;
 using ScheduleOne.DevUtilities;
 using FishNet;
 using FishNet.Connection;
 using ScheduleOne.Management.SetterScreens;
 using ScheduleOne.Management.UI;
-using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using UnityEngine.Events;
+using System.Collections.Concurrent;
+using UnityEngine.AI;
+using ScheduleOne.NPCs;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -40,52 +40,59 @@ namespace NoLazyWorkers
   public static class DebugLogs
   {
     public static bool Enabled = true;
-    public static int Level = 4;
-    public static bool All = false; // enables all but stacktrace logs
+    public static int Level = 4; //LogLevel { None(0), Error(1), Warning(2), Info(3), Verbose(4), Stacktrace(5) }
+    public static bool All = true; // enables all but stacktrace logs
     public static bool Core = true;
     public static bool Settings = false;
     // employees
     public static bool AllEmployees = false;
     public static bool EmployeeCore = true;
-    public static bool Chemist = true;
-    public static bool Botanist = false;
-    public static bool Packager = false;
+    public static bool Chemist = false;
+    public static bool Botanist = true;
+    public static bool Packager = true;
     // generic
     public static bool Storage = true;
     public static bool General = true;
     // stations
     public static bool Pot = false;
+    public static bool DryingRack = false;
+    public static bool BrickPress = false;
+    public static bool Cauldron = false;
     public static bool LabOven = false;
     public static bool ChemistryStation = false;
-    public static bool MixingStation = true;
-    public static bool PackagingStation = false;
+    public static bool MixingStation = false;
+    public static bool PackagingStation = true;
     //
     public static bool Stacktrace = false;
   }
 
   public static class DebugLogger
   {
-    public enum LogLevel { None, Error, Warning, Info, Verbose }
+    public enum LogLevel { None, Error, Warning, Info, Verbose, Stacktrace }
     public enum Category
     {
       None,
       Core,
       Settings,
       AllEmployees,
+      AnyEmployee,
       EmployeeCore,
       Chemist,
       Botanist,
       Packager,
       Storage,
       Pot,
-      LabOven,
-      ChemistryStation,
-      General,
-      MixingStation,
+      DryingRack,
+      BrickPress,
       PackagingStation,
+      LabOven,
+      Cauldron,
+      ChemistryStation,
+      MixingStation,
+      General,
       Stacktrace
     }
-
+    public static bool AnyEmployee;
     public static LogLevel CurrentLevel { get; set; } = (LogLevel)DebugLogs.Level;
 
     private static readonly Dictionary<Category, Func<bool>> CategoryEnabled = new()
@@ -93,12 +100,16 @@ namespace NoLazyWorkers
         { Category.Core, () => DebugLogs.Core },
         { Category.Settings, () => DebugLogs.Settings },
         { Category.AllEmployees, () => DebugLogs.AllEmployees },
+        { Category.AnyEmployee, () => AnyEmployee },
         { Category.EmployeeCore, () => DebugLogs.EmployeeCore },
         { Category.Chemist, () => DebugLogs.Chemist },
         { Category.Botanist, () => DebugLogs.Botanist },
         { Category.Packager, () => DebugLogs.Packager },
         { Category.Storage, () => DebugLogs.Storage },
         { Category.Pot, () => DebugLogs.Pot },
+        { Category.BrickPress, () => DebugLogs.BrickPress },
+        { Category.Cauldron, () => DebugLogs.Cauldron },
+        { Category.DryingRack, () => DebugLogs.DryingRack },
         { Category.LabOven, () => DebugLogs.LabOven },
         { Category.ChemistryStation, () => DebugLogs.ChemistryStation },
         { Category.General, () => DebugLogs.General },
@@ -114,6 +125,7 @@ namespace NoLazyWorkers
         return;
 
       // Determine if any category is enabled
+      AnyEmployee = DebugLogs.Chemist || DebugLogs.Botanist || DebugLogs.Packager;
       bool isEnabled = DebugLogs.All || categories.Any(c => c != Category.Stacktrace && CategoryEnabled[c]());
       if (!isEnabled)
         return;
@@ -121,7 +133,7 @@ namespace NoLazyWorkers
       // Get the first non-Stacktrace category for labeling (or "None" if only Stacktrace)
       Category labelCategory = categories.FirstOrDefault(c => c != Category.Stacktrace);
       string prefix = $"[{labelCategory}]";
-      bool includeStacktrace = DebugLogs.Stacktrace || categories.Contains(Category.Stacktrace);
+      bool includeStacktrace = DebugLogs.Stacktrace;
 
       // Format the message
       string fullMessage = $"{prefix} {message}";
@@ -168,7 +180,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to initialize NoLazyWorkers_Alternative: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to initialize NoLazyWorkers_Alternative: {e}", DebugLogger.Category.Core);
       }
 
       Instance = this;
@@ -203,7 +215,7 @@ namespace NoLazyWorkers
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
       NoLazyUtilities.ClearPrefabs();
-      EmployeeExtensions.ClearAll();
+      EmployeeUtilities.ClearAll();
       NoLazyWorkersExtensions.NPCSupply.Clear();
       Settings.SettingsExtensions.Configured.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", DebugLogger.Category.Core);
@@ -247,7 +259,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InvokeChanged failed: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"InvokeChanged failed: {e}", DebugLogger.Category.Core);
       }
     } */
 
@@ -346,7 +358,7 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core);
             yield break;
           }
           yield return current;
@@ -371,7 +383,7 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core);
             callback?.Invoke(default);
             yield break;
           }
@@ -454,7 +466,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to get UI template from ConfigPanel for {configType}: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to get UI template from ConfigPanel for {configType}: {e}", DebugLogger.Category.Core);
         return null;
       }
     }
@@ -493,7 +505,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to find prefab: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to find prefab: {e}", DebugLogger.Category.Core);
         return null;
       }
     }
@@ -578,7 +590,7 @@ namespace NoLazyWorkers
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}", DebugLogger.Category.Core);
         }
       }
 
@@ -596,7 +608,7 @@ namespace NoLazyWorkers
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}", DebugLogger.Category.Core);
         }
       }
     }
@@ -645,7 +657,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ItemSetterScreenOpenPatch: Prefix failed, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"ItemSetterScreenOpenPatch: Prefix failed, error: {e}", DebugLogger.Category.Core);
       }
     }
   }
@@ -720,7 +732,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadManagerPatch.Awake failed: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"LoadManagerPatch.Awake failed: {e}", DebugLogger.Category.Core);
       }
     }
   }
@@ -747,7 +759,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Core);
       }
     }
   }
@@ -827,9 +839,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist, DebugLogger.Category.Stacktrace);
+        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
       }
     }
   }

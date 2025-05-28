@@ -18,13 +18,12 @@ using static NoLazyWorkers.Employees.EmployeeUtilities;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.EmployeeExtensions;
 using NoLazyWorkers.Stations;
-using static NoLazyWorkers.Employees.ChemistExtensions;
 using NoLazyWorkers.General;
 using FishNet.Managing.Object;
 using FishNet.Object;
 using Object = UnityEngine.Object;
 using FishNet.Managing;
-using NoLazyWorkers.Stations.NoLazyWorkers.Stations;
+using NoLazyWorkers.Employees.Tasks.Chemists;
 
 namespace NoLazyWorkers.Employees
 {
@@ -35,7 +34,7 @@ namespace NoLazyWorkers.Employees
     public ChemistBehaviour(Chemist chemist, IEmployeeAdapter adapter)
         : base(chemist, adapter, new List<IEmployeeTask>
         {
-                new MixingStationBeh.Work_MixingStation(120, 0)
+          //MixingStationTask.Create(chemist, 120, 0)
           // Add other tasks here in the future
         })
     {
@@ -61,16 +60,39 @@ namespace NoLazyWorkers.Employees
 
           if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employeeAdapter))
           {
-            employeeAdapter = new ChemistAdapter(__instance);
-            EmployeeAdapters[__instance.GUID] = employeeAdapter;
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"UpdateBehaviourPrefix: Registered ChemistAdapter for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            // Check if this NPC is already pending adapter creation
+            if (PendingAdapters.TryGetValue(__instance.GUID, out float requestTime))
+            {
+              // Check if 5 seconds have elapsed since first request
+              float elapsed = Time.time - requestTime;
+              if (elapsed < ADAPTER_DELAY_SECONDS)
+              {
+                DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                    $"UpdateBehaviourPrefix: Delaying adapter for NPC={__instance.fullName}, {ADAPTER_DELAY_SECONDS - elapsed:F2}s remaining",
+                    DebugLogger.Category.Chemist);
+                return false;
+              }
+
+              // Delay elapsed, create adapter
+              employeeAdapter = new ChemistAdapter(__instance);
+              EmployeeAdapters[__instance.GUID] = employeeAdapter;
+              PendingAdapters.Remove(__instance.GUID); // Cleanup
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"UpdateBehaviourPrefix: Registered ChemistAdapter for NPC={__instance.fullName} after {elapsed:F2}s delay",
+                  DebugLogger.Category.Chemist);
+            }
+            else
+            {
+              // First request, record timestamp and skip behavior
+              PendingAdapters[__instance.GUID] = Time.time;
+              DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  $"UpdateBehaviourPrefix: Initiated {ADAPTER_DELAY_SECONDS}s delay for NPC={__instance.fullName}",
+                  DebugLogger.Category.Chemist);
+              return false;
+            }
           }
 
-          if (employeeAdapter.State == null)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: employeeAdapter.State == null NPC={__instance.fullName}", DebugLogger.Category.Chemist);
-          }
-          var state = employeeAdapter.State;
+          var state = GetState(__instance);
 
           if (__instance.Fired || (__instance.behaviour.activeBehaviour != null && __instance.behaviour.activeBehaviour != __instance.WaitOutside))
           {
@@ -135,7 +157,6 @@ namespace NoLazyWorkers.Employees
             return false;
           }
 
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 0 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
           if (state.CurrentState != EState.Idle || __instance.AnyWorkInProgress())
           {
             DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 1 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
@@ -143,7 +164,7 @@ namespace NoLazyWorkers.Employees
             return false;
           }
           DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 2 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
-          state.EmployeeBeh.Update();
+          state.EmployeeBeh.Update().GetAwaiter().GetResult();
           return false;
         }
         catch (Exception e)
@@ -161,8 +182,7 @@ namespace NoLazyWorkers.Employees
       {
         try
         {
-          var state = GetState(__instance);
-          state.EmployeeBeh.Disable();
+          GetState(__instance).EmployeeBeh.Disable().GetAwaiter().GetResult();
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistFirePatch: Disabled MixingStationBeh for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
 
           if (EmployeeAdapters.ContainsKey(__instance.GUID))

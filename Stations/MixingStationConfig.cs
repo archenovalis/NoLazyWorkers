@@ -1,13 +1,9 @@
 using HarmonyLib;
-using MelonLoader;
 using Newtonsoft.Json.Linq;
 using ScheduleOne.DevUtilities;
-using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using ScheduleOne.Management.UI;
 using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Persistence.Loaders;
 using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
@@ -18,19 +14,13 @@ using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 using static NoLazyWorkers.NoLazyUtilities;
-using ScheduleOne.NPCs.Behaviour;
-using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.NPCs;
-using GameKit.Utilities;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using static NoLazyWorkers.Stations.MixingStationUtilities;
 using static NoLazyWorkers.Stations.MixingStationConfigUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
 using static NoLazyWorkers.General.StorageUtilities;
-using Unity.Mathematics;
-using NoLazyWorkers.Stations.NoLazyWorkers.Stations;
 
 namespace NoLazyWorkers.Stations
 {
@@ -63,29 +53,21 @@ namespace NoLazyWorkers.Stations
 
       public MixingStation Station => _station;
       public Guid GUID => _station.GUID;
-      public ItemSlot InsertSlot => _station.MixerSlot;
+      public string Name => _station.Name;
+      public List<ItemSlot> InsertSlots => [_station.MixerSlot];
       public List<ItemSlot> ProductSlots => [_station.ProductSlot];
       public ItemSlot OutputSlot => _station.OutputSlot;
       public bool IsInUse => _station.IsOpen || _station.NPCUserObject != null || _station.PlayerUserObject != null;
       public bool HasActiveOperation => _station.CurrentMixOperation != null;
       public int StartThreshold => (int)(_station.Configuration as MixingStationConfiguration).StartThrehold.Value;
-      public int MaxProductQuantity => 20;
+      public int MaxProductQuantity => _station.ProductSlot?.ItemInstance.StackLimit ?? 0;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
       public List<ItemField> GetInputItemForProduct() => [GetInputItemForProductSlot(this)];
-      public int GetInputQuantity() => _station.MixerSlot?.Quantity ?? 0;
       public Type TypeOf => _station.GetType();
       public void StartOperation(Employee employee) => (employee as Chemist).StartMixingStation(_station);
-      public List<ItemInstance> RefillList() => _routeManager.Refills.Where(item => item != null).Distinct().ToList();
-      public bool CanRefill(ItemInstance item) => throw new NotImplementedException();
-    }
-
-    public struct RestockObj
-    {
-      public ItemInstance Item;
-      public int Quantity;
-      public PlaceableStorageEntity Shelf;
-      public List<ItemSlot> PickupSlots;
+      public List<ItemInstance> RefillList() => _routeManager.Refills.Where(item => item != null).ToList();
+      public bool CanRefill(ItemInstance item) => item.CanRefill(_routeManager);
     }
   }
 
@@ -139,6 +121,16 @@ namespace NoLazyWorkers.Stations
             DebugLogger.Category.MixingStation);
         return null;
       }
+    }
+
+    public static bool CanRefill(this ItemInstance item, StationRouteManager manager)
+    {
+      foreach (var instance in manager.Refills)
+      {
+        if (item.AdvCanStackWith(instance, allowHigherQuality: true))
+          return true;
+      }
+      return false;
     }
   }
 

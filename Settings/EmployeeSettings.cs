@@ -139,7 +139,7 @@ namespace NoLazyWorkers.Settings
         return;
 
       if (DebugLogs.All || DebugLogs.Settings)
-        MelonLogger.Msg($"Settings: SetProperty {property} | {target}");
+        MelonLogger.Msg($"Settings: SetProperty {property.Name} | {target}");
       property.SetValue(target, value);
     }
 
