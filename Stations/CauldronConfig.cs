@@ -13,15 +13,16 @@ using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.CauldronExtensions;
 using static NoLazyWorkers.Stations.CauldronUtilities;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers;
 using ScheduleOne;
 using ScheduleOne.Property;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
 using ScheduleOne.StationFramework;
+using ScheduleOne.EntityFramework;
 
 namespace NoLazyWorkers.Stations
 {
@@ -42,12 +43,12 @@ namespace NoLazyWorkers.Stations
       public CauldronAdapter(Cauldron station)
       {
         _station = station ?? throw new ArgumentNullException(nameof(station));
-        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        if (!Extensions.IStations.TryGetValue(station.ParentProperty, out var propertyStations))
         {
-          propertyStations = new List<IStationAdapter>();
-          PropertyStations[station.ParentProperty] = propertyStations;
+          propertyStations = new();
+          Extensions.IStations[station.ParentProperty] = propertyStations;
         }
-        propertyStations.Add(this);
+        propertyStations.Add(GUID, this);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"CauldronAdapter: Initialized for station {station.GUID}", DebugLogger.Category.Cauldron);
       }
 
@@ -63,7 +64,9 @@ namespace NoLazyWorkers.Stations
       public List<ItemField> GetInputItemForProduct() => new List<ItemField>();
       public void StartOperation(Employee employee) => (employee as Chemist)?.StartCauldron(_station);
       public int MaxProductQuantity => Registry.GetItem("cocaleaf").GetDefaultInstance().StackLimit * 3;
-      public ITransitEntity TransitEntity => _station;
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public BuildableItem Buildable => _station as BuildableItem;
+      public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => new List<ItemInstance>();
       public bool CanRefill(ItemInstance item) => item?.ID == "cocaleaf" && (item as ProductItemInstance)?.Quality >= QualityField[GUID].Value;
       public Type TypeOf => _station.GetType();
@@ -86,7 +89,7 @@ namespace NoLazyWorkers.Stations
       }
 
       CauldronExtensions.QualityField.Remove(station.GUID);
-      StationRefills.Remove(station.GUID);
+      StationRefillLists.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
     }
 
@@ -102,9 +105,9 @@ namespace NoLazyWorkers.Stations
         }
 
         Guid guid = station.GUID;
-        if (!StationAdapters.ContainsKey(guid))
+        if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
-          StationAdapters[guid] = new CauldronAdapter(station);
+          IStations[station.ParentProperty][guid] = new CauldronAdapter(station);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeQualityFields: Created adapter for station {guid}", DebugLogger.Category.Cauldron);
         }
 

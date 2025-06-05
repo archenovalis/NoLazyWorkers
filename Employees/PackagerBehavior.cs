@@ -5,13 +5,13 @@ using ScheduleOne.DevUtilities;
 using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Employees.PackagerExtensions;
-using NoLazyWorkers.General;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
+using NoLazyWorkers.Storage;
+using static NoLazyWorkers.Employees.Extensions;
+using static NoLazyWorkers.Employees.Constants;
 using NoLazyWorkers.Stations;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Storage.Utilities;
 using NoLazyWorkers.Employees.Tasks.Packagers;
 using UnityEngine;
 
@@ -22,16 +22,10 @@ namespace NoLazyWorkers.Employees
     private readonly Packager _packager;
 
     public PackagerBehaviour(Packager packager, IEmployeeAdapter adapter)
-        : base(packager, adapter, new List<IEmployeeTask>
-        {
-            RefillStationTask.Create(packager,100),
-            //EmptyLoadingDockTask.Create(packager,80),
-            //RestockSpecificShelfTask.Create(packager,60),
-            //PackagingStationTask.Create(packager,120)
-        })
+        : base(packager, adapter)
     {
       _packager = packager ?? throw new ArgumentNullException(nameof(packager));
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Packager);
+      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Handler);
     }
 
     [HarmonyPatch(typeof(Packager))]
@@ -45,7 +39,7 @@ namespace NoLazyWorkers.Employees
         {
           if (__instance == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Packager instance is null", DebugLogger.Category.Packager);
+            DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Packager instance is null", DebugLogger.Category.Handler);
             return false;
           }
 
@@ -146,7 +140,7 @@ namespace NoLazyWorkers.Employees
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: Failed for packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Packager);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: Failed for packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Handler);
           __instance?.SetIdle(true);
           return false;
         }
@@ -163,7 +157,7 @@ namespace NoLazyWorkers.Employees
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerFirePatch: Failed for Packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Packager);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerFirePatch: Failed for Packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Handler);
         }
       }
     }

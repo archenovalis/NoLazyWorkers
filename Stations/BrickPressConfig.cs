@@ -13,14 +13,15 @@ using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.BrickPressExtensions;
 using static NoLazyWorkers.Stations.BrickPressUtilities;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers;
 using ScheduleOne;
 using ScheduleOne.Property;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
+using ScheduleOne.EntityFramework;
 
 namespace NoLazyWorkers.Stations
 {
@@ -46,12 +47,12 @@ namespace NoLazyWorkers.Stations
       public BrickPressAdapter(BrickPress station)
       {
         _station = station ?? throw new ArgumentNullException(nameof(station));
-        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        if (!Extensions.IStations.TryGetValue(station.ParentProperty, out var propertyStations))
         {
-          propertyStations = new List<IStationAdapter>();
-          PropertyStations[station.ParentProperty] = propertyStations;
+          propertyStations = new();
+          Extensions.IStations[station.ParentProperty] = propertyStations;
         }
-        propertyStations.Add(this);
+        propertyStations.Add(GUID, this);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"BrickPressAdapter: Initialized for station {station.GUID}", DebugLogger.Category.BrickPress);
       }
 
@@ -67,7 +68,9 @@ namespace NoLazyWorkers.Stations
       public List<ItemField> GetInputItemForProduct() => ItemFields.TryGetValue(GUID, out var fields) ? fields : new List<ItemField>();
       public void StartOperation(Employee employee) => (employee as Packager)?.StartPress(_station);
       public int MaxProductQuantity => ProductSlots?.FirstOrDefault(s => s.ItemInstance != null)?.ItemInstance?.StackLimit * 2 ?? Registry.GetItem("ogkush").GetDefaultInstance().StackLimit * 2;
-      public ITransitEntity TransitEntity => _station;
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public BuildableItem Buildable => _station as BuildableItem;
+      public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => GetRefillList(_station);
       public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => item.AdvCanStackWith(i, allowHigherQuality: true));
       public Type TypeOf => _station.GetType();
@@ -91,7 +94,7 @@ namespace NoLazyWorkers.Stations
 
       ItemFields.Remove(station.GUID);
       QualityFields.Remove(station.GUID);
-      StationRefills.Remove(station.GUID);
+      StationRefillLists.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
     }
 
@@ -138,17 +141,17 @@ namespace NoLazyWorkers.Stations
         }
 
         Guid guid = station.GUID;
-        if (!StationAdapters.ContainsKey(guid))
+        if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
-          StationAdapters[guid] = new BrickPressAdapter(station);
+          IStations[station.ParentProperty][guid] = new BrickPressAdapter(station);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Created adapter for station {guid}", DebugLogger.Category.BrickPress);
         }
 
-        if (!StationRefills.ContainsKey(guid))
-          StationRefills[guid] = new List<ItemInstance>(BrickPressConstants.MaxOptions);
+        if (!StationRefillLists.ContainsKey(guid))
+          StationRefillLists[guid] = new List<ItemInstance>(BrickPressConstants.MaxOptions);
 
-        while (StationRefills[guid].Count < BrickPressConstants.MaxOptions)
-          StationRefills[guid].Add(null);
+        while (StationRefillLists[guid].Count < BrickPressConstants.MaxOptions)
+          StationRefillLists[guid].Add(null);
 
         var itemFields = new List<ItemField>(BrickPressConstants.MaxOptions);
         var qualityFields = new List<QualityField>(BrickPressConstants.MaxOptions);
@@ -161,7 +164,7 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              var refills = StationRefills[guid];
+              var refills = StationRefillLists[guid];
               if (i < refills.Count && refills[i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
@@ -182,7 +185,7 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              var refills = StationRefills[guid];
+              var refills = StationRefillLists[guid];
               if (i < refills.Count)
               {
                 refills[i] = item?.GetDefaultInstance();
@@ -239,7 +242,7 @@ namespace NoLazyWorkers.Stations
 
         var favorites = new List<ItemDefinition>
                 {
-                    new ItemDefinition { Name = "None", ID = "None", Icon = StorageConfigUtilities.GetCrossSprite()  },
+                    new ItemDefinition { Name = "None", ID = "None", Icon = ShelfUtilities.GetCrossSprite()  },
                     new ItemDefinition { Name = "Any", ID = "Any" }
                 };
         if (ProductManager.FavouritedProducts != null)

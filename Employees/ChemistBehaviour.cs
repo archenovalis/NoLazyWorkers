@@ -10,20 +10,22 @@ using ScheduleOne.NPCs;
 using ScheduleOne.ObjectScripts;
 using System.Collections;
 using UnityEngine;
-using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Stations.Extensions;
+using NoLazyWorkers.Storage;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.Employees.Constants;
 using NoLazyWorkers.Employees;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
+using static NoLazyWorkers.Employees.Extensions;
 using NoLazyWorkers.Stations;
-using NoLazyWorkers.General;
 using FishNet.Managing.Object;
 using FishNet.Object;
 using Object = UnityEngine.Object;
 using FishNet.Managing;
-using NoLazyWorkers.Employees.Tasks.Chemists;
+using NoLazyWorkers.TaskService;
+using static NoLazyWorkers.TaskService.TaskRegistry;
+using static NoLazyWorkers.TaskService.Extensions;
+using Unity.Collections;
 
 namespace NoLazyWorkers.Employees
 {
@@ -32,11 +34,7 @@ namespace NoLazyWorkers.Employees
     protected readonly Chemist _chemist;
 
     public ChemistBehaviour(Chemist chemist, IEmployeeAdapter adapter)
-        : base(chemist, adapter, new List<IEmployeeTask>
-        {
-          //MixingStationTask.Create(chemist, 120, 0)
-          // Add other tasks here in the future
-        })
+        : base(chemist, adapter)
     {
       _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistBehaviour: Initialized for NPC {_chemist.fullName}", DebugLogger.Category.Chemist);
@@ -157,7 +155,7 @@ namespace NoLazyWorkers.Employees
             return false;
           }
 
-          if (state.CurrentState != EState.Idle || __instance.AnyWorkInProgress())
+          if (__instance.AnyWorkInProgress())
           {
             DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 1 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
             __instance.MarkIsWorking();

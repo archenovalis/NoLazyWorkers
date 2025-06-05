@@ -20,7 +20,7 @@ using NoLazyWorkers.Stations;
 using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Employees;
 using FluffyUnderware.DevTools.Extensions;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
 using FishNet.Object;
 using ScheduleOne.DevUtilities;
 using FishNet;
@@ -31,6 +31,8 @@ using UnityEngine.Events;
 using System.Collections.Concurrent;
 using UnityEngine.AI;
 using ScheduleOne.NPCs;
+using NoLazyWorkers.TaskService;
+using FishNet.Managing.Timing;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -63,6 +65,7 @@ namespace NoLazyWorkers
     public static bool MixingStation = false;
     public static bool PackagingStation = true;
     //
+    public static bool TaskManager = true;
     public static bool Stacktrace = false;
   }
 
@@ -79,7 +82,7 @@ namespace NoLazyWorkers
       EmployeeCore,
       Chemist,
       Botanist,
-      Packager,
+      Handler,
       Storage,
       Pot,
       DryingRack,
@@ -90,6 +93,7 @@ namespace NoLazyWorkers
       ChemistryStation,
       MixingStation,
       General,
+      TaskManager,
       Stacktrace
     }
     public static bool AnyEmployee;
@@ -104,7 +108,7 @@ namespace NoLazyWorkers
         { Category.EmployeeCore, () => DebugLogs.EmployeeCore },
         { Category.Chemist, () => DebugLogs.Chemist },
         { Category.Botanist, () => DebugLogs.Botanist },
-        { Category.Packager, () => DebugLogs.Packager },
+        { Category.Handler, () => DebugLogs.Packager },
         { Category.Storage, () => DebugLogs.Storage },
         { Category.Pot, () => DebugLogs.Pot },
         { Category.BrickPress, () => DebugLogs.BrickPress },
@@ -116,6 +120,7 @@ namespace NoLazyWorkers
         { Category.MixingStation, () => DebugLogs.MixingStation },
         { Category.PackagingStation, () => DebugLogs.PackagingStation },
         { Category.Stacktrace, () => DebugLogs.Stacktrace },
+        { Category.TaskManager, () => DebugLogs.TaskManager },
         { Category.None, () => true } // Always enabled if All is true
     };
 
@@ -208,17 +213,68 @@ namespace NoLazyWorkers
         MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
         DebugLogger.Log(DebugLogger.LogLevel.Info, "Applied Fixer and Misc settings on main scene load.", DebugLogger.Category.Core);
         MixingStationConfigUtilities.InitializeStaticRouteListTemplate();
-        StorageConfigUtilities.InitializeStorageModule();
+        ShelfUtilities.InitializeStorageModule();
+        CacheManager.Initialize();
+        TaskCoordinator.Initialize();
       }
     }
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
       NoLazyUtilities.ClearPrefabs();
-      EmployeeUtilities.ClearAll();
+      Employees.Utilities.ClearAll();
       NoLazyWorkersExtensions.NPCSupply.Clear();
       Settings.SettingsExtensions.Configured.Clear();
       DebugLogger.Log(DebugLogger.LogLevel.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", DebugLogger.Category.Core);
+    }
+  }
+
+  public static class TimeManagerExtensions
+  {
+    /// <summary>
+    /// Asynchronously waits for the next FishNet TimeManager tick.
+    /// </summary>
+    /// <param name="timeManager">The FishNet TimeManager instance.</param>
+    /// <returns>A Task that completes on the next tick.</returns>
+    public static async Task AwaitNextTickAsync(this TimeManager timeManager)
+    {
+      var tcs = new TaskCompletionSource<bool>();
+      double currentTick = timeManager.Tick;
+
+      void OnTick()
+      {
+        if (timeManager.Tick > currentTick)
+        {
+          timeManager.OnTick -= OnTick;
+          tcs.SetResult(true);
+        }
+      }
+
+      timeManager.OnTick += OnTick;
+      await tcs.Task;
+    }
+
+    /// <summary>
+    /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
+    /// </summary>
+    /// <param name="timeManager">The FishNet TimeManager instance.</param>
+    /// <param name="seconds">The duration to wait in seconds.</param>
+    /// <returns>A Task that completes after the specified delay.</returns>
+    public static async Task AwaitNextTickAsync(this TimeManager timeManager, float seconds)
+    {
+      if (seconds <= 0f)
+      {
+        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", DebugLogger.Category.TaskManager);
+        return;
+      }
+
+      int ticksToWait = Mathf.CeilToInt(seconds * timeManager.TickRate);
+      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {timeManager.TickRate}", DebugLogger.Category.TaskManager);
+
+      for (int i = 0; i < ticksToWait; i++)
+      {
+        await timeManager.AwaitNextTickAsync();
+      }
     }
   }
 

@@ -6,15 +6,15 @@ using ScheduleOne.Management;
 using ScheduleOne.NPCs.Behaviour;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Product;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Employees.Utilities;
+using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using NoLazyWorkers.Employees;
 using ScheduleOne.NPCs;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
-using NoLazyWorkers.General;
+using static NoLazyWorkers.Employees.Extensions;
+using NoLazyWorkers.Storage;
 using ScheduleOne.DevUtilities;
 using UnityEngine;
 using ScheduleOne;
@@ -306,7 +306,7 @@ namespace NoLazyWorkers.Employees.Tasks.Chemists
                 DebugLogger.Category.MixingStation);
             continue;
           }
-          var adapter = StationAdapters[station.GUID];
+          var adapter = IStations[station.ParentProperty][station.GUID];
           if (adapter.IsInUse || adapter.HasActiveOperation)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose,

@@ -1,6 +1,16 @@
 # todo
 
+## configs
+
 uiobjectpool for instantiated ui config panel elements
+configpanel any and none sprite needs to be null or inactive?
+configpanel quality description needs to be inactive
+cauldron configpanel quality needs to move down 20
+chemistrystation first recipe needs to be 80 below original and limited to 6 with the first starting at Recipe 2 and the original text set to Recipe 1
+
+## taskservice
+
+transit types should be limiters, placeablestorageentity means only storages
 
 ## employees
 

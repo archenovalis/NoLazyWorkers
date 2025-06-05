@@ -14,12 +14,12 @@ using ScheduleOne.Product;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Employees.PackagerBehaviour;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
+using static NoLazyWorkers.Employees.Extensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.DevUtilities;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using ScheduleOne.EntityFramework;
@@ -38,10 +38,10 @@ namespace NoLazyWorkers.Employees
       {
         _packager = packager ?? throw new ArgumentNullException(nameof(packager));
         _employeeBehaviour = new PackagerBehaviour(packager, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Packager);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Handler);
       }
 
-      public NpcSubType SubType => NpcSubType.Packager;
+      public NpcSubType SubType => NpcSubType.Handler;
       public Property AssignedProperty => _packager.AssignedProperty;
       public EmployeeBehaviour EmpBehaviour => _employeeBehaviour;
     }

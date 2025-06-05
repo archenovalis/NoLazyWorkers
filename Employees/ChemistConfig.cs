@@ -14,12 +14,12 @@ using ScheduleOne.Product;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
-using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.Stations.Extensions;
+using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.Employees.Extensions;
+using static NoLazyWorkers.Employees.Utilities;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using ScheduleOne.EntityFramework;
@@ -45,10 +45,5 @@ namespace NoLazyWorkers.Employees
           $"ChemistAdapter: Initialized for NPC {_chemist.fullName}",
           DebugLogger.Category.Chemist);
     }
-  }
-
-  public static class ChemistTaskConfigurations
-  {
-
   }
 }

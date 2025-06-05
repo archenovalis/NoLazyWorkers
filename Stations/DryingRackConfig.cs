@@ -13,12 +13,13 @@ using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.DryingRackExtensions;
 using static NoLazyWorkers.Stations.DryingRackUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
+using ScheduleOne.EntityFramework;
 
 namespace NoLazyWorkers.Stations
 {
@@ -62,9 +63,11 @@ namespace NoLazyWorkers.Stations
       public List<ItemField> GetInputItemForProduct() => ItemFields.TryGetValue(GUID, out var fields) ? fields : new List<ItemField>();
       public void StartOperation(Employee employee) => (employee as Botanist)?.StartDryingRack(_station);
       public int MaxProductQuantity => _station.InputSlot?.ItemInstance?.StackLimit ?? 0;
-      public ITransitEntity TransitEntity => _station;
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public BuildableItem Buildable => _station as BuildableItem;
+      public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => GetRefillList(_station);
-      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => StorageUtilities.AdvCanStackWith(i, item));
+      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => Utilities.AdvCanStackWith(i, item));
       public Type TypeOf => _station.GetType();
 
       public DryingRackAdapter(DryingRack station)
@@ -79,14 +82,14 @@ namespace NoLazyWorkers.Stations
         _station = station;
 
         // Initialize property stations list if not present
-        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        if (!Extensions.IStations.TryGetValue(station.ParentProperty, out var propertyStations))
         {
-          propertyStations = new List<IStationAdapter>();
-          PropertyStations[station.ParentProperty] = propertyStations;
+          propertyStations = new();
+          Extensions.IStations[station.ParentProperty] = propertyStations;
         }
 
         // Add adapter to property stations
-        propertyStations.Add(this);
+        propertyStations.Add(GUID, this);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"DryingRackAdapter: Initialized for station {station.GUID}", DebugLogger.Category.DryingRack);
       }
     }
@@ -157,7 +160,7 @@ namespace NoLazyWorkers.Stations
 
       ItemFields.Remove(station.GUID);
       QualityFields.Remove(station.GUID);
-      StationRefills.Remove(station.GUID);
+      StationRefillLists.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
     }
 
@@ -179,23 +182,23 @@ namespace NoLazyWorkers.Stations
         Guid guid = station.GUID;
 
         // Initialize adapter if not present
-        if (!StationAdapters.TryGetValue(guid, out var adapter))
+        if (!IStations[station.ParentProperty].TryGetValue(guid, out var adapter))
         {
           adapter = new DryingRackAdapter(station);
-          StationAdapters[guid] = adapter;
+          IStations[station.ParentProperty][guid] = adapter;
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeFields: Created new adapter for station {guid}", DebugLogger.Category.DryingRack);
         }
 
         // Initialize station refills list
-        if (!StationRefills.ContainsKey(guid))
+        if (!StationRefillLists.ContainsKey(guid))
         {
-          StationRefills[guid] = new List<ItemInstance>(DryingRackConstants.MaxOptions + 1);
+          StationRefillLists[guid] = new List<ItemInstance>(DryingRackConstants.MaxOptions + 1);
         }
 
         // Ensure refills list has enough slots
-        while (StationRefills[guid].Count < DryingRackConstants.MaxOptions + 1)
+        while (StationRefillLists[guid].Count < DryingRackConstants.MaxOptions + 1)
         {
-          StationRefills[guid].Add(null);
+          StationRefillLists[guid].Add(null);
         }
 
         // Initialize item and quality fields
@@ -211,7 +214,7 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              var refills = StationRefills[guid];
+              var refills = StationRefillLists[guid];
               if (i < refills.Count && refills[i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
@@ -233,7 +236,7 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              var refills = StationRefills[guid];
+              var refills = StationRefillLists[guid];
               if (i < refills.Count)
               {
                 refills[i] = item?.GetDefaultInstance();
@@ -319,7 +322,7 @@ namespace NoLazyWorkers.Stations
         // Initialize favorite items
         var favorites = new List<ItemDefinition>
                 {
-                    new ItemDefinition { Name = "None", ID = "None", Icon = StorageConfigUtilities.GetCrossSprite() },
+                    new ItemDefinition { Name = "None", ID = "None", Icon = ShelfUtilities.GetCrossSprite() },
                     new ItemDefinition { Name = "Any", ID = "Any" }
                 };
         if (ProductManager.FavouritedProducts != null)

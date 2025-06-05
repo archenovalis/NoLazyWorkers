@@ -13,15 +13,16 @@ using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.ChemistryStationExtensions;
 using static NoLazyWorkers.Stations.ChemistryStationUtilities;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers;
 using ScheduleOne;
 using ScheduleOne.Property;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
 using ScheduleOne.StationFramework;
+using ScheduleOne.EntityFramework;
 
 namespace NoLazyWorkers.Stations
 {
@@ -43,12 +44,12 @@ namespace NoLazyWorkers.Stations
       public ChemistryStationAdapter(ChemistryStation station)
       {
         _station = station ?? throw new ArgumentNullException(nameof(station));
-        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        if (!Extensions.IStations.TryGetValue(station.ParentProperty, out var propertyStations))
         {
-          propertyStations = new List<IStationAdapter>();
-          PropertyStations[station.ParentProperty] = propertyStations;
+          propertyStations = new();
+          Extensions.IStations[station.ParentProperty] = propertyStations;
         }
-        propertyStations.Add(this);
+        propertyStations.Add(GUID, this);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistryStationAdapter: Initialized for station {station.GUID}", DebugLogger.Category.ChemistryStation);
       }
 
@@ -64,7 +65,9 @@ namespace NoLazyWorkers.Stations
       public List<ItemField> GetInputItemForProduct() => new List<ItemField>();
       public void StartOperation(Employee employee) => (employee as Chemist)?.StartChemistryStation(_station);
       public int MaxProductQuantity => ProductSlots.FirstOrDefault()?.ItemInstance?.StackLimit ?? 0;
-      public ITransitEntity TransitEntity => _station;
+      public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public BuildableItem Buildable => _station as BuildableItem;
+      public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => new List<ItemInstance>();
       public bool CanRefill(ItemInstance item) => false;
       public Type TypeOf => _station.GetType();
@@ -87,7 +90,7 @@ namespace NoLazyWorkers.Stations
       }
 
       RecipeFields.Remove(station.GUID);
-      StationRefills.Remove(station.GUID);
+      StationRefillLists.Remove(station.GUID);
       DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
     }
 
@@ -103,14 +106,14 @@ namespace NoLazyWorkers.Stations
         }
 
         Guid guid = station.GUID;
-        if (!StationAdapters.ContainsKey(guid))
+        if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
-          StationAdapters[guid] = new ChemistryStationAdapter(station);
+          IStations[station.ParentProperty][guid] = new ChemistryStationAdapter(station);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeRecipeFields: Created adapter for station {guid}", DebugLogger.Category.ChemistryStation);
         }
 
-        if (!StationRefills.ContainsKey(guid))
-          StationRefills[guid] = new List<ItemInstance>(ChemistryStationConstants.MaxOptions);
+        if (!StationRefillLists.ContainsKey(guid))
+          StationRefillLists[guid] = new List<ItemInstance>(ChemistryStationConstants.MaxOptions);
 
         var recipeFields = new List<StationRecipeField>(ChemistryStationConstants.MaxOptions);
         for (int i = 0; i < ChemistryStationConstants.MaxOptions; i++)

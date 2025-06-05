@@ -1,0 +1,446 @@
+using ScheduleOne.Employees;
+using static NoLazyWorkers.Employees.Extensions;
+using static NoLazyWorkers.Employees.Utilities;
+using static NoLazyWorkers.Storage.Utilities;
+using ScheduleOne.Property;
+using NoLazyWorkers.Employees;
+using Unity.Burst;
+using ScheduleOne.ObjectScripts;
+using static NoLazyWorkers.Stations.Extensions;
+using static NoLazyWorkers.TaskEngine.Extensions;
+using NoLazyWorkers.TaskEngine;
+
+namespace NoLazyWorkers.TaskEngine.EmployeeTasks
+{
+  public static class RefillStationTask
+  {
+    public static void Initialize()
+    {
+      var validator = new TaskValidator
+      {
+        TaskName = nameof(RefillStationTask),
+        TaskType = TaskTypes.RefillStation,
+        RequiredEmployeeType = EmployeeTypes.Handler,
+        RequiresPickup = true,
+        RequiresDropoff = true,
+        PickupType = TransitTypes.PlaceableStorageEntity,
+        DropoffType = TransitTypes.AnyStation
+      };
+      TaskValidationManager.RegisterValidator(validator);
+      DebugLogger.Log(DebugLogger.LogLevel.Info,
+          "RefillStationTask: Registered validator",
+          DebugLogger.Category.Handler);
+    }
+
+    [BurstCompile]
+    public static void ValidateRefillStation(ref TaskValidator validator)
+    {
+      if (!validator.StationOutputSlots.TryGetValue(validator.StationKey, out var outputSlots) ||
+            !validator.StorageInputSlots.TryGetValue(validator.StationKey, out var inputSlots))
+        return;
+
+      bool hasOutput = false;
+      for (int i = 0; i < outputSlots.Length; i++)
+      {
+        if (outputSlots[i].Quantity > 0 && !outputSlots[i].IsLocked)
+        {
+          hasOutput = true;
+          break;
+        }
+      }
+      if (hasOutput)
+        return;
+
+      if (inputSlots.Length != 1)
+        return;
+
+      var productSlot = inputSlots[0];
+      if (productSlot.Quantity >= 10)
+        return;
+
+      ItemKey targetItemKey = productSlot.ItemKey;
+      int neededQuantity = 10 - productSlot.Quantity;
+
+      if (TaskValidationManager.FindShelfWithItem(targetItemKey, validator.StationOutputSlots, out var shelfGuid, out var slotIndex))
+      {
+        var task = TaskDescriptor.Create(
+            TaskTypes.RefillStation,
+            shelfGuid,
+            targetItemKey,
+            [slotIndex],
+            validator.StationKey.Guid,
+            [productSlot.SlotIndex],
+            neededQuantity,
+            TransitTypes.PlaceableStorageEntity,
+            TransitTypes.AnyStation,
+            EmployeeTypes.Handler,
+            3,
+            validator.AssignedPropertyName,
+            validator.CurrentTime
+        );
+
+        if (validator.TaskKeys.Add(task.UniqueKey))
+        {
+          validator.ValidTasks.Add(task);
+          DebugLogger.Log(DebugLogger.LogLevel.Info,
+              $"ValidateRefillStation: Created task {task.TaskId} for item={targetItemKey.Id}{(targetItemKey.Quality != NEQuality.None ? " PackagingID=" + targetItemKey.PackagingId + " Quality=" + targetItemKey.Quality : "")}",
+              DebugLogger.Category.Handler);
+        }
+      }
+    }
+
+    public enum RefillStationSteps
+    {
+      CheckRefill,
+      Refill,
+      End
+    }
+
+    public static IEmployeeTask Create(Packager handler, int priority)
+    {
+      var workSteps = new List<WorkStep<RefillStationSteps>>
+            {
+                new WorkStep<RefillStationSteps>
+                {
+                    Step = RefillStationSteps.CheckRefill,
+                    Validate = Logic.ReValidateRefillStation,
+                    Execute = async (emp, state) => state.EmployeeState.CurrentWorkStep = RefillStationSteps.Refill,
+                    Transitions = { { "Success", RefillStationSteps.Refill } }
+                },
+                new WorkStep<RefillStationSteps>
+                {
+                    Step = RefillStationSteps.Refill,
+                    Validate = Logic.ReValidateRefillStation,
+                    Execute = Logic.ExecuteRefillStation,
+                    Transitions = { { "Success", RefillStationSteps.End } }
+                },
+                new WorkStep<RefillStationSteps>
+                {
+                    Step = RefillStationSteps.End,
+                    Validate = async (emp, state) => true,
+                    Execute = Logic.ExecuteEnd,
+                    Transitions = { }
+                }
+            };
+      return new EmployeeTask<RefillStationSteps>(handler, "RefillStation", priority, workSteps);
+    }
+
+    public static class Logic
+    {
+      /// <summary>
+      /// Revalidates the task descriptor to ensure pickup and dropoff slots are still valid.
+      /// </summary>
+      /// <param name="employee">The employee performing the task.</param>
+      /// <param name="state">The employee's state data.</param>
+      /// <returns>True if the task is valid, false otherwise.</returns>
+      public static async Task<bool> ReValidateRefillStation(Employee employee, StateData state)
+      {
+        return await TaskEngine.Utilities.ReValidateTask(employee, state, TaskTypes.RefillStation);
+      }
+
+      public static async Task ExecuteRefillStation(Employee employee, StateData state)
+      {
+        if (!(employee is Packager handler) || state.EmployeeState.TaskContext?.Task == null)
+        {
+          state.EmployeeState.CurrentWorkStep = RefillStationSteps.End;
+          return;
+        }
+
+        var task = state.EmployeeState.TaskContext.Task;
+        var requests = CreateTransferRequest(handler, task);
+        if (!requests.Any())
+        {
+          state.EmployeeState.CurrentWorkStep = RefillStationSteps.End;
+          return;
+        }
+
+        state.EmployeeState.TaskContext.Requests = requests;
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, task.Priority), RefillStationSteps.End);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteRefillStation: Started movement for task {task.TaskId}",
+            DebugLogger.Category.Handler);
+      }
+
+      public static async Task ExecuteEnd(Employee employee, StateData state)
+      {
+        state.EmployeeState.TaskContext?.Cleanup(employee);
+        await state.EmployeeBeh.Disable();
+      }
+    }
+  }
+
+  public static class EmptyLoadingDockTask
+  {
+    public static void Initialize()
+    {
+      var validator = new TaskValidator
+      {
+        TaskName = nameof(EmptyLoadingDockTask),
+        TaskType = TaskTypes.EmptyLoadingDock,
+        RequiredEmployeeType = EmployeeTypes.Handler,
+        RequiresPickup = true,
+        RequiresDropoff = true,
+        PickupType = TransitTypes.LoadingDock,
+        DropoffType = TransitTypes.PlaceableStorageEntity
+      };
+      TaskValidationManager.RegisterValidator(validator);
+    }
+
+    [BurstCompile]
+    public static void ValidateEmptyLoadingDock(ref TaskValidator validator, Property property)
+    {
+      if (!IsLoadingDock(validator.StationKey, property))
+        return;
+      if (!validator.StationOutputSlots.TryGetValue(validator.StationKey, out var outputSlots))
+        return;
+      for (int i = 0; i < outputSlots.Length; i++)
+      {
+        var slot = outputSlots[i];
+        if (slot.Quantity <= 0 || slot.IsLocked)
+          continue;
+        if (TaskValidationManager.FindShelfForItem(slot.ItemKey, validator.SpecificShelves, validator.StorageInputSlots, out var shelfGuid, out var dropoffIndex))
+        {
+          var task = TaskDescriptor.Create(
+              TaskTypes.EmptyLoadingDock,
+              validator.StationKey.Guid,
+              slot.ItemKey,
+              [slot.SlotIndex],
+              shelfGuid,
+              [dropoffIndex],
+              slot.Quantity,
+              TransitTypes.LoadingDock,
+              TransitTypes.PlaceableStorageEntity,
+              EmployeeTypes.Handler,
+              2,
+              validator.AssignedPropertyName,
+              validator.CurrentTime
+          );
+          if (validator.TaskKeys.Add(task.UniqueKey))
+            validator.ValidTasks.Add(task);
+        }
+      }
+    }
+
+    private static bool IsLoadingDock(StorageKey stationKey, Property property)
+    {
+      return property.LoadingDocks.FirstOrDefault(l => l.GUID == stationKey.Guid);
+    }
+
+    public enum EmptyLoadingDockSteps
+    {
+      CheckDock,
+      Empty,
+      End
+    }
+
+    public static IEmployeeTask Create(Packager handler, int priority)
+    {
+      var workSteps = new List<WorkStep<EmptyLoadingDockSteps>>
+            {
+                new WorkStep<EmptyLoadingDockSteps>
+                {
+                    Step = EmptyLoadingDockSteps.CheckDock,
+                    Validate = Logic.ReValidateEmptyLoadingDock,
+                    Execute = async (emp, state) => state.EmployeeState.CurrentWorkStep = EmptyLoadingDockSteps.Empty,
+                    Transitions = { { "Success", EmptyLoadingDockSteps.Empty } }
+                },
+                new WorkStep<EmptyLoadingDockSteps>
+                {
+                    Step = EmptyLoadingDockSteps.Empty,
+                    Validate = Logic.ReValidateEmptyLoadingDock,
+                    Execute = Logic.ExecuteEmptyLoadingDock,
+                    Transitions = { { "Success", EmptyLoadingDockSteps.CheckDock }, { "Failure", EmptyLoadingDockSteps.End } }
+                },
+                new WorkStep<EmptyLoadingDockSteps>
+                {
+                    Step = EmptyLoadingDockSteps.End,
+                    Validate = async (emp, state) => true,
+                    Execute = Logic.ExecuteEnd,
+                    Transitions = { }
+                }
+            };
+      return new EmployeeTask<EmptyLoadingDockSteps>(handler, "EmptyLoadingDock", priority, workSteps);
+    }
+
+    public static class Logic
+    {
+      /// <summary>
+      /// Revalidates the task descriptor to ensure the loading dock and shelf slots are still valid.
+      /// </summary>
+      /// <param name="employee">The employee performing the task.</param>
+      /// <param name="state">The employee's state data.</param>
+      /// <returns>True if the task is valid, false otherwise.</returns>
+      public static async Task<bool> ReValidateEmptyLoadingDock(Employee employee, StateData state)
+      {
+        return await Utilities.ReValidateTask(employee, state, TaskTypes.EmptyLoadingDock);
+      }
+
+
+      public static async Task ExecuteEmptyLoadingDock(Employee employee, StateData state)
+      {
+        if (!(employee is Packager handler) || state.EmployeeState.TaskContext?.Task == null)
+        {
+          state.EmployeeState.CurrentWorkStep = EmptyLoadingDockSteps.End;
+          return;
+        }
+
+        var task = state.EmployeeState.TaskContext.Task;
+        var requests = CreateTransferRequest(handler, task);
+        if (!requests.Any())
+        {
+          state.EmployeeState.CurrentWorkStep = EmptyLoadingDockSteps.End;
+          return;
+        }
+
+        state.EmployeeState.TaskContext.Requests = requests;
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, task.Priority), EmptyLoadingDockSteps.CheckDock);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteEmptyLoadingDock: Started movement for task {task.TaskId}",
+            DebugLogger.Category.Handler);
+      }
+
+      public static async Task ExecuteEnd(Employee employee, StateData state)
+      {
+        state.EmployeeState.TaskContext?.Cleanup(employee);
+        await state.EmployeeBeh.Disable();
+      }
+    }
+  }
+
+  public static class RestockSpecificShelfTask
+  {
+    public static void Initialize()
+    {
+      var validator = new TaskValidator
+      {
+        TaskName = nameof(RestockSpecificShelfTask),
+        TaskType = TaskTypes.RestockSpecificShelf,
+        RequiredEmployeeType = EmployeeTypes.Handler,
+        RequiresPickup = true,
+        RequiresDropoff = true,
+        PickupType = TransitTypes.PlaceableStorageEntity,
+        DropoffType = TransitTypes.PlaceableStorageEntity
+      };
+      TaskValidationManager.RegisterValidator(validator);
+    }
+
+    [BurstCompile]
+    public static void ValidateRestockSpecificShelf(ref TaskValidator validator)
+    {
+      if (!validator.StationOutputSlots.TryGetValue(validator.StationKey, out var outputSlots))
+        return;
+
+      for (int i = 0; i < outputSlots.Length; i++)
+      {
+        var slot = outputSlots[i];
+        if (slot.Quantity <= 0 || slot.IsLocked)
+          continue;
+
+        if (TaskValidationManager.FindShelfForItem(slot.ItemKey, validator.SpecificShelves, validator.StorageInputSlots, out var shelfGuid, out var dropoffIndex))
+        {
+          if (shelfGuid != validator.StationKey.Guid)
+          {
+            var task = TaskDescriptor.Create(
+                TaskTypes.RestockSpecificShelf,
+                validator.StationKey.Guid,
+                slot.ItemKey,
+                [slot.SlotIndex],
+                shelfGuid,
+                [dropoffIndex],
+                slot.Quantity,
+                TransitTypes.PlaceableStorageEntity,
+                TransitTypes.PlaceableStorageEntity,
+                EmployeeTypes.Handler,
+                2,
+                validator.AssignedPropertyName,
+                validator.CurrentTime
+            );
+
+            if (validator.TaskKeys.Add(task.UniqueKey))
+              validator.ValidTasks.Add(task);
+          }
+        }
+      }
+    }
+
+    public enum RestockSpecificShelfSteps
+    {
+      CheckRestock,
+      Restock,
+      End
+    }
+
+    public static IEmployeeTask Create(Packager handler, int priority)
+    {
+      var workSteps = new List<WorkStep<RestockSpecificShelfSteps>>
+            {
+                new WorkStep<RestockSpecificShelfSteps>
+                {
+                    Step = RestockSpecificShelfSteps.CheckRestock,
+                    Validate = Logic.ReValidateRestockSpecificShelf,
+                    Execute = async (emp, state) => state.EmployeeState.CurrentWorkStep = RestockSpecificShelfSteps.Restock,
+                    Transitions = { { "Success", RestockSpecificShelfSteps.Restock } }
+                },
+                new WorkStep<RestockSpecificShelfSteps>
+                {
+                    Step = RestockSpecificShelfSteps.Restock,
+                    Validate = Logic.ReValidateRestockSpecificShelf,
+                    Execute = Logic.ExecuteRestockSpecificShelf,
+                    Transitions = { { "Success", RestockSpecificShelfSteps.End } }
+                },
+                new WorkStep<RestockSpecificShelfSteps>
+                {
+                    Step = RestockSpecificShelfSteps.End,
+                    Validate = async (emp, state) => true,
+                    Execute = Logic.ExecuteEnd,
+                    Transitions = { }
+                }
+            };
+      return new EmployeeTask<RestockSpecificShelfSteps>(handler, "RestockSpecificShelf", priority, workSteps);
+    }
+
+    public static class Logic
+    {
+      /// <summary>
+      /// Revalidates the task descriptor to ensure the source and destination shelves are still valid.
+      /// </summary>
+      /// <param name="employee">The employee performing the task.</param>
+      /// <param name="state">The employee's state data.</param>
+      /// <returns>True if the task is valid, false otherwise.</returns>
+      public static async Task<bool> ReValidateRestockSpecificShelf(Employee employee, StateData state)
+      {
+        return await Utilities.ReValidateTask(employee, state, TaskTypes.RestockSpecificShelf);
+
+      }
+
+      public static async Task ExecuteRestockSpecificShelf(Employee employee, StateData state)
+      {
+        if (!(employee is Packager handler) || state.EmployeeState.TaskContext?.Task == null)
+        {
+          state.EmployeeState.CurrentWorkStep = RestockSpecificShelfSteps.End;
+          return;
+        }
+
+        var task = state.EmployeeState.TaskContext.Task;
+        var requests = CreateTransferRequest(handler, task);
+        if (!requests.Any())
+        {
+          state.EmployeeState.CurrentWorkStep = RestockSpecificShelfSteps.End;
+          return;
+        }
+
+        state.EmployeeState.TaskContext.Requests = requests;
+        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, task.Priority), RestockSpecificShelfSteps.End);
+        DebugLogger.Log(DebugLogger.LogLevel.Info,
+            $"ExecuteRestockSpecificShelf: Started movement for task {task.TaskId}",
+            DebugLogger.Category.Handler);
+      }
+
+      public static async Task ExecuteEnd(Employee employee, StateData state)
+      {
+        state.EmployeeState.TaskContext?.Cleanup(employee);
+        await state.EmployeeBeh.Disable();
+      }
+    }
+  }
+}

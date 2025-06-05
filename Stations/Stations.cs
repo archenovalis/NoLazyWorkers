@@ -1,54 +1,17 @@
-using FishNet.Connection;
-using FishNet.Object;
-using HarmonyLib;
-using MelonLoader;
-using Newtonsoft.Json.Linq;
-using ScheduleOne;
-using ScheduleOne.DevUtilities;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using ScheduleOne.Management.UI;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Persistence.Loaders;
 using ScheduleOne.Property;
-using Grid = ScheduleOne.Tiles.Grid;
-using ScheduleOne.UI.Management;
-using System.Collections;
-using TMPro;
-using Object = UnityEngine.Object;
-using UnityEngine.UI;
-using UnityEngine.Events;
 using ScheduleOne.NPCs;
-using ScheduleOne.PlayerScripts;
-using ScheduleOne.Product;
-using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.NoLazyWorkersExtensions;
-using static NoLazyWorkers.General.StorageExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
-using FishNet.Managing;
-using FishNet.Managing.Object;
-using ScheduleOne.Product.Packaging;
-using ScheduleOne.Persistence;
-using ScheduleOne.NPCs.Behaviour;
 using UnityEngine;
-using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using NoLazyWorkers.Stations;
-using System.Reflection;
-using NoLazyWorkers.Employees;
-using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Stations.PackagingStationExtensions;
-using static NoLazyWorkers.Stations.MixingStationExtensions;
 using ScheduleOne.Employees;
-using FishNet;
 
 namespace NoLazyWorkers.Stations
 {
-  public static class StationExtensions
+  public static class Extensions
   {
-    public static Dictionary<Property, List<IStationAdapter>> PropertyStations = [];
-    public static Dictionary<Guid, IStationAdapter> StationAdapters = [];
-    public static Dictionary<Guid, List<ItemInstance>> StationRefills = [];
+    public static Dictionary<Property, Dictionary<Guid, IStationAdapter>> IStations = [];
+    public static Dictionary<Guid, List<ItemInstance>> StationRefillLists = [];
 
     public interface IStationAdapter
     {
@@ -65,9 +28,40 @@ namespace NoLazyWorkers.Stations
       List<ItemField> GetInputItemForProduct();
       int MaxProductQuantity { get; }
       ITransitEntity TransitEntity { get; }
+      BuildableItem Buildable { get; }
+      Property ParentProperty { get; }
       List<ItemInstance> RefillList();
       bool CanRefill(ItemInstance item);
       Type TypeOf { get; }
+      IStationState StationState { get; set; }
+    }
+
+    public interface IStationState
+    {
+      Enum State { get; set; } // Non-generic enum access
+      float LastValidatedTime { get; set; }
+      bool IsValid(float currentTime);
+      void SetData<T>(string key, T value);
+      T GetData<T>(string key, T defaultValue = default);
+    }
+
+    public class StationState<TStates> : IStationState where TStates : Enum
+    {
+      public TStates State { get; set; } // Type-safe state
+      public float LastValidatedTime { get; set; }
+      public Dictionary<string, object> StateData { get; } = new();
+
+      Enum IStationState.State
+      {
+        get => State;
+        set => State = (TStates)value;
+      }
+
+      public bool IsValid(float currentTime) => currentTime < LastValidatedTime + 5f;
+
+      public void SetData<T>(string key, T value) => StateData[key] = value;
+      public T GetData<T>(string key, T defaultValue = default) =>
+          StateData.TryGetValue(key, out var value) && value is T typedValue ? typedValue : defaultValue;
     }
   }
 }

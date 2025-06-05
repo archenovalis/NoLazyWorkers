@@ -12,13 +12,16 @@ using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Stations.StationExtensions;
+using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using static NoLazyWorkers.Stations.PackagingStationUtilities;
 using static NoLazyWorkers.Stations.PackagingStationConfigUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using NoLazyWorkers.General;
+using NoLazyWorkers.Storage;
+using static NoLazyWorkers.Storage.ShelfUtilities;
+using ScheduleOne.EntityFramework;
+using ScheduleOne.Property;
 
 namespace NoLazyWorkers.Stations
 {
@@ -44,20 +47,22 @@ namespace NoLazyWorkers.Stations
       public void StartOperation(Employee employee) => (employee as Packager)?.PackagingBehaviour.StartPackaging();
       public int MaxProductQuantity => _station.ProductSlot?.ItemInstance.StackLimit ?? 0;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
+      public BuildableItem Buildable => _station as BuildableItem;
+      public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => GetRefillList(_station, ProductSlots);
-      public bool CanRefill(ItemInstance item) => RefillList().Any(i => StorageUtilities.AdvCanStackWith(i, item));
+      public bool CanRefill(ItemInstance item) => RefillList().Any(i => Utilities.AdvCanStackWith(i, item));
       public Type TypeOf => _station.GetType();
 
       public PackagingStationAdapter(PackagingStation station)
       {
-        if (!PropertyStations.TryGetValue(station.ParentProperty, out var propertyStations))
+        if (!IStations.TryGetValue(station.ParentProperty, out var propertyStations))
         {
-          PropertyStations[station.ParentProperty] = new List<IStationAdapter>();
-          propertyStations = PropertyStations[station.ParentProperty];
+          IStations[station.ParentProperty] = new();
+          propertyStations = IStations[station.ParentProperty];
         }
-        propertyStations.Add(this);
+        propertyStations.Add(GUID, this);
         _station = station ?? throw new ArgumentNullException(nameof(station));
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagingStationAdapter: Initialized for station {station.GUID}", DebugLogger.Category.Packager);
+        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagingStationAdapter: Initialized for station {station.GUID}", DebugLogger.Category.Handler);
       }
     }
   }
@@ -78,13 +83,13 @@ namespace NoLazyWorkers.Stations
     {
       DebugLogger.Log(DebugLogger.LogLevel.Verbose,
           $"GetRefillList: Start for station {station?.GUID.ToString() ?? "null"}, productSlots={productSlots?.Count ?? 0}",
-          DebugLogger.Category.Packager);
+          DebugLogger.Category.Handler);
 
       if (station == null || productSlots == null || !ItemFields.TryGetValue(station.GUID, out var fields) || !QualityFields.TryGetValue(station.GUID, out var qualities))
       {
         DebugLogger.Log(DebugLogger.LogLevel.Warning,
             $"GetRefillList: Invalid inputs (station={station != null}, productSlots={productSlots != null} or itemfields={!ItemFields.ContainsKey(station.GUID)} or qualityfields={!QualityFields.ContainsKey(station.GUID)} do not contain GUID",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return new List<ItemInstance>();
       }
 
@@ -97,7 +102,7 @@ namespace NoLazyWorkers.Stations
         var items = new List<ItemInstance>(1);
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"GetRefillList: Found active slot with item={slotItem.ID}, quality={(slotItem as ProductItemInstance)?.Quality}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         for (int i = 0; i < fields.Count; i++)
         {
@@ -114,7 +119,7 @@ namespace NoLazyWorkers.Stations
               items.Add(anyItem);
               DebugLogger.Log(DebugLogger.LogLevel.Info,
                   $"GetRefillList: Matched 'Any' item with quality={targetQuality}, slot quality={slotProd.Quality} at index {i}",
-                  DebugLogger.Category.Packager);
+                  DebugLogger.Category.Handler);
               break;
             }
           }
@@ -126,7 +131,7 @@ namespace NoLazyWorkers.Stations
               items.Add(prodItem);
               DebugLogger.Log(DebugLogger.LogLevel.Info,
                   $"GetRefillList: Matched specific item {prodItem.ID}, quality={prodItem.Quality} at index {i}",
-                  DebugLogger.Category.Packager);
+                  DebugLogger.Category.Handler);
               break;
             }
           }
@@ -134,7 +139,7 @@ namespace NoLazyWorkers.Stations
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"GetRefillList: Returned {items.Count} items (single-item mode) for station {station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return items;
       }
 
@@ -152,7 +157,7 @@ namespace NoLazyWorkers.Stations
           fullItems.Add(anyItem);
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"GetRefillList: Added 'Any' item with quality={qualities[i].Value} at index {i}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
         }
         else if (itemDef.GetDefaultInstance() is ProductItemInstance prodItem)
         {
@@ -160,13 +165,13 @@ namespace NoLazyWorkers.Stations
           fullItems.Add(prodItem);
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"GetRefillList: Added {prodItem.ID} with quality={prodItem.Quality} at index {i}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
         }
       }
 
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"GetRefillList: Returned {fullItems.Count} items (full RefillList mode) for station {station.GUID}",
-          DebugLogger.Category.Packager);
+          DebugLogger.Category.Handler);
       return fullItems;
     }
   }
@@ -190,18 +195,18 @@ namespace NoLazyWorkers.Stations
       try
       {
         Guid guid = station.GUID;
-        if (!StationAdapters.TryGetValue(guid, out var adapter))
+        if (!IStations[station.ParentProperty].TryGetValue(guid, out var adapter))
         {
           adapter = new PackagingStationAdapter(station);
-          StationAdapters[guid] = adapter;
+          IStations[station.ParentProperty][guid] = adapter;
         }
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Initializing for station {guid}", DebugLogger.Category.PackagingStation);
 
         // Ensure StationRefills is initialized
-        if (!StationRefills.ContainsKey(guid))
-          StationRefills[guid] = new List<ItemInstance>(MAXOPTIONS + 1);
-        while (StationRefills[guid].Count < MAXOPTIONS + 1)
-          StationRefills[guid].Add(null);
+        if (!StationRefillLists.ContainsKey(guid))
+          StationRefillLists[guid] = new List<ItemInstance>(MAXOPTIONS + 1);
+        while (StationRefillLists[guid].Count < MAXOPTIONS + 1)
+          StationRefillLists[guid].Add(null);
 
         var itemFields = new List<ItemField>();
         var qualityFields = new List<QualityField>();
@@ -216,7 +221,7 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              if (i < StationRefills[guid].Count && StationRefills[guid][i] is ProductItemInstance prodItem)
+              if (i < StationRefillLists[guid].Count && StationRefillLists[guid][i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
                 DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set quality {quality} for index {i} in station {guid}", DebugLogger.Category.PackagingStation);
@@ -236,9 +241,9 @@ namespace NoLazyWorkers.Stations
           {
             try
             {
-              if (i < StationRefills[guid].Count)
+              if (i < StationRefillLists[guid].Count)
               {
-                StationRefills[guid][i] = item?.GetDefaultInstance();
+                StationRefillLists[guid][i] = item?.GetDefaultInstance();
                 DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i} in station {guid}", DebugLogger.Category.PackagingStation);
               }
               config.InvokeChanged();
@@ -293,7 +298,7 @@ namespace NoLazyWorkers.Stations
 
         var favorites = new List<ItemDefinition>
         {
-          new ItemDefinition() { Name = "None", ID = "None", Icon = StorageConfigUtilities.GetCrossSprite() },
+          new ItemDefinition() { Name = "None", ID = "None", Icon = GetCrossSprite() },
           new ItemDefinition() { Name = "Any", ID = "Any" }
         };
         if (ProductManager.FavouritedProducts != null)

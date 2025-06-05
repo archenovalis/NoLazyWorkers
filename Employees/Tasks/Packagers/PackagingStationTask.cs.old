@@ -5,11 +5,11 @@ using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using ScheduleOne.ObjectScripts;
-using static NoLazyWorkers.Stations.StationExtensions;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
-using static NoLazyWorkers.Employees.EmployeeUtilities;
+using static NoLazyWorkers.Stations.Extensions;
+using static NoLazyWorkers.Employees.Extensions;
+using static NoLazyWorkers.Employees.Utilities;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
-using static NoLazyWorkers.General.StorageUtilities;
+using static NoLazyWorkers.Storage.Utilities;
 using System.Threading.Tasks;
 using Unity.Services.Qos.Internal;
 using System;
@@ -101,7 +101,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
 
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           $"CreatePackagingStationTask: Created task for packager={packager?.fullName ?? "null"} with {workSteps.Count} steps, priority={priority}",
-          DebugLogger.Category.Packager);
+          DebugLogger.Category.Handler);
 
       return new EmployeeTask<PackagingStationSteps>(packager, "PackagingStation", priority, workSteps);
     }
@@ -113,11 +113,11 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"IsStationReady: Checking station={station?.GUID.ToString() ?? "null"} for packager={packager?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (station == null || packager == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "IsStationReady: Invalid station or packager", DebugLogger.Category.Packager);
+          DebugLogger.Log(DebugLogger.LogLevel.Error, "IsStationReady: Invalid station or packager", DebugLogger.Category.Handler);
           return (false, null, null, null);
         }
 
@@ -128,7 +128,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"IsStationReady: No product in station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, null, null, null);
         }
 
@@ -136,7 +136,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"IsStationReady: Station={station.GUID} is fetching packaging",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, null, null, null);
         }
 
@@ -146,7 +146,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"IsStationReady: Station={station.GUID} ready for packaging with {packagingResult.packagingId}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (true, "Success", packagingResult.packagingId, productItem);
         }
 
@@ -154,7 +154,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"IsStationReady: Station={station.GUID} needs baggie unpackaging",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, "Unpackage", JAR_ITEM_ID, productItem);
         }
 
@@ -162,7 +162,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"IsStationReady: Station={station.GUID} needs baggie swap",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, "Fetch", BAGGIE_ITEM_ID, productItem);
         }
 
@@ -170,13 +170,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"IsStationReady: Station={station.GUID} needs product refill for {productItem.ID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, "Refill", null, productItem);
         }
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"IsStationReady: Station={station.GUID} needs packaging {packagingResult.packagingId}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return (false, "Fetch", packagingResult.packagingId, productItem);
       }
 
@@ -185,7 +185,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"CheckPackagingAvailability: Checking for station={station?.GUID.ToString() ?? "null"}, productCount={productCount}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         bool preferJars = productCount >= JAR_QUANTITY_THRESHOLD || (productCount > 0 && productCount < JAR_QUANTITY_THRESHOLD);
         bool hasJars = false;
@@ -209,7 +209,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           {
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"CheckPackagingAvailability: Baggie unpackaging needed for station={station.GUID}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             return (false, JAR_ITEM_ID, true, false);
           }
 
@@ -220,7 +220,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           {
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"CheckPackagingAvailability: Found shelf={shelf.Key.GUID} with {shelf.Value} of {productItem.ID}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             return (false, JAR_ITEM_ID, false, false);
           }
 
@@ -231,7 +231,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
             requiredPackagingId = BAGGIE_ITEM_ID;
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"CheckPackagingAvailability: Swapping jars for baggies in station={station.GUID}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
           }
           preferJars = false;
         }
@@ -240,14 +240,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"CheckPackagingAvailability: Using jars for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (true, JAR_ITEM_ID, false, false);
         }
         if (!preferJars && hasBaggies)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"CheckPackagingAvailability: Using baggies for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (true, BAGGIE_ITEM_ID, false, false);
         }
 
@@ -258,13 +258,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"CheckPackagingAvailability: Found shelf={packagingShelf.Key.GUID} with {requiredPackagingId}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return (false, requiredPackagingId, false, needsBaggieSwap);
         }
 
         DebugLogger.Log(DebugLogger.LogLevel.Warning,
             $"CheckPackagingAvailability: No packaging available for {requiredPackagingId} in station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return (false, requiredPackagingId, false, needsBaggieSwap);
       }
 
@@ -273,14 +273,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"CheckBaggieUnpackaging: Checking for station={station?.GUID.ToString() ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         var packagingSlot = station.PackagingSlot;
         if (packagingSlot == null || packagingSlot.Quantity < 1 || (packagingSlot.ItemInstance as ProductItemInstance)?.AppliedPackaging?.ID != BAGGIE_ITEM_ID)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"CheckBaggieUnpackaging: No valid baggies in station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -294,14 +294,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
               $"CheckBaggieUnpackaging: No unpack needed, neededQuantity={neededQuantity}, availableBaggies={availableBaggies}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
         int unpackCount = Math.Min(availableBaggies, (neededQuantity + JAR_QUANTITY_THRESHOLD - 1) / JAR_QUANTITY_THRESHOLD);
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"CheckBaggieUnpackaging: Can unpackage {unpackCount} baggies for station={station.GUID}, adding {unpackCount * JAR_QUANTITY_THRESHOLD} product",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return true;
       }
 
@@ -310,7 +310,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"InitiatePackagingRetrieval: Retrieving itemId={itemId} for station={station?.GUID.ToString() ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         ItemInstance item = productItem ?? Registry.GetItem(itemId).GetDefaultInstance();
         int quantityNeeded = productItem != null ? Math.Max(1, item.StackLimit - (station.ProductSlot?.Quantity ?? 0)) : 1;
@@ -320,16 +320,16 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"InitiatePackagingRetrieval: No shelf for item={item.ID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
-        var sourceSlots = GetOutputSlotsContainingTemplateItem(shelf.Key, item);
+        var sourceSlots = GetOutputSlotsContainingItem(shelf.Key, item);
         if (sourceSlots.Count == 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"InitiatePackagingRetrieval: No source slots for item={item.ID} on shelf={shelf.Key.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -339,7 +339,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"InitiatePackagingRetrieval: No delivery slots for item={item.ID} at station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -348,7 +348,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"InitiatePackagingRetrieval: Invalid quantity={quantity} or insufficient inventory for item={item.ID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -357,7 +357,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"InitiatePackagingRetrieval: No inventory slot for packager={packager.fullName}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -372,7 +372,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"InitiatePackagingRetrieval: Initiated transfer of {quantity} {item.ID} to station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return true;
       }
     }
@@ -384,13 +384,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ValidateCheckStation: Validating for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager))
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               "ValidateCheckStation: Employee is not a Packager",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -401,7 +401,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           {
             DebugLogger.Log(DebugLogger.LogLevel.Warning,
                 $"ValidateCheckStation: Null station for packager={packager.fullName}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             continue;
           }
 
@@ -409,14 +409,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose,
                 $"ValidateCheckStation: Station={station.GUID} in use or packaging in progress",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             continue;
           }
 
-          if (!StationAdapters.TryGetValue(station.GUID, out var stationAdapter))
+          if (!IStations[station.ParentProperty].TryGetValue(station.GUID, out var stationAdapter))
           {
             stationAdapter = new PackagingStationAdapter(station);
-            StationAdapters[station.GUID] = stationAdapter;
+            IStations[station.ParentProperty][station.GUID] = stationAdapter;
           }
 
           var (isReady, _, _, _) = await Utilities.IsStationReady(station, packager, state);
@@ -425,14 +425,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
             state.EmployeeState.TaskContext = new TaskContext { Station = stationAdapter };
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"ValidateCheckStation: Station={station.GUID} is ready for packager={packager.fullName}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             return true;
           }
         }
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ValidateCheckStation: No valid stations for packager={packager.fullName}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return false;
       }
 
@@ -441,13 +441,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ExecuteCheckStation: Executing for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteCheckStation: Invalid packager or station, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -457,7 +457,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteCheckStation: Station={station.GUID}, isReady={isReady}, nextStep={nextStep}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!isReady)
         {
@@ -466,7 +466,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
             state.EmployeeState.CurrentWorkStep = PackagingStationSteps.UnpackageBaggies;
             DebugLogger.Log(DebugLogger.LogLevel.Info,
                 $"ExecuteCheckStation: Transitioning to UnpackageBaggies for station={station.GUID}",
-                DebugLogger.Category.Packager);
+                DebugLogger.Category.Handler);
             return;
           }
 
@@ -477,14 +477,14 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
               state.EmployeeState.CurrentWorkStep = PackagingStationSteps.FetchPackaging;
               DebugLogger.Log(DebugLogger.LogLevel.Info,
                   $"ExecuteCheckStation: Initiating {(nextStep == "Refill" ? "product refill" : "packaging fetch")} for {packagingId ?? productItem.ID} to station={station.GUID}",
-                  DebugLogger.Category.Packager);
+                  DebugLogger.Category.Handler);
               return;
             }
           }
 
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"ExecuteCheckStation: No actions available for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -492,7 +492,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         state.EmployeeState.CurrentWorkStep = PackagingStationSteps.StartPackaging;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteCheckStation: Transitioning to StartPackaging for station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
       }
 
       // Validates fetch packaging step
@@ -500,12 +500,12 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ValidateFetchPackaging: Validating for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         bool isValid = state.EmployeeState.TaskContext?.Requests?.Count > 0;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ValidateFetchPackaging: Has requests={isValid} for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return isValid;
       }
 
@@ -514,13 +514,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ExecuteFetchPackaging: Executing for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Requests == null || state.EmployeeState.TaskContext.Requests.Count == 0)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteFetchPackaging: Invalid packager or no requests, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -534,7 +534,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
             {
               DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"ExecuteFetchPackaging: Movement completed with status={status} for packager={emp.fullName}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
 
               foreach (var req in requests)
                 TransferRequest.Release(req);
@@ -548,13 +548,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ValidateUnpackageBaggies: Validating for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ValidateUnpackageBaggies: Invalid packager or station, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -563,7 +563,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ValidateUnpackageBaggies: Can unpack={canUnpack} for station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return canUnpack;
       }
 
@@ -572,13 +572,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ExecuteUnpackageBaggies: Executing for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteUnpackageBaggies: Invalid packager or station, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -590,7 +590,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"ExecuteUnpackageBaggies: No valid product slot for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -599,7 +599,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"ExecuteUnpackageBaggies: No unpack needed for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.CheckStation;
           return;
         }
@@ -625,7 +625,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
 
           DebugLogger.Log(DebugLogger.LogLevel.Info,
               $"ExecuteUnpackageBaggies: Unpackaging completed for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           packager.PackagingBehaviour.PackagingInProgress = false;
         }
 
@@ -641,7 +641,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteUnpackageBaggies: Unpackaging timed out for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           packager.PackagingBehaviour.StopPackaging();
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
@@ -650,7 +650,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         state.EmployeeState.CurrentWorkStep = PackagingStationSteps.CheckStation;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteUnpackageBaggies: Transitioning to CheckStation for packager={packager.fullName}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
       }
 
       // Validates packaging operation
@@ -658,13 +658,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ValidateStartPackaging: Validating for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ValidateStartPackaging: Invalid packager or station, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
@@ -674,7 +674,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         bool isValid = isReady && station.GetState(PackagingStation.EMode.Package) == PackagingStation.EState.CanBegin;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ValidateStartPackaging: Is valid={isValid}, packagingId={packagingId} for station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return isValid;
       }
 
@@ -683,13 +683,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ExecuteStartPackaging: Executing for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null)
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteStartPackaging: Invalid packager or station, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -702,7 +702,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteStartPackaging: No valid product for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -714,7 +714,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteStartPackaging: Invalid packaging slot for {packagingId} in station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -722,7 +722,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         packager.PackagingBehaviour.BeginPackaging();
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteStartPackaging: Started packaging {productCount} of {productItem.ID} in {packagingId} for station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         float timeout = 0f;
         while (packager.PackagingBehaviour.PackagingInProgress && timeout < OPERATION_TIMEOUT_SECONDS)
@@ -735,7 +735,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteStartPackaging: Packaging timed out for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           packager.PackagingBehaviour.StopPackaging();
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
@@ -745,7 +745,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteStartPackaging: No output produced for station={station.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -753,7 +753,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         state.EmployeeState.CurrentWorkStep = PackagingStationSteps.DeliverOutput;
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteStartPackaging: Transitioning to DeliverOutput for station={station.GUID}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
       }
 
       // Validates output delivery
@@ -761,7 +761,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ValidateDeliverOutput: Validating for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager) || state.EmployeeState.TaskContext?.Station == null ||
             state.EmployeeState.TaskContext.Station.OutputSlot?.ItemInstance == null ||
@@ -769,13 +769,13 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ValidateDeliverOutput: Invalid state or no output, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           return false;
         }
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ValidateDeliverOutput: Valid output for packager={employee.fullName}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
         return true;
       }
 
@@ -784,7 +784,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Verbose,
             $"ExecuteDeliverOutput: Executing for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         if (!(employee is Packager packager) || state.EmployeeState.TaskContext?.Station == null ||
             state.EmployeeState.TaskContext.Station.OutputSlot?.ItemInstance == null ||
@@ -792,7 +792,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Error,
               $"ExecuteDeliverOutput: Invalid state or no output, packager={employee?.fullName ?? "null"}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -806,7 +806,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"ExecuteDeliverOutput: No storage for item={packagedItem.ID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -816,7 +816,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"ExecuteDeliverOutput: No delivery slots at shelf={shelf.Key.GUID}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -826,7 +826,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         {
           DebugLogger.Log(DebugLogger.LogLevel.Warning,
               $"ExecuteDeliverOutput: No inventory slot for packager={packager.fullName}",
-              DebugLogger.Category.Packager);
+              DebugLogger.Category.Handler);
           state.EmployeeState.CurrentWorkStep = PackagingStationSteps.End;
           return;
         }
@@ -845,7 +845,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
       {
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteEnd: Cleaning up for packager={employee?.fullName ?? "null"}",
-            DebugLogger.Category.Packager);
+            DebugLogger.Category.Handler);
 
         state.EmployeeState.TaskContext?.Cleanup(employee);
         if (state.EmployeeState.TaskContext?.Station != null)

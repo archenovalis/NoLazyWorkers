@@ -124,7 +124,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           prodItem = targetItem as ProductItemInstance;
           // Find source slots with exact quality match for non-null ProductSlot
           bool minQuality = productSlots.Any(s => s.ItemInstance == null);
-          var sourceSlots = GetOutputSlotsContainingTemplateItem(source, targetItem, allowHigherQuality: minQuality);
+          var sourceSlots = GetOutputSlotsContainingItem(source, targetItem, allowHigherQuality: minQuality);
           if (sourceSlots.Count == 0)
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose,

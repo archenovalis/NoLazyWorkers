@@ -1,8 +1,8 @@
 using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using static NoLazyWorkers.General.StorageUtilities;
-using static NoLazyWorkers.Employees.EmployeeExtensions;
+using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.Employees.Extensions;
 
 namespace NoLazyWorkers.Employees.Tasks
 {
@@ -57,7 +57,7 @@ namespace NoLazyWorkers.Employees.Tasks
         // Initialize task context
         state.EmployeeState.TaskContext = new TaskContext();
         // Check for valid inventory slots
-        bool hasValidSlot = employee.Inventory.ItemSlots.Any(s => s?.ItemInstance != null && s.Quantity > 0 && !s.IsLocked && !EmployeeUtilities.IsItemTimedOut(employee.AssignedProperty, s.ItemInstance));
+        bool hasValidSlot = employee.Inventory.ItemSlots.Any(s => s?.ItemInstance != null && s.Quantity > 0 && !s.IsLocked && !Utilities.IsItemTimedOut(employee.AssignedProperty, s.ItemInstance));
         DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ValidateDelivery: Has valid slot={hasValidSlot} for {employee.fullName}", DebugLogger.Category.AnyEmployee);
         return hasValidSlot;
       }
@@ -78,7 +78,7 @@ namespace NoLazyWorkers.Employees.Tasks
 
         foreach (var slot in employee.Inventory.ItemSlots.Where(s => s?.ItemInstance != null && s.Quantity > 0 && !s.IsLocked))
         {
-          if (EmployeeUtilities.IsItemTimedOut(employee.AssignedProperty, slot.ItemInstance))
+          if (Utilities.IsItemTimedOut(employee.AssignedProperty, slot.ItemInstance))
           {
             DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ExecuteDelivery: Skipping timed-out item {slot.ItemInstance.ID}", DebugLogger.Category.AnyEmployee);
             continue;
@@ -87,7 +87,7 @@ namespace NoLazyWorkers.Employees.Tasks
           var destination = FindStorageForDelivery(employee, slot.ItemInstance, true);
           if (destination == null)
           {
-            EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
+            Utilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
             DebugLogger.Log(DebugLogger.LogLevel.Info, $"ExecuteDelivery: No destination for {slot.ItemInstance.ID}, timed out", DebugLogger.Category.AnyEmployee);
             continue;
           }
@@ -96,7 +96,7 @@ namespace NoLazyWorkers.Employees.Tasks
           var deliverySlots = destination.InputSlots.AdvReserveInputSlotsForItem(slot.ItemInstance, employee.NetworkObject);
           if (deliverySlots == null || deliverySlots.Count == 0)
           {
-            EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
+            Utilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
             DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ExecuteDelivery: No slots at {destination.GUID}", DebugLogger.Category.AnyEmployee);
             continue;
           }
@@ -105,7 +105,7 @@ namespace NoLazyWorkers.Employees.Tasks
           if (quantity <= 0)
           {
             destTransit.RemoveSlotLocks(employee.NetworkObject);
-            EmployeeUtilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
+            Utilities.AddItemTimeout(employee.AssignedProperty, slot.ItemInstance);
             DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ExecuteDelivery: Invalid quantity {quantity}", DebugLogger.Category.AnyEmployee);
             continue;
           }
@@ -113,8 +113,8 @@ namespace NoLazyWorkers.Employees.Tasks
           slot.ApplyLock(employee.NetworkObject, "pickup");
 
           var request = TransferRequest.Get(employee, slot.ItemInstance, quantity, slot, null, new List<ItemSlot> { slot }, destination, deliverySlots);
-          routes.Add(EmployeeUtilities.CreatePrioritizedRoute(request, 40));
-          EmployeeUtilities.SetReservedSlot(employee, slot);
+          routes.Add(Utilities.CreatePrioritizedRoute(request, 40));
+          Utilities.SetReservedSlot(employee, slot);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"ExecuteDelivery: Route for {quantity} of {slot.ItemInstance.ID} to {destination.GUID}", DebugLogger.Category.AnyEmployee);
         }
 
