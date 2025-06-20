@@ -26,6 +26,8 @@ using ScheduleOne.EntityFramework;
 using NoLazyWorkers.Stations;
 using FishNet.Object;
 using FishNet.Managing.Object;
+using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Employees
 {
@@ -33,7 +35,7 @@ namespace NoLazyWorkers.Employees
   {
     private readonly Chemist _chemist;
     private readonly EmployeeBehaviour _employeeBehaviour;
-    public EmployeeBehaviour EmpBehaviour => _employeeBehaviour;
+    public EmployeeBehaviour AdvBehaviour => _employeeBehaviour;
     public Property AssignedProperty => _chemist.AssignedProperty;
     public NpcSubType SubType => NpcSubType.Chemist;
 
@@ -41,9 +43,9 @@ namespace NoLazyWorkers.Employees
     {
       _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
       _employeeBehaviour = new ChemistBehaviour(chemist, this);
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
-          $"ChemistAdapter: Initialized for NPC {_chemist.fullName}",
-          DebugLogger.Category.Chemist);
+      Log(Level.Info,
+          $"ChemistAdapter: Initialized for NPC {chemist.fullName}",
+          Category.Chemist);
     }
   }
 }

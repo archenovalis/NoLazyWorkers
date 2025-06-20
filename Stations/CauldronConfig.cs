@@ -23,6 +23,7 @@ using ScheduleOne.Property;
 using NoLazyWorkers.Storage;
 using ScheduleOne.StationFramework;
 using ScheduleOne.EntityFramework;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Stations
 {
@@ -49,7 +50,7 @@ namespace NoLazyWorkers.Stations
           Extensions.IStations[station.ParentProperty] = propertyStations;
         }
         propertyStations.Add(GUID, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"CauldronAdapter: Initialized for station {station.GUID}", DebugLogger.Category.Cauldron);
+        Log(Level.Info, $"CauldronAdapter: Initialized for station {station.GUID}", Category.Cauldron);
       }
 
       public Guid GUID => _station.GUID;
@@ -80,27 +81,27 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static void Cleanup(Cauldron station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", Category.Cauldron);
 
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, "Cleanup: Station is null", Category.Cauldron);
         return;
       }
 
       CauldronExtensions.QualityField.Remove(station.GUID);
       StationRefillLists.Remove(station.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
+      Log(Level.Info, $"Cleanup: Removed data for station {station.GUID}", Category.Cauldron);
     }
 
     public static void InitializeQualityFields(Cauldron station, CauldronConfiguration config)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeQualityFields: Starting for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"InitializeQualityFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.Cauldron);
       try
       {
         if (station == null || config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeQualityFields: Station or config is null", DebugLogger.Category.Cauldron);
+          Log(Level.Error, "InitializeQualityFields: Station or config is null", Category.Cauldron);
           return;
         }
 
@@ -108,23 +109,23 @@ namespace NoLazyWorkers.Stations
         if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
           IStations[station.ParentProperty][guid] = new CauldronAdapter(station);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeQualityFields: Created adapter for station {guid}", DebugLogger.Category.Cauldron);
+          Log(Level.Info, $"InitializeQualityFields: Created adapter for station {guid}", Category.Cauldron);
         }
 
         var targetQuality = new QualityField(config);
         targetQuality.onValueChanged.RemoveAllListeners();
         targetQuality.onValueChanged.AddListener(quality =>
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeQualityFields: Set quality {quality} for station {guid}", DebugLogger.Category.Cauldron);
+          Log(Level.Verbose, $"InitializeQualityFields: Set quality {quality} for station {guid}", Category.Cauldron);
           config.InvokeChanged();
         });
 
         CauldronExtensions.QualityField[guid] = targetQuality;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeQualityFields: Initialized quality field for station {guid}", DebugLogger.Category.Cauldron);
+        Log(Level.Info, $"InitializeQualityFields: Initialized quality field for station {guid}", Category.Cauldron);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeQualityFields: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"InitializeQualityFields: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
   }
@@ -136,7 +137,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Bind")]
     static void BindPostfix(CauldronConfigPanel __instance, List<EntityConfiguration> configs)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", Category.Cauldron);
       try
       {
         __instance.DestinationUI?.gameObject.SetActive(false);
@@ -144,7 +145,7 @@ namespace NoLazyWorkers.Stations
         var qualityUITemplate = dryingRackPanelObj.transform.Find("QualityFieldUI");
         if (qualityUITemplate == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "BindPostfix: Missing quality field template", DebugLogger.Category.Cauldron);
+          Log(Level.Error, "BindPostfix: Missing quality field template", Category.Cauldron);
           return;
         }
 
@@ -174,11 +175,11 @@ namespace NoLazyWorkers.Stations
           qualRect.anchoredPosition = destRect.anchoredPosition;
 
         qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityList);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Bound {CauldronConstants.QualityFieldUIPrefix} to {qualityList.Count} fields", DebugLogger.Category.Cauldron);
+        Log(Level.Info, $"BindPostfix: Bound {CauldronConstants.QualityFieldUIPrefix} to {qualityList.Count} fields", Category.Cauldron);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"BindPostfix: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
   }
@@ -190,7 +191,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(Cauldron) })]
     static void ConstructorPostfix(CauldronConfiguration __instance, Cauldron cauldron)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ConstructorPostfix: Starting for station {cauldron?.GUID.ToString() ?? "null"}", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"ConstructorPostfix: Starting for station {cauldron?.GUID.ToString() ?? "null"}", Category.Cauldron);
       try
       {
         if (!CauldronExtensions.QualityField.ContainsKey(cauldron.GUID))
@@ -198,7 +199,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ConstructorPostfix: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"ConstructorPostfix: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
 
@@ -214,7 +215,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(CauldronConfiguration __instance, ref string __result)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", Category.Cauldron);
       try
       {
         if (__instance?.Station == null) return;
@@ -222,11 +223,11 @@ namespace NoLazyWorkers.Stations
         if (CauldronExtensions.QualityField.TryGetValue(__instance.Station.GUID, out var field))
           json["Quality"] = field.Value.ToString();
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}", DebugLogger.Category.Cauldron);
+        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}", Category.Cauldron);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
 
@@ -234,7 +235,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Destroy")]
     static void DestroyPostfix(CauldronConfiguration __instance)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DestroyPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"DestroyPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", Category.Cauldron);
       try
       {
         if (__instance?.Station != null)
@@ -242,7 +243,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"DestroyPostfix: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"DestroyPostfix: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
   }
@@ -254,7 +255,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Load")]
     static void LoadPostfix(string mainPath)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Starting for {mainPath}", DebugLogger.Category.Cauldron);
+      Log(Level.Verbose, $"LoadPostfix: Starting for {mainPath}", Category.Cauldron);
       try
       {
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null || !(gridItem is Cauldron station))
@@ -285,11 +286,11 @@ namespace NoLazyWorkers.Stations
         if (qualityFieldData != null)
           qualityField.SetValue(Enum.Parse<EQuality>(qualityFieldData.ToString()), false);
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadPostfix: Loaded config for station {guid}", DebugLogger.Category.Cauldron);
+        Log(Level.Info, $"LoadPostfix: Loaded config for station {guid}", Category.Cauldron);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Failed, error: {e.Message}", DebugLogger.Category.Cauldron);
+        Log(Level.Error, $"LoadPostfix: Failed, error: {e.Message}", Category.Cauldron);
       }
     }
   }

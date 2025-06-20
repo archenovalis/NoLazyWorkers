@@ -21,6 +21,7 @@ using NoLazyWorkers.Storage;
 using static NoLazyWorkers.Movement.Extensions;
 using static NoLazyWorkers.Movement.Utilities;
 using static NoLazyWorkers.TaskService.StationTasks.PackagingStationTasks.Constants;
+using System.Threading.Tasks;
 
 namespace NoLazyWorkers.TaskService.StationTasks
 {
@@ -64,15 +65,15 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
     public class PackagingStationEntitySelector : IEntitySelector
     {
-      public NativeList<EntityKey> SelectEntities(Property property, Allocator allocator)
+      public NativeList<Guid> SelectEntities(Property property, Allocator allocator)
       {
-        var entities = new NativeList<EntityKey>(allocator);
+        var entities = new NativeList<Guid>(allocator);
         if (Stations.Extensions.IStations.TryGetValue(property, out var stations))
         {
           foreach (var station in stations.Values.OfType<PackagingStationAdapter>().Where(s => s.TransitEntity is PackagingStation))
-            entities.Add(new EntityKey { Guid = station.GUID, Type = TransitTypes.PackagingStation });
+            entities.Add(station.GUID);
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Selected {entities.Length} packaging stations for property {property.name}", DebugLogger.Category.PackagingStation);
+        Log(Level.Verbose, $"Selected {entities.Length} packaging stations for property {property.name}", Category.PackagingStation);
         return entities;
       }
     }
@@ -80,17 +81,18 @@ namespace NoLazyWorkers.TaskService.StationTasks
     [BurstCompile]
     private class StateValidationValidator : ITaskValidator
     {
-      public void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
+      public void Validate(ITaskDefinition definition, Guid guid, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
       {
         if (!Stations.Extensions.IStations.TryGetValue(property, out var stations) ||
-            !stations.TryGetValue(entityKey.Guid, out var stationAdapter) ||
+            !stations.TryGetValue(guid, out var stationAdapter) ||
             stationAdapter.TransitEntity is not PackagingStation)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StateValidationValidator: No valid station for GUID {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"StateValidationValidator: No valid station for GUID {guid}", Category.PackagingStation);
           return;
         }
 
         var task = TaskDescriptor.Create(
+            guid,
             definition.Type,
             definition.EmployeeType,
             definition.Priority,
@@ -98,35 +100,36 @@ namespace NoLazyWorkers.TaskService.StationTasks
             ItemKey.Empty,
             0,
             definition.PickupType,
-            entityKey.Guid,
+            guid,
             Array.Empty<int>(),
             definition.DropoffType,
-            entityKey.Guid,
+            guid,
             Array.Empty<int>(),
             context.CurrentTime
         );
 
         validTasks.Add(task);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StateValidationValidator: Created task {task.TaskId} for station {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"StateValidationValidator: Created task {task.TaskId} for station {guid}", Category.PackagingStation);
       }
     }
 
     public class StateValidationExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+      private Guid _entityGuid;
+      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
       {
         if (!(employee is Packager packager))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"StateValidationExecutor: Employee {employee.fullName} is not a Packager", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"StateValidationExecutor: Employee {employee.fullName} is not a Packager", Category.PackagingStation);
           return;
         }
-
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StateValidationExecutor: Starting task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+        _entityGuid = task.EntityGuid;
+        Log(Level.Info, $"StateValidationExecutor: Starting task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         try
         {
           if (!await TaskValidationService.ReValidateTaskAsync(packager, state, task))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StateValidationExecutor: Task {task.TaskId} failed revalidation", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"StateValidationExecutor: Task {task.TaskId} failed revalidation", Category.PackagingStation);
             return;
           }
 
@@ -134,17 +137,17 @@ namespace NoLazyWorkers.TaskService.StationTasks
               !stations.TryGetValue(task.PickupGuid, out var stationAdapter) ||
               stationAdapter.TransitEntity is not PackagingStation station)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"StateValidationExecutor: Invalid station {task.PickupGuid}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"StateValidationExecutor: Invalid station {task.PickupGuid}", Category.PackagingStation);
             return;
           }
 
           if (((IUsable)station).IsInUse)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StateValidationExecutor: Station {station.GUID} is in use", DebugLogger.Category.PackagingStation);
+            Log(Level.Verbose, $"StateValidationExecutor: Station {station.GUID} is in use", Category.PackagingStation);
             return;
           }
 
-          state.EmployeeState.TaskContext = new TaskContext { Station = stationAdapter };
+          state.State.TaskContext = new TaskContext { Station = stationAdapter };
           var (isReady, nextStep, packagingId, productItem) = await Utilities.IsStationReady(station, packager, state);
           TaskTypes? followUpTask = null;
 
@@ -166,23 +169,23 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
           if (followUpTask.HasValue)
           {
-            await TaskDefinitionRegistry.Get(followUpTask.Value).EnqueueFollowUpTasksAsync(packager, task);
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"StateValidationExecutor: Enqueued follow-up task {followUpTask.Value} for station {station.GUID}", DebugLogger.Category.PackagingStation);
+            await TaskRegistry.Get(followUpTask.Value).EnqueueFollowUpTasksAsync(packager, task);
+            Log(Level.Info, $"StateValidationExecutor: Enqueued follow-up task {followUpTask.Value} for station {station.GUID}", Category.PackagingStation);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StateValidationExecutor: No follow-up tasks for station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Verbose, $"StateValidationExecutor: No follow-up tasks for station {station.GUID}", Category.PackagingStation);
           }
         }
         catch (Exception ex)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"StateValidationExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"StateValidationExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", Category.PackagingStation);
         }
         finally
         {
-          state.EmployeeState.TaskContext?.Cleanup(packager);
-          await state.EmployeeBeh.Disable();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"StateValidationExecutor: Completed task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+          state.State.TaskContext?.Cleanup(packager);
+          await state.AdvBehaviour.Disable();
+          Log(Level.Info, $"StateValidationExecutor: Completed task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         }
       }
     }
@@ -206,36 +209,37 @@ namespace NoLazyWorkers.TaskService.StationTasks
     [BurstCompile]
     public class UnpackageBaggiesValidator : ITaskValidator
     {
-      public void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
+      public void Validate(ITaskDefinition definition, Guid guid, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
       {
         if (!Stations.Extensions.IStations.TryGetValue(property, out var stations) ||
-            !stations.TryGetValue(entityKey.Guid, out var stationAdapter) ||
+            !stations.TryGetValue(guid, out var stationAdapter) ||
             stationAdapter.TransitEntity is not PackagingStation station)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UnpackageBaggiesValidator: No valid station for GUID {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"UnpackageBaggiesValidator: No valid station for GUID {guid}", Category.PackagingStation);
           return;
         }
 
         if (((IUsable)station).IsInUse)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UnpackageBaggiesValidator: Station {station.GUID} is in use", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"UnpackageBaggiesValidator: Station {station.GUID} is in use", Category.PackagingStation);
           return;
         }
 
         var productSlot = stationAdapter.ProductSlots.FirstOrDefault();
         if (productSlot == null || productSlot.Quantity == 0 || productSlot.ItemInstance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UnpackageBaggiesValidator: No product in station {station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"UnpackageBaggiesValidator: No product in station {station.GUID}", Category.PackagingStation);
           return;
         }
 
         if (!Utilities.CheckBaggieUnpackaging(station, null, productSlot.ItemInstance))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UnpackageBaggiesValidator: No baggies to unpackage for station {station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"UnpackageBaggiesValidator: No baggies to unpackage for station {station.GUID}", Category.PackagingStation);
           return;
         }
 
         var task = TaskDescriptor.Create(
+            guid,
             definition.Type,
             definition.EmployeeType,
             definition.Priority,
@@ -243,35 +247,35 @@ namespace NoLazyWorkers.TaskService.StationTasks
             new ItemKey(productSlot.ItemInstance),
             productSlot.Quantity,
             definition.PickupType,
-            entityKey.Guid,
+            guid,
             new[] { productSlot.SlotIndex },
             definition.DropoffType,
-            entityKey.Guid,
+            guid,
             new[] { productSlot.SlotIndex },
             context.CurrentTime
         );
 
         validTasks.Add(task);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UnpackageBaggiesValidator: Created task {task.TaskId} for station {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"UnpackageBaggiesValidator: Created task {task.TaskId} for station {guid}", Category.PackagingStation);
       }
     }
 
     public class UnpackageBaggiesExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
       {
         if (!(employee is Packager packager))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UnpackageBaggiesExecutor: Employee {employee.fullName} is not a Packager", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"UnpackageBaggiesExecutor: Employee {employee.fullName} is not a Packager", Category.PackagingStation);
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"UnpackageBaggiesExecutor: Starting task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"UnpackageBaggiesExecutor: Starting task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         try
         {
           if (!await TaskValidationService.ReValidateTaskAsync(packager, state, task))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UnpackageBaggiesExecutor: Task {task.TaskId} failed revalidation", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"UnpackageBaggiesExecutor: Task {task.TaskId} failed revalidation", Category.PackagingStation);
             return;
           }
 
@@ -279,13 +283,13 @@ namespace NoLazyWorkers.TaskService.StationTasks
               !stations.TryGetValue(task.PickupGuid, out var stationAdapter) ||
               stationAdapter.TransitEntity is not PackagingStation station)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"UnpackageBaggiesExecutor: Invalid station {task.PickupGuid}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"UnpackageBaggiesExecutor: Invalid station {task.PickupGuid}", Category.PackagingStation);
             return;
           }
 
           if (!Utilities.CheckBaggieUnpackaging(station, packager, CreateItemInstance(task.Item)))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UnpackageBaggiesExecutor: No baggies to unpackage for station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"UnpackageBaggiesExecutor: No baggies to unpackage for station {station.GUID}", Category.PackagingStation);
             return;
           }
 
@@ -298,7 +302,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           {
             packager.Avatar.LookController.OverrideLookTarget(station.Container.position, 0);
             elapsed += Time.deltaTime;
-            await InstanceFinder.TimeManager.AwaitNextTickAsync();
+            await AwaitNextTickAsync();
           }
 
           packager.Avatar.Anim.SetBool("UsePackagingStation", false);
@@ -306,19 +310,19 @@ namespace NoLazyWorkers.TaskService.StationTasks
             station.Unpack();
 
           packager.PackagingBehaviour.PackagingInProgress = false;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UnpackageBaggiesExecutor: Completed unpackaging for station {station.GUID}", DebugLogger.Category.PackagingStation);
-          await TaskDefinitionRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
+          Log(Level.Info, $"UnpackageBaggiesExecutor: Completed unpackaging for station {station.GUID}", Category.PackagingStation);
+          await TaskRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
         }
         catch (Exception ex)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UnpackageBaggiesExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"UnpackageBaggiesExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", Category.PackagingStation);
           packager.PackagingBehaviour.PackagingInProgress = false;
         }
         finally
         {
-          state.EmployeeState.TaskContext?.Cleanup(packager);
-          await state.EmployeeBeh.Disable();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"UnpackageBaggiesExecutor: Completed task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+          state.State.TaskContext?.Cleanup(packager);
+          await state.AdvBehaviour.Disable();
+          Log(Level.Info, $"UnpackageBaggiesExecutor: Completed task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         }
       }
     }
@@ -342,59 +346,60 @@ namespace NoLazyWorkers.TaskService.StationTasks
     [BurstCompile]
     public class FetchPackagingValidator : ITaskValidator
     {
-      public void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
+      public void Validate(ITaskDefinition definition, Guid guid, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
       {
         if (!Stations.Extensions.IStations.TryGetValue(property, out var stations) ||
-            !stations.TryGetValue(entityKey.Guid, out var stationAdapter) ||
+            !stations.TryGetValue(guid, out var stationAdapter) ||
             stationAdapter.TransitEntity is not PackagingStation station)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: No valid station for GUID {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: No valid station for GUID {guid}", Category.PackagingStation);
           return;
         }
 
         if (((IUsable)station).IsInUse)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: Station {station.GUID} is in use", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: Station {station.GUID} is in use", Category.PackagingStation);
           return;
         }
 
         var productSlot = stationAdapter.ProductSlots.FirstOrDefault();
         if (productSlot == null || productSlot.Quantity == 0 || productSlot.ItemInstance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: No product in station {station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: No product in station {station.GUID}", Category.PackagingStation);
           return;
         }
 
         var (canPackage, packagingId, needsUnpack, needsBaggieSwap) = Utilities.CheckPackagingAvailability(station, null, productSlot.Quantity, productSlot.ItemInstance).Result;
         if (canPackage || needsUnpack)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: Station {station.GUID} can package or needs unpack", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: Station {station.GUID} can package or needs unpack", Category.PackagingStation);
           return;
         }
 
         var item = Registry.GetItem(packagingId).GetDefaultInstance();
-        var shelf = FindStorageWithItem(null, item, 1);
+        var shelf = FindStorageWithItemAsync(null, item, 1);
         if (shelf.Key == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: No shelf for packaging {packagingId}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: No shelf for packaging {packagingId}", Category.PackagingStation);
           return;
         }
 
         var sourceSlots = GetOutputSlotsContainingItem(shelf.Key, item);
         if (sourceSlots.Count == 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: No source slots for {packagingId} on shelf {shelf.Key.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: No source slots for {packagingId} on shelf {shelf.Key.GUID}", Category.PackagingStation);
           return;
         }
 
         var slotKey = new SlotKey(shelf.Key.GUID, sourceSlots[0].SlotIndex);
         if (context.ReservedSlots.ContainsKey(slotKey))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"FetchPackagingValidator: Slot {slotKey} already reserved", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"FetchPackagingValidator: Slot {slotKey} already reserved", Category.PackagingStation);
           return;
         }
 
         var task = TaskDescriptor.Create(
+            guid,
             definition.Type,
             definition.EmployeeType,
             definition.Priority,
@@ -405,33 +410,33 @@ namespace NoLazyWorkers.TaskService.StationTasks
             shelf.Key.GUID,
             sourceSlots.Select(s => s.SlotIndex).ToArray(),
             definition.DropoffType,
-            entityKey.Guid,
+            guid,
             new[] { station.PackagingSlot.SlotIndex },
             context.CurrentTime
         );
 
         validTasks.Add(task);
-        context.ReservedSlots.Add(slotKey, new SlotReservation { TaskId = task.TaskId, Timestamp = context.CurrentTime });
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"FetchPackagingValidator: Created task {task.TaskId} for {packagingId} to station {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+        context.ReservedSlots.Add(slotKey, new SlotReservation { EntityGuid = task.TaskId, Timestamp = context.CurrentTime });
+        Log(Level.Info, $"FetchPackagingValidator: Created task {task.TaskId} for {packagingId} to station {guid}", Category.PackagingStation);
       }
     }
 
     public class FetchPackagingExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
       {
         if (!(employee is Packager packager))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"FetchPackagingExecutor: Employee {employee.fullName} is not a Packager", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"FetchPackagingExecutor: Employee {employee.fullName} is not a Packager", Category.PackagingStation);
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"FetchPackagingExecutor: Starting task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"FetchPackagingExecutor: Starting task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         try
         {
           if (!await TaskValidationService.ReValidateTaskAsync(packager, state, task))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FetchPackagingExecutor: Task {task.TaskId} failed revalidation", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"FetchPackagingExecutor: Task {task.TaskId} failed revalidation", Category.PackagingStation);
             return;
           }
 
@@ -440,7 +445,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
               stationAdapter.TransitEntity is not PackagingStation station ||
               !Storages[packager.AssignedProperty].TryGetValue(task.PickupGuid, out var shelf))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"FetchPackagingExecutor: Invalid entities for task {task.TaskId}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"FetchPackagingExecutor: Invalid entities for task {task.TaskId}", Category.PackagingStation);
             return;
           }
 
@@ -448,21 +453,21 @@ namespace NoLazyWorkers.TaskService.StationTasks
           var sourceSlots = GetOutputSlotsContainingItem(shelf, item);
           if (sourceSlots.Count == 0)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FetchPackagingExecutor: No source slots for {task.Item.Id} on shelf {shelf.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"FetchPackagingExecutor: No source slots for {task.Item.Id} on shelf {shelf.GUID}", Category.PackagingStation);
             return;
           }
 
           var deliverySlots = new List<ItemSlot> { station.PackagingSlot };
           if (deliverySlots[0].ItemInstance != null && !item.AdvCanStackWith(deliverySlots[0].ItemInstance))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FetchPackagingExecutor: Incompatible item in packaging slot for station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"FetchPackagingExecutor: Incompatible item in packaging slot for station {station.GUID}", Category.PackagingStation);
             return;
           }
 
           var inventorySlot = packager.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null || item.AdvCanStackWith(s.ItemInstance));
           if (inventorySlot == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FetchPackagingExecutor: No inventory slot for {packager.fullName}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"FetchPackagingExecutor: No inventory slot for {packager.fullName}", Category.PackagingStation);
             return;
           }
 
@@ -471,7 +476,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             var slotKey = new SlotKey(shelf.GUID, pickupSlot.SlotIndex);
             if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Warning, $"FetchPackagingExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", DebugLogger.Category.PackagingStation);
+              Log(Level.Warning, $"FetchPackagingExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", Category.PackagingStation);
               continue;
             }
             pickupSlot.ApplyLock(packager.NetworkObject, "pickup");
@@ -479,30 +484,30 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
           deliverySlots[0].ApplyLock(packager.NetworkObject, "dropoff");
           var request = TransferRequest.Get(packager, item, task.Quantity, inventorySlot, shelf, sourceSlots, station, deliverySlots);
-          state.EmployeeState.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
+          state.State.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
 
           var movementResult = await TransitAsync(packager, state, task, new List<TransferRequest> { request });
           if (movementResult.Success)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"FetchPackagingExecutor: Successfully fetched {task.Quantity} {task.Item.Id} for station {station.GUID}", DebugLogger.Category.PackagingStation);
-            await TaskDefinitionRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
+            Log(Level.Info, $"FetchPackagingExecutor: Successfully fetched {task.Quantity} {task.Item.Id} for station {station.GUID}", Category.PackagingStation);
+            await TaskRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"FetchPackagingExecutor: Movement failed for task {task.TaskId}: {movementResult.Error}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"FetchPackagingExecutor: Movement failed for task {task.TaskId}: {movementResult.Error}", Category.PackagingStation);
           }
 
-          await state.EmployeeBeh.ExecuteTask();
+          await state.AdvBehaviour.ExecuteTask();
         }
         catch (Exception ex)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"FetchPackagingExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"FetchPackagingExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", Category.PackagingStation);
         }
         finally
         {
-          state.EmployeeState.TaskContext?.Cleanup(packager);
-          await state.EmployeeBeh.Disable();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"FetchPackagingExecutor: Completed task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+          state.State.TaskContext?.Cleanup(packager);
+          await state.AdvBehaviour.Disable();
+          Log(Level.Info, $"FetchPackagingExecutor: Completed task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         }
       }
     }
@@ -526,37 +531,38 @@ namespace NoLazyWorkers.TaskService.StationTasks
     [BurstCompile]
     public class StartPackagingValidator : ITaskValidator
     {
-      public void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
+      public void Validate(ITaskDefinition definition, Guid guid, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
       {
         if (!IStations.TryGetValue(property, out var stations) ||
-            !stations.TryGetValue(entityKey.Guid, out var stationAdapter) ||
+            !stations.TryGetValue(guid, out var stationAdapter) ||
             stationAdapter.TransitEntity is not PackagingStation station)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StartPackagingValidator: No valid station for GUID {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"StartPackagingValidator: No valid station for GUID {guid}", Category.PackagingStation);
           return;
         }
 
         if (((IUsable)station).IsInUse)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StartPackagingValidator: Station {station.GUID} is in use", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"StartPackagingValidator: Station {station.GUID} is in use", Category.PackagingStation);
           return;
         }
 
         var productSlot = stationAdapter.ProductSlots.FirstOrDefault();
         if (productSlot == null || productSlot.Quantity == 0 || productSlot.ItemInstance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StartPackagingValidator: No product in station {station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"StartPackagingValidator: No product in station {station.GUID}", Category.PackagingStation);
           return;
         }
 
         var (canPackage, _, _, _) = Utilities.CheckPackagingAvailability(station, null, productSlot.Quantity, productSlot.ItemInstance).Result;
         if (!canPackage)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StartPackagingValidator: Station {station.GUID} not ready for packaging", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"StartPackagingValidator: Station {station.GUID} not ready for packaging", Category.PackagingStation);
           return;
         }
 
         var task = TaskDescriptor.Create(
+            guid,
             definition.Type,
             definition.EmployeeType,
             definition.Priority,
@@ -564,35 +570,35 @@ namespace NoLazyWorkers.TaskService.StationTasks
             new ItemKey(productSlot.ItemInstance),
             productSlot.Quantity,
             definition.PickupType,
-            entityKey.Guid,
+            guid,
             new[] { productSlot.SlotIndex },
             definition.DropoffType,
-            entityKey.Guid,
+            guid,
             new[] { station.OutputSlot.SlotIndex },
             context.CurrentTime
         );
 
         validTasks.Add(task);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StartPackagingValidator: Created task {task.TaskId} for station {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"StartPackagingValidator: Created task {task.TaskId} for station {guid}", Category.PackagingStation);
       }
     }
 
     public class StartPackagingExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
       {
         if (!(employee is Packager packager))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"StartPackagingExecutor: Employee {employee.fullName} is not a Packager", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"StartPackagingExecutor: Employee {employee.fullName} is not a Packager", Category.PackagingStation);
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StartPackagingExecutor: Starting task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"StartPackagingExecutor: Starting task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         try
         {
           if (!await TaskValidationService.ReValidateTaskAsync(packager, state, task))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StartPackagingExecutor: Task {task.TaskId} failed revalidation", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"StartPackagingExecutor: Task {task.TaskId} failed revalidation", Category.PackagingStation);
             return;
           }
 
@@ -600,21 +606,21 @@ namespace NoLazyWorkers.TaskService.StationTasks
               !stations.TryGetValue(task.PickupGuid, out var stationAdapter) ||
               stationAdapter.TransitEntity is not PackagingStation station)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"StartPackagingExecutor: Invalid station {task.PickupGuid}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"StartPackagingExecutor: Invalid station {task.PickupGuid}", Category.PackagingStation);
             return;
           }
 
           var productSlot = stationAdapter.ProductSlots.FirstOrDefault();
           if (productSlot == null || productSlot.Quantity == 0 || productSlot.ItemInstance == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StartPackagingExecutor: No product in station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"StartPackagingExecutor: No product in station {station.GUID}", Category.PackagingStation);
             return;
           }
 
           var (canPackage, packagingId, _, _) = await Utilities.CheckPackagingAvailability(station, packager, productSlot.Quantity, productSlot.ItemInstance);
           if (!canPackage)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StartPackagingExecutor: Station {station.GUID} not ready for packaging", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"StartPackagingExecutor: Station {station.GUID} not ready for packaging", Category.PackagingStation);
             return;
           }
 
@@ -622,33 +628,33 @@ namespace NoLazyWorkers.TaskService.StationTasks
           float timeout = 0f;
           while (packager.PackagingBehaviour.PackagingInProgress && timeout < Constants.OPERATION_TIMEOUT_SECONDS)
           {
-            await InstanceFinder.TimeManager.AwaitNextTickAsync();
+            await AwaitNextTickAsync();
             timeout += Time.deltaTime;
           }
 
           if (packager.PackagingBehaviour.PackagingInProgress)
           {
             packager.PackagingBehaviour.StopPackaging();
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"StartPackagingExecutor: Timed out for station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"StartPackagingExecutor: Timed out for station {station.GUID}", Category.PackagingStation);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"StartPackagingExecutor: Completed packaging for station {station.GUID}", DebugLogger.Category.PackagingStation);
-            await TaskDefinitionRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
+            Log(Level.Info, $"StartPackagingExecutor: Completed packaging for station {station.GUID}", Category.PackagingStation);
+            await TaskRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
           }
 
-          await state.EmployeeBeh.ExecuteTask();
+          await state.AdvBehaviour.ExecuteTask();
         }
         catch (Exception ex)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"StartPackagingExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"StartPackagingExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", Category.PackagingStation);
           packager.PackagingBehaviour.PackagingInProgress = false;
         }
         finally
         {
-          state.EmployeeState.TaskContext?.Cleanup(packager);
-          await state.EmployeeBeh.Disable();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"StartPackagingExecutor: Completed task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+          state.State.TaskContext?.Cleanup(packager);
+          await state.AdvBehaviour.Disable();
+          Log(Level.Info, $"StartPackagingExecutor: Completed task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         }
       }
     }
@@ -672,45 +678,46 @@ namespace NoLazyWorkers.TaskService.StationTasks
     [BurstCompile]
     public class DeliverOutputValidator : ITaskValidator
     {
-      public void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
+      public async Task Validate(ITaskDefinition definition, Guid guid, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks)
       {
         if (!Stations.Extensions.IStations.TryGetValue(property, out var stations) ||
-            !stations.TryGetValue(entityKey.Guid, out var stationAdapter) ||
+            !stations.TryGetValue(guid, out var stationAdapter) ||
             stationAdapter.TransitEntity is not PackagingStation station)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DeliverOutputValidator: No valid station for GUID {entityKey.Guid}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"DeliverOutputValidator: No valid station for GUID {guid}", Category.PackagingStation);
           return;
         }
 
         var outputSlot = station.OutputSlot;
         if (outputSlot == null || outputSlot.Quantity <= 0 || outputSlot.ItemInstance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DeliverOutputValidator: No output in station {station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"DeliverOutputValidator: No output in station {station.GUID}", Category.PackagingStation);
           return;
         }
 
-        var shelf = FindStorageWithItem(null, outputSlot.ItemInstance, outputSlot.Quantity);
+        var shelf = FindStorageWithItemAsync(null, outputSlot.ItemInstance, outputSlot.Quantity);
         if (shelf.Key == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DeliverOutputValidator: No shelf for item {outputSlot.ItemInstance.ID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"DeliverOutputValidator: No shelf for item {outputSlot.ItemInstance.ID}", Category.PackagingStation);
           return;
         }
 
-        var deliverySlots = shelf.Key.InputSlots.AdvReserveInputSlotsForItem(outputSlot.ItemInstance, null);
+        var deliverySlots = await shelf.Result.Key.InputSlots.AdvReserveInputSlotsForItemAsync(outputSlot.ItemInstance, null);
         if (deliverySlots == null || deliverySlots.Count == 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DeliverOutputValidator: No delivery slots at {shelf.Key.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"DeliverOutputValidator: No delivery slots at {shelf.Key.GUID}", Category.PackagingStation);
           return;
         }
 
         var slotKey = new SlotKey(shelf.Key.GUID, deliverySlots[0].SlotIndex);
         if (context.ReservedSlots.ContainsKey(slotKey))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DeliverOutputValidator: Slot {slotKey} already reserved", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"DeliverOutputValidator: Slot {slotKey} already reserved", Category.PackagingStation);
           return;
         }
 
         var task = TaskDescriptor.Create(
+            guid,
             definition.Type,
             definition.EmployeeType,
             definition.Priority,
@@ -718,7 +725,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             new ItemKey(outputSlot.ItemInstance),
             outputSlot.Quantity,
             definition.PickupType,
-            entityKey.Guid,
+            guid,
             new[] { outputSlot.SlotIndex },
             definition.DropoffType,
             shelf.Key.GUID,
@@ -727,27 +734,27 @@ namespace NoLazyWorkers.TaskService.StationTasks
         );
 
         validTasks.Add(task);
-        context.ReservedSlots.Add(slotKey, new SlotReservation { TaskId = task.TaskId, Timestamp = context.CurrentTime });
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"DeliverOutputValidator: Created task {task.TaskId} for item {outputSlot.ItemInstance.ID} to shelf {shelf.Key.GUID}", DebugLogger.Category.PackagingStation);
+        context.ReservedSlots.Add(slotKey, new SlotReservation { EntityGuid = task.TaskId, Timestamp = context.CurrentTime });
+        Log(Level.Info, $"DeliverOutputValidator: Created task {task.TaskId} for item {outputSlot.ItemInstance.ID} to shelf {shelf.Key.GUID}", Category.PackagingStation);
       }
     }
 
     public class DeliverOutputExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
       {
         if (!(employee is Packager packager))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"DeliverOutputExecutor: Employee {employee.fullName} is not a Packager", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"DeliverOutputExecutor: Employee {employee.fullName} is not a Packager", Category.PackagingStation);
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"DeliverOutputExecutor: Starting task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"DeliverOutputExecutor: Starting task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         try
         {
           if (!await TaskValidationService.ReValidateTaskAsync(packager, state, task))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"DeliverOutputExecutor: Task {task.TaskId} failed revalidation", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"DeliverOutputExecutor: Task {task.TaskId} failed revalidation", Category.PackagingStation);
             return;
           }
 
@@ -756,14 +763,14 @@ namespace NoLazyWorkers.TaskService.StationTasks
               stationAdapter.TransitEntity is not PackagingStation station ||
               !Storages[packager.AssignedProperty].TryGetValue(task.DropoffGuid, out var shelf))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"DeliverOutputExecutor: Invalid entities for task {task.TaskId}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"DeliverOutputExecutor: Invalid entities for task {task.TaskId}", Category.PackagingStation);
             return;
           }
 
           var outputSlot = station.OutputSlot;
           if (outputSlot == null || outputSlot.Quantity <= 0 || outputSlot.ItemInstance == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"DeliverOutputExecutor: No output in station {station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"DeliverOutputExecutor: No output in station {station.GUID}", Category.PackagingStation);
             return;
           }
 
@@ -771,14 +778,14 @@ namespace NoLazyWorkers.TaskService.StationTasks
           var deliverySlots = shelf.InputSlots.Where(s => indexes.Contains(s.SlotIndex)).ToList();
           if (deliverySlots.Count == 0)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"DeliverOutputExecutor: No delivery slots at {shelf.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"DeliverOutputExecutor: No delivery slots at {shelf.GUID}", Category.PackagingStation);
             return;
           }
 
           var inventorySlot = packager.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null || outputSlot.ItemInstance.AdvCanStackWith(s.ItemInstance));
           if (inventorySlot == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"DeliverOutputExecutor: No inventory slot for {packager.fullName}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"DeliverOutputExecutor: No inventory slot for {packager.fullName}", Category.PackagingStation);
             return;
           }
 
@@ -788,37 +795,37 @@ namespace NoLazyWorkers.TaskService.StationTasks
             var slotKey = new SlotKey(shelf.GUID, deliverySlot.SlotIndex);
             if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Warning, $"DeliverOutputExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", DebugLogger.Category.PackagingStation);
+              Log(Level.Warning, $"DeliverOutputExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", Category.PackagingStation);
               continue;
             }
             deliverySlot.ApplyLock(packager.NetworkObject, "dropoff");
           }
 
           var request = TransferRequest.Get(packager, outputSlot.ItemInstance, outputSlot.Quantity, inventorySlot, station, new List<ItemSlot> { outputSlot }, shelf, deliverySlots);
-          state.EmployeeState.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
+          state.State.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
 
           var movementResult = await TransitAsync(packager, state, task, new List<TransferRequest> { request });
           if (movementResult.Success)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"DeliverOutputExecutor: Successfully delivered {outputSlot.Quantity} {outputSlot.ItemInstance.ID} to shelf {shelf.GUID}", DebugLogger.Category.PackagingStation);
-            await TaskDefinitionRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
+            Log(Level.Info, $"DeliverOutputExecutor: Successfully delivered {outputSlot.Quantity} {outputSlot.ItemInstance.ID} to shelf {shelf.GUID}", Category.PackagingStation);
+            await TaskRegistry.Get(task.Type).EnqueueFollowUpTasksAsync(packager, task); // Enqueue StateValidation
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"DeliverOutputExecutor: Movement failed for task {task.TaskId}: {movementResult.Error}", DebugLogger.Category.PackagingStation);
+            Log(Level.Error, $"DeliverOutputExecutor: Movement failed for task {task.TaskId}: {movementResult.Error}", Category.PackagingStation);
           }
 
-          await state.EmployeeBeh.ExecuteTask();
+          await state.AdvBehaviour.ExecuteTask();
         }
         catch (Exception ex)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"DeliverOutputExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", DebugLogger.Category.PackagingStation);
+          Log(Level.Error, $"DeliverOutputExecutor: Exception for task {task.TaskId}, employee {packager.fullName} - {ex}", Category.PackagingStation);
         }
         finally
         {
-          state.EmployeeState.TaskContext?.Cleanup(packager);
-          await state.EmployeeBeh.Disable();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"DeliverOutputExecutor: Completed task {task.TaskId} for {packager.fullName}", DebugLogger.Category.PackagingStation);
+          state.State.TaskContext?.Cleanup(packager);
+          await state.AdvBehaviour.Disable();
+          Log(Level.Info, $"DeliverOutputExecutor: Completed task {task.TaskId} for {packager.fullName}", Category.PackagingStation);
         }
       }
     }
@@ -826,64 +833,64 @@ namespace NoLazyWorkers.TaskService.StationTasks
     public static class Utilities
     {
       // Checks if station is ready for packaging or needs action
-      public static async Task<(bool isReady, string nextStep, string packagingId, ItemInstance productItem)> IsStationReady(PackagingStation station, Packager packager, EmployeeStateData state)
+      public static async Task<(bool isReady, string nextStep, string packagingId, ItemInstance productItem)> IsStationReady(PackagingStation station, Packager packager, EmployeeData state)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
         $"IsStationReady: Checking station={station?.GUID.ToString() ?? "null"} for packager={packager?.fullName ?? "null"}",
-        DebugLogger.Category.Handler);
+        Category.Handler);
         if (station == null || packager == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "IsStationReady: Invalid station or packager", DebugLogger.Category.Handler);
+          Log(Level.Error, "IsStationReady: Invalid station or packager", Category.Handler);
           return (false, null, null, null);
         }
         int productCount = station.ProductSlot?.Quantity ?? 0;
         ItemInstance productItem = station.ProductSlot?.ItemInstance;
         if (productCount == 0 || productItem == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
           $"IsStationReady: No product in station={station.GUID}",
-          DebugLogger.Category.Handler);
+          Category.Handler);
           return (false, null, null, null);
         }
         // Check packaging availability and determine action
         var packagingResult = await CheckPackagingAvailability(station, packager, productCount, productItem);
         if (packagingResult.canPackage)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
           $"IsStationReady: Station={station.GUID} ready for packaging with {packagingResult.packagingId}",
-          DebugLogger.Category.Handler);
+          Category.Handler);
           return (true, "Success", packagingResult.packagingId, productItem);
         }
         if (packagingResult.needsUnpack)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
           $"IsStationReady: Station={station.GUID} needs baggie unpackaging",
-          DebugLogger.Category.Handler);
+          Category.Handler);
           return (false, "Unpackage", JAR_ITEM_ID, productItem);
         }
         if (packagingResult.needsBaggieSwap)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
           $"IsStationReady: Station={station.GUID} needs baggie swap",
-          DebugLogger.Category.Handler);
+          Category.Handler);
           return (false, "Fetch", BAGGIE_ITEM_ID, productItem);
         }
         if (productCount < productItem.StackLimit)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
           $"IsStationReady: Station={station.GUID} needs product refill for {productItem.ID}",
-          DebugLogger.Category.Handler);
+          Category.Handler);
           return (false, "Refill", null, productItem);
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
         $"IsStationReady: Station={station.GUID} needs packaging {packagingResult.packagingId}",
-        DebugLogger.Category.Handler);
+        Category.Handler);
         return (false, "Fetch", packagingResult.packagingId, productItem);
       }
 
       public static async Task<(bool canPackage, string packagingId, bool needsUnpack, bool needsBaggieSwap)> CheckPackagingAvailability(PackagingStation station, Packager packager, int productCount, ItemInstance productItem)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckPackagingAvailability: Checking for station={station?.GUID.ToString() ?? "null"}, productCount={productCount}", DebugLogger.Category.PackagingStation);
+        Log(Level.Verbose, $"CheckPackagingAvailability: Checking for station={station?.GUID.ToString() ?? "null"}, productCount={productCount}", Category.PackagingStation);
         bool preferJars = productCount >= Constants.JAR_QUANTITY_THRESHOLD;
         bool hasJars = false;
         bool hasBaggies = false;
@@ -902,15 +909,15 @@ namespace NoLazyWorkers.TaskService.StationTasks
         {
           if (CheckBaggieUnpackaging(station, packager, productItem))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"CheckPackagingAvailability: Baggie unpackaging needed for station={station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Info, $"CheckPackagingAvailability: Baggie unpackaging needed for station={station.GUID}", Category.PackagingStation);
             return (false, Constants.JAR_ITEM_ID, true, false);
           }
 
           int neededForJars = Constants.JAR_QUANTITY_THRESHOLD - productCount;
-          var shelf = FindStorageWithItem(packager, productItem, neededForJars);
+          var shelf = FindStorageWithItemAsync(packager, productItem, neededForJars);
           if (shelf.Key != null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"CheckPackagingAvailability: Found shelf={shelf.Key.GUID} with {shelf.Value} of {productItem.ID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Info, $"CheckPackagingAvailability: Found shelf={shelf.Key.GUID} with {shelf.Value} of {productItem.ID}", Category.PackagingStation);
             return (false, Constants.JAR_ITEM_ID, false, false);
           }
 
@@ -918,42 +925,42 @@ namespace NoLazyWorkers.TaskService.StationTasks
           {
             needsBaggieSwap = true;
             requiredPackagingId = Constants.BAGGIE_ITEM_ID;
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"CheckPackagingAvailability: Swapping jars for baggies in station={station.GUID}", DebugLogger.Category.PackagingStation);
+            Log(Level.Info, $"CheckPackagingAvailability: Swapping jars for baggies in station={station.GUID}", Category.PackagingStation);
           }
           preferJars = false;
         }
 
         if (preferJars && hasJars)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckPackagingAvailability: Using jars for station={station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"CheckPackagingAvailability: Using jars for station={station.GUID}", Category.PackagingStation);
           return (true, Constants.JAR_ITEM_ID, false, false);
         }
 
         if (!preferJars && hasBaggies)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckPackagingAvailability: Using baggies for station={station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"CheckPackagingAvailability: Using baggies for station={station.GUID}", Category.PackagingStation);
           return (true, Constants.BAGGIE_ITEM_ID, false, false);
         }
 
         var packagingItem = Registry.GetItem(requiredPackagingId).GetDefaultInstance();
-        var packagingShelf = FindStorageWithItem(packager, packagingItem, 1);
+        var packagingShelf = FindStorageWithItemAsync(packager, packagingItem, 1);
         if (packagingShelf.Key != null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"CheckPackagingAvailability: Found shelf={packagingShelf.Key.GUID} with {requiredPackagingId}", DebugLogger.Category.PackagingStation);
+          Log(Level.Info, $"CheckPackagingAvailability: Found shelf={packagingShelf.Key.GUID} with {requiredPackagingId}", Category.PackagingStation);
           return (false, requiredPackagingId, false, needsBaggieSwap);
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"CheckPackagingAvailability: No packaging available for {requiredPackagingId} in station={station.GUID}", DebugLogger.Category.PackagingStation);
+        Log(Level.Warning, $"CheckPackagingAvailability: No packaging available for {requiredPackagingId} in station={station.GUID}", Category.PackagingStation);
         return (false, requiredPackagingId, false, needsBaggieSwap);
       }
 
       public static bool CheckBaggieUnpackaging(PackagingStation station, Packager packager, ItemInstance targetProduct)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckBaggieUnpackaging: Checking for station={station?.GUID.ToString() ?? "null"}", DebugLogger.Category.PackagingStation);
+        Log(Level.Verbose, $"CheckBaggieUnpackaging: Checking for station={station?.GUID.ToString() ?? "null"}", Category.PackagingStation);
         var packagingSlot = station.PackagingSlot;
         if (packagingSlot == null || packagingSlot.Quantity < 1 || (packagingSlot.ItemInstance as ProductItemInstance)?.AppliedPackaging?.ID != Constants.BAGGIE_ITEM_ID)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckBaggieUnpackaging: No valid baggies in station={station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"CheckBaggieUnpackaging: No valid baggies in station={station.GUID}", Category.PackagingStation);
           return false;
         }
 
@@ -965,61 +972,61 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
         if (neededQuantity <= 0 || availableBaggies < 1)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"CheckBaggieUnpackaging: No unpack needed, neededQuantity={neededQuantity}, availableBaggies={availableBaggies}", DebugLogger.Category.PackagingStation);
+          Log(Level.Verbose, $"CheckBaggieUnpackaging: No unpack needed, neededQuantity={neededQuantity}, availableBaggies={availableBaggies}", Category.PackagingStation);
           return false;
         }
 
         int unpackCount = Math.Min(availableBaggies, (neededQuantity + Constants.JAR_QUANTITY_THRESHOLD - 1) / Constants.JAR_QUANTITY_THRESHOLD);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"CheckBaggieUnpackaging: Can unpackage {unpackCount} baggies for station={station.GUID}, adding {unpackCount * Constants.JAR_QUANTITY_THRESHOLD} product", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"CheckBaggieUnpackaging: Can unpackage {unpackCount} baggies for station={station.GUID}, adding {unpackCount * Constants.JAR_QUANTITY_THRESHOLD} product", Category.PackagingStation);
         return true;
       }
 
-      public static async Task<bool> InitiatePackagingRetrieval(PackagingStation station, Packager packager, string itemId, EmployeeStateData state, ItemInstance productItem = null)
+      public static async Task<bool> InitiatePackagingRetrieval(PackagingStation station, Packager packager, string itemId, EmployeeData state, ItemInstance productItem = null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitiatePackagingRetrieval: Retrieving itemId={itemId} for station={station?.GUID.ToString() ?? "null"}", DebugLogger.Category.PackagingStation);
+        Log(Level.Verbose, $"InitiatePackagingRetrieval: Retrieving itemId={itemId} for station={station?.GUID.ToString() ?? "null"}", Category.PackagingStation);
         ItemInstance item = productItem ?? Registry.GetItem(itemId).GetDefaultInstance();
         int quantityNeeded = productItem != null ? Math.Max(1, item.StackLimit - (station.ProductSlot?.Quantity ?? 0)) : 1;
-        var shelf = FindStorageWithItem(packager, item, quantityNeeded);
+        var shelf = FindStorageWithItemAsync(packager, item, quantityNeeded);
         if (shelf.Key == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: No shelf for item={item.ID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Warning, $"InitiatePackagingRetrieval: No shelf for item={item.ID}", Category.PackagingStation);
           return false;
         }
 
         var sourceSlots = GetOutputSlotsContainingItem(shelf.Key, item);
         if (sourceSlots.Count == 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: No source slots for item={item.ID} on shelf={shelf.Key.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Warning, $"InitiatePackagingRetrieval: No source slots for item={item.ID} on shelf={shelf.Key.GUID}", Category.PackagingStation);
           return false;
         }
 
         var deliverySlots = new List<ItemSlot> { station.PackagingSlot };
         if (deliverySlots[0].ItemInstance != null && !item.AdvCanStackWith(deliverySlots[0].ItemInstance))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: Incompatible item in packaging slot for station={station.GUID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Warning, $"InitiatePackagingRetrieval: Incompatible item in packaging slot for station={station.GUID}", Category.PackagingStation);
           return false;
         }
 
         int quantity = Math.Min(shelf.Value, quantityNeeded);
         if (quantity <= 0 || packager.Inventory.HowManyCanFit(item) < quantity)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: Invalid quantity={quantity} or insufficient inventory for item={item.ID}", DebugLogger.Category.PackagingStation);
+          Log(Level.Warning, $"InitiatePackagingRetrieval: Invalid quantity={quantity} or insufficient inventory for item={item.ID}", Category.PackagingStation);
           return false;
         }
 
         var inventorySlot = packager.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
         if (inventorySlot == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: No inventory slot for packager={packager.fullName}", DebugLogger.Category.PackagingStation);
+          Log(Level.Warning, $"InitiatePackagingRetrieval: No inventory slot for packager={packager.fullName}", Category.PackagingStation);
           return false;
         }
 
         foreach (var pickupSlot in sourceSlots)
         {
           var slotKey = new SlotKey(shelf.Key.GUID, pickupSlot.SlotIndex);
-          if (!SlotManager.ReserveSlot(slotKey, state.EmployeeState.TaskContext?.Task.TaskId ?? Guid.NewGuid(), Time.time))
+          if (!SlotManager.ReserveSlot(slotKey, state.State.TaskContext?.Task.TaskId ?? Guid.NewGuid(), Time.time))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"InitiatePackagingRetrieval: Failed to reserve slot {slotKey}", DebugLogger.Category.PackagingStation);
+            Log(Level.Warning, $"InitiatePackagingRetrieval: Failed to reserve slot {slotKey}", Category.PackagingStation);
             continue;
           }
           pickupSlot.ApplyLock(packager.NetworkObject, "pickup");
@@ -1027,11 +1034,11 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
         deliverySlots[0].ApplyLock(packager.NetworkObject, "dropoff");
         var request = TransferRequest.Get(packager, item, quantity, inventorySlot, shelf.Key, sourceSlots, station, deliverySlots);
-        state.EmployeeState.TaskContext = state.EmployeeState.TaskContext ?? new TaskContext();
-        state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
-        state.EmployeeState.TaskContext.Item = item;
+        state.State.TaskContext = state.State.TaskContext ?? new TaskContext();
+        state.State.TaskContext.Requests = new List<TransferRequest> { request };
+        state.State.TaskContext.Item = item;
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitiatePackagingRetrieval: Initiated transfer of {quantity} {item.ID} to station={station.GUID}", DebugLogger.Category.PackagingStation);
+        Log(Level.Info, $"InitiatePackagingRetrieval: Initiated transfer of {quantity} {item.ID} to station={station.GUID}", Category.PackagingStation);
         return true;
       }
     }

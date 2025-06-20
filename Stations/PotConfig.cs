@@ -11,6 +11,7 @@ using ScheduleOne.UI.Management;
 using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Botanists
 {
@@ -27,23 +28,23 @@ namespace NoLazyWorkers.Botanists
       {
         if (potConfig == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "SourceChanged(Pot): PotConfiguration is null", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Error, "SourceChanged(Pot): PotConfiguration is null", Category.Pot, Category.Botanist);
           return;
         }
 
         Pot pot = potConfig.Pot;
         if (pot == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, "SourceChanged(pot): pot is null", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, "SourceChanged(pot): pot is null", Category.Pot, Category.Botanist);
           return;
         }
 
         Guid guid = pot.GUID;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SourceChanged(Pot): Called for PotConfig: {guid.ToString() ?? "null"}, Item: {item?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Verbose, $"SourceChanged(Pot): Called for PotConfig: {guid.ToString() ?? "null"}, Item: {item?.name ?? "null"}", Category.Pot, Category.Botanist);
 
         if (!Supply.ContainsKey(guid))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"SourceChanged(Pot): PotSupply does not contain key for pot: {pot}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"SourceChanged(Pot): PotSupply does not contain key for pot: {pot}", Category.Pot, Category.Botanist);
           return;
         }
 
@@ -54,7 +55,7 @@ namespace NoLazyWorkers.Botanists
 
         if (SupplyRoute[guid] is TransitRoute supplyRoute)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"SourceChanged(pot): Destroying existing TransitRoute for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"SourceChanged(pot): Destroying existing TransitRoute for pot: {guid}", Category.Pot, Category.Botanist);
           supplyRoute.Destroy();
           SupplyRoute[guid] = null;
         }
@@ -70,19 +71,19 @@ namespace NoLazyWorkers.Botanists
           {
             supplyRoute.SetVisualsActive(true);
           }
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"SourceChanged(Pot): Created new TransitRoute for pot: {guid}, Supply: {item.name}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"SourceChanged(Pot): Created new TransitRoute for pot: {guid}, Supply: {item.name}", Category.Pot, Category.Botanist);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"SourceChanged(Pot): Item is null, no TransitRoute created for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"SourceChanged(Pot): Item is null, no TransitRoute created for pot: {guid}", Category.Pot, Category.Botanist);
           SupplyRoute[guid] = null;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"SourceChanged(pot): Updated for MixerConfig: {potConfig}, Supply: {supply?.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Verbose, $"SourceChanged(pot): Updated for MixerConfig: {potConfig}, Supply: {supply?.SelectedObject?.name ?? "null"}", Category.Pot, Category.Botanist);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"SourceChanged(Pot): Failed for PotConfig: {potConfig}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"SourceChanged(Pot): Failed for PotConfig: {potConfig}, error: {e}", Category.Pot, Category.Botanist);
       }
     }
 
@@ -90,7 +91,7 @@ namespace NoLazyWorkers.Botanists
     {
       __instance.InvokeChanged();
       SourceChanged(__instance, item);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"SupplyOnObjectChangedInvoke: Supply changed for pot {pot?.GUID.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.GUID.ToString() ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+      Log(Level.Info, $"SupplyOnObjectChangedInvoke: Supply changed for pot {pot?.GUID.ToString() ?? "null"}, newSupply={Supply.SelectedObject?.GUID.ToString() ?? "null"}", Category.Pot, Category.Botanist);
     }
 
     public static void RestoreConfigurations()
@@ -103,9 +104,9 @@ namespace NoLazyWorkers.Botanists
           if (pot.Configuration is PotConfiguration potConfig)
           {
             Guid guid = pot.GUID;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"RestoreConfigurations: Started for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Verbose, $"RestoreConfigurations: Started for pot: {guid}", Category.Pot, Category.Botanist);
             Config[guid] = potConfig;
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Registered missing PotConfig for pot: {pot.name}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Info, $"RestoreConfigurations: Registered missing PotConfig for pot: {pot.name}", Category.Pot, Category.Botanist);
 
             if (!Supply.TryGetValue(guid, out var supply))
             {
@@ -117,20 +118,20 @@ namespace NoLazyWorkers.Botanists
               Supply[guid] = supply;
               Supply[guid].onObjectChanged.RemoveAllListeners();
               Supply[guid].onObjectChanged.AddListener(item => SupplyOnObjectChangedInvoke(item, potConfig, pot, supply));
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Initialized Supply for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+              Log(Level.Info, $"RestoreConfigurations: Initialized Supply for pot: {guid}", Category.Pot, Category.Botanist);
             }
           }
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to restore configuration for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Stacktrace, $"RestoreConfigurations: Failed to restore configuration for pot: {pot?.name ?? "null"}, error: {e}", Category.Pot, Category.Botanist);
         }
       }
 
       // Reload failed Supply entries
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Reloading {FailedSupply.Count} failed Supply entries", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Info, $"RestoreConfigurations: Reloading {FailedSupply.Count} failed Supply entries", Category.Pot, Category.Botanist);
 
         // Use ToList to avoid modifying collection during iteration
         foreach (var entry in FailedSupply.ToList())
@@ -141,20 +142,20 @@ namespace NoLazyWorkers.Botanists
           {
             if (!Supply.TryGetValue(guid, out ObjectField supply) || supply == null)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Warning, $"RestoreConfigurations: Skipping reload for pot: {guid.ToString() ?? "null"}, supply not found", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+              Log(Level.Warning, $"RestoreConfigurations: Skipping reload for pot: {guid.ToString() ?? "null"}, supply not found", Category.Pot, Category.Botanist);
               FailedSupply.Remove(guid);
               continue;
             }
 
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"RestoreConfigurations: Reloading Supply for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Verbose, $"RestoreConfigurations: Reloading Supply for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}", Category.Pot, Category.Botanist);
             supply.Load(supplyData);
             if (supply.SelectedObject == null)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Warning, $"RestoreConfigurations: Reload failed to set SelectedObject for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+              Log(Level.Warning, $"RestoreConfigurations: Reload failed to set SelectedObject for pot: {guid}, ObjectGUID: {supplyData.ObjectGUID ?? "null"}", Category.Pot, Category.Botanist);
             }
             else
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Info, $"RestoreConfigurations: Reload succeeded, SelectedObject: {supply.SelectedObject.name} for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+              Log(Level.Info, $"RestoreConfigurations: Reload succeeded, SelectedObject: {supply.SelectedObject.name} for pot: {guid}", Category.Pot, Category.Botanist);
               if (Config.TryGetValue(guid, out var config))
               {
                 SourceChanged(config, supply.SelectedObject);
@@ -164,14 +165,14 @@ namespace NoLazyWorkers.Botanists
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to reload Supply for pot: {guid.ToString() ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Stacktrace, $"RestoreConfigurations: Failed to reload Supply for pot: {guid.ToString() ?? "null"}, error: {e}", Category.Pot, Category.Botanist);
             FailedSupply.Remove(guid);
           }
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"RestoreConfigurations: Failed to process FailedSupply entries, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"RestoreConfigurations: Failed to process FailedSupply entries, error: {e}", Category.Pot, Category.Botanist);
       }
     }
   }
@@ -186,7 +187,7 @@ namespace NoLazyWorkers.Botanists
       try
       {
         Guid guid = pot.GUID;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfigurationPatch: Initializing for pot: {pot?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Verbose, $"PotConfigurationPatch: Initializing for pot: {pot?.name ?? "null"}", Category.Pot, Category.Botanist);
         ObjectField supply = new(__instance)
         {
           TypeRequirements = [],
@@ -202,11 +203,11 @@ namespace NoLazyWorkers.Botanists
         {
           PotExtensions.Config[guid] = __instance;
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotConfigurationPatch: Registered supply and config for pot: {pot?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Info, $"PotConfigurationPatch: Registered supply and config for pot: {pot?.name ?? "null"}", Category.Pot, Category.Botanist);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigurationPatch: Failed for pot: {pot?.name ?? "null"}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"PotConfigurationPatch: Failed for pot: {pot?.name ?? "null"}, error: {e}", Category.Pot, Category.Botanist);
       }
     }
 
@@ -238,18 +239,18 @@ namespace NoLazyWorkers.Botanists
             ["ObjectGUID"] = supply.SelectedObject.GUID.ToString()
           };
           jsonObject["Supply"] = supplyObject;
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfiguration GetSaveStringPatch: supplyData: {supplyObject["ObjectGUID"]}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Verbose, $"PotConfiguration GetSaveStringPatch: supplyData: {supplyObject["ObjectGUID"]}", Category.Pot, Category.Botanist);
           __result = jsonObject.ToString(Newtonsoft.Json.Formatting.Indented);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotConfiguration GetSaveStringPatch: Saved JSON for station={guid}: {__result}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"PotConfiguration GetSaveStringPatch: Saved JSON for station={guid}: {__result}", Category.Pot, Category.Botanist);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotConfiguration GetSaveStringPatch: No Supply for pot {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotConfiguration GetSaveStringPatch: No Supply for pot {guid}", Category.Pot, Category.Botanist);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfiguration GetSaveStringPatch failed: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"PotConfiguration GetSaveStringPatch failed: {e}", Category.Pot, Category.Botanist);
       }
     }
 
@@ -269,16 +270,16 @@ namespace NoLazyWorkers.Botanists
           {
             PotExtensions.Config.Remove(pair.Key);
           }
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotConfigurationDestroyPatch: Cleaned up for pot: {guid.ToString() ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"PotConfigurationDestroyPatch: Cleaned up for pot: {guid.ToString() ?? "null"}", Category.Pot, Category.Botanist);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfigurationDestroyPatch: Skipped removal for pot {__instance.Pot?.GUID}, station still exists", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Verbose, $"PotConfigurationDestroyPatch: Skipped removal for pot {__instance.Pot?.GUID}, station still exists", Category.Pot, Category.Botanist);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"PotConfigurationDestroyPatch: Failed for configHash={__instance.GetHashCode()}, error: {e}", Category.Pot, Category.Botanist);
       }
     }
   }
@@ -311,17 +312,17 @@ namespace NoLazyWorkers.Botanists
           Guid guid = config.Pot.GUID;
           if (PotExtensions.Supply.TryGetValue(guid, out ObjectField supply))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Verbose, $"PotConfigPanelBindPatch: Before Bind, station: {guid}, SelectedObject: {supply.SelectedObject?.name ?? "null"}", Category.Pot, Category.Botanist);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Warning, $"PotConfigPanelBindPatch: No supply found for MixingStationConfiguration, station: {guid}", Category.Pot, Category.Botanist);
           }
           PotExtensions.Supply[guid] = supply ?? new(config);
           supplyList.Add(PotExtensions.Supply[guid]);
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Info, $"PotConfigPanelBindPatch: Processing Postfix, instance: {__instance?.GetType().Name}, configs count: {configs?.Count ?? 0}", Category.Pot, Category.Botanist);
         supplyUI.Bind(supplyList);
 
         RectTransform destRect = __instance.DestinationUI.GetComponent<RectTransform>();
@@ -329,7 +330,7 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotConfigPanelBindPatch: Failed, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"PotConfigPanelBindPatch: Failed, error: {e}", Category.Pot, Category.Botanist);
       }
     }
   }
@@ -341,49 +342,49 @@ namespace NoLazyWorkers.Botanists
     {
       PotExtensions.SourceChanged(config, item);
       config.InvokeChanged();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Supply changed for pot {pot.GUID}, newSupply={PotExtensions.Supply[pot.GUID].SelectedObject?.GUID.ToString() ?? "null"}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+      Log(Level.Info, $"PotLoaderPatch: Supply changed for pot {pot.GUID}, newSupply={PotExtensions.Supply[pot.GUID].SelectedObject?.GUID.ToString() ?? "null"}", Category.Pot, Category.Botanist);
     }
 
     static void Postfix(string mainPath)
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Info, $"PotLoaderPatch: Processing Postfix for mainPath: {mainPath}", Category.Pot, Category.Botanist);
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) || gridItem == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: No GridItem found for mainPath: {mainPath}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotLoaderPatch: No GridItem found for mainPath: {mainPath}", Category.Pot, Category.Botanist);
           return;
         }
 
         if (gridItem is not Pot pot)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: GridItem is not a Pot for mainPath: {mainPath}, type: {gridItem.GetType().Name}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotLoaderPatch: GridItem is not a Pot for mainPath: {mainPath}, type: {gridItem.GetType().Name}", Category.Pot, Category.Botanist);
           return;
         }
 
         string configPath = Path.Combine(mainPath, "Configuration.json");
         if (!File.Exists(configPath))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: No Configuration.json found at: {configPath}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotLoaderPatch: No Configuration.json found at: {configPath}", Category.Pot, Category.Botanist);
           return;
         }
 
         if (!new Loader().TryLoadFile(mainPath, "Configuration", out string text))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotLoaderPatch: Failed to load Configuration.json for mainPath: {mainPath}", Category.Pot, Category.Botanist);
           return;
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotLoaderPatch: Loaded JSON: {text}", DebugLogger.Category.Pot);
+        Log(Level.Stacktrace, $"PotLoaderPatch: Loaded JSON: {text}", Category.Pot);
         JObject jsonObject = JObject.Parse(text);
         JToken supplyJToken = jsonObject["Supply"];
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotLoaderPatch: Extracted supplyJToken: {supplyJToken}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Verbose, $"PotLoaderPatch: Extracted supplyJToken: {supplyJToken}", Category.Pot, Category.Botanist);
 
         Guid guid = pot.GUID;
         PotConfiguration config = pot.Configuration as PotConfiguration;
         if (config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"PotLoaderPatch: No valid PotConfiguration for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Error, $"PotLoaderPatch: No valid PotConfiguration for pot: {guid}", Category.Pot, Category.Botanist);
           return;
         }
 
@@ -397,7 +398,7 @@ namespace NoLazyWorkers.Botanists
         if (!PotExtensions.Config.ContainsKey(guid))
         {
           PotExtensions.Config[guid] = config;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Registered PotConfig for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Info, $"PotLoaderPatch: Registered PotConfig for pot: {guid}", Category.Pot, Category.Botanist);
         }
 
         if (supplyJToken != null && supplyJToken["ObjectGUID"] != null)
@@ -413,30 +414,30 @@ namespace NoLazyWorkers.Botanists
             PotExtensions.Supply[guid].onObjectChanged.AddListener(item => SupplySourceChanged(config, pot, item));
           }
 
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"PotLoaderPatch: supplyJToken[ObjectGUID].ToString(): {supplyJToken["ObjectGUID"].ToString()}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Verbose, $"PotLoaderPatch: supplyJToken[ObjectGUID].ToString(): {supplyJToken["ObjectGUID"].ToString()}", Category.Pot, Category.Botanist);
           PotExtensions.Supply[guid].Load(new(supplyJToken["ObjectGUID"].ToString()));
           if (PotExtensions.Supply[guid].SelectedObject != null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Loaded Supply for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Info, $"PotLoaderPatch: Loaded Supply for pot: {guid}", Category.Pot, Category.Botanist);
             PotExtensions.SourceChanged(config, PotExtensions.Supply[guid].SelectedObject);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: Supply.SelectedObject is null for pot: {guid}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+            Log(Level.Warning, $"PotLoaderPatch: Supply.SelectedObject is null for pot: {guid}", Category.Pot, Category.Botanist);
             PotExtensions.FailedSupply[guid] = new(supplyJToken["ObjectGUID"].ToString());
           }
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"PotLoaderPatch: Supply data is null in config for mainPath: {mainPath}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+          Log(Level.Warning, $"PotLoaderPatch: Supply data is null in config for mainPath: {mainPath}", Category.Pot, Category.Botanist);
         }
 
         GridItemLoaderPatch.LoadedGridItems.Remove(mainPath);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Info, $"PotLoaderPatch: Removed mainPath: {mainPath} from LoadedGridItems", Category.Pot, Category.Botanist);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Pot, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"PotLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", Category.Pot, Category.Botanist);
       }
     }
   }

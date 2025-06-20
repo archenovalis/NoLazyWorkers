@@ -8,108 +8,30 @@ using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Movement.Utilities;
 using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.CacheManager;
 using System.Collections;
 using UnityEngine;
 using ScheduleOne.DevUtilities;
 using MelonLoader;
-using FishNet.Managing.Timing;
 using static NoLazyWorkers.Movement.Extensions;
+using static NoLazyWorkers.TimeManagerExtensions;
+using System.Diagnostics;
+using NoLazyWorkers.Storage;
+using System.Threading.Tasks;
+using static NoLazyWorkers.NoLazyUtilities;
+using NoLazyWorkers.Metrics;
+using static NoLazyWorkers.TaskExtensions;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Movement
 {
-  public static class TransitDistanceCache
-  {
-    // Cache of distances between transit entity pairs, using sorted GUIDs as keys
-    private static readonly Dictionary<(Guid, Guid), float> _distanceCache = new();
-    // Tracks known transit entities for validation
-    private static readonly Dictionary<Guid, ITransitEntity> _knownEntities = new();
-    // Synchronization object for thread safety
-
-    /// <summary>
-    /// Gets the distance between two transit entities, using cached value if available.
-    /// </summary>
-    /// <param name="entityA">First transit entity.</param>
-    /// <param name="entityB">Second transit entity.</param>
-    /// <param name="employee">Employee for NavMesh access point calculation.</param>
-    /// <returns>Distance between entities, or float.MaxValue if invalid.</returns>
-    public static float GetDistance(ITransitEntity entityA, ITransitEntity entityB, Employee employee)
-    {
-      if (entityA == null || entityB == null || employee == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"TransitDistanceCache.GetDistance: Invalid input: entityA={entityA?.GUID}, entityB={entityB?.GUID}, employee={employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
-        return float.MaxValue;
-      }
-
-      var key = entityA.GUID.CompareTo(entityB.GUID) < 0
-          ? (entityA.GUID, entityB.GUID)
-          : (entityB.GUID, entityA.GUID);
-
-      // No lock needed; Unity runs on main thread
-      if (_distanceCache.TryGetValue(key, out float distance))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"TransitDistanceCache.GetDistance: Cache hit for {key.Item1} to {key.Item2}: {distance}",
-            DebugLogger.Category.EmployeeCore);
-        return distance;
-      }
-
-      var pointA = NavMeshUtility.GetAccessPoint(entityA, employee);
-      var pointB = NavMeshUtility.GetAccessPoint(entityB, employee);
-      if (pointA == null || pointB == null)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"TransitDistanceCache.GetDistance: No access points for {entityA.GUID} or {entityB.GUID}",
-            DebugLogger.Category.EmployeeCore);
-        return float.MaxValue;
-      }
-
-      distance = Vector3.Distance(pointA.position, pointB.position);
-      _distanceCache.TryAdd(key, distance);
-
-      _knownEntities.TryAdd(entityA.GUID, entityA);
-      _knownEntities.TryAdd(entityB.GUID, entityB);
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"TransitDistanceCache.GetDistance: Cached new distance {distance} for {key.Item1} to {key.Item2}",
-          DebugLogger.Category.EmployeeCore);
-      return distance;
-    }
-
-    /// <summary>
-    /// Clears cache entries involving a destroyed transit entity.
-    /// </summary>
-    /// <param name="entityGuid">GUID of the destroyed entity.</param>
-    public static void ClearCacheForEntity(Guid entityGuid)
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"TransitDistanceCache.ClearCacheForEntity: Clearing cache for entity {entityGuid}",
-          DebugLogger.Category.EmployeeCore);
-
-      // No lock needed
-      _knownEntities.Remove(entityGuid);
-
-      var keysToRemove = _distanceCache.Keys
-          .Where(k => k.Item1 == entityGuid || k.Item2 == entityGuid)
-          .ToList();
-
-      foreach (var key in keysToRemove)
-      {
-        _distanceCache.Remove(key);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"TransitDistanceCache.ClearCacheForEntity: Removed cache entry {key.Item1} to {key.Item2}",
-            DebugLogger.Category.EmployeeCore);
-      }
-    }
-  }
-
   public class AdvMoveItemBehaviour : Behaviour
   {
     public void Setup(Employee employee)
     {
       // Initialize behavior with employee
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Setup: Initializing for {employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Setup: Initializing for {employee.fullName}", Category.Movement);
       Employee = employee;
       Name = "Adv Move items";
       Priority = 4;
@@ -139,41 +61,44 @@ namespace NoLazyWorkers.Movement
     }
 
     public Employee Employee { get; private set; }
-    private readonly Queue<PrioritizedRoute> _routeQueue = new();
-    private PrioritizedRoute? _currentRoute;
-    private Action<Employee, EmployeeStateData, Status> _callback;
-    private bool _success;
-    private EmployeeStateData _stateData;
-    private object _currentCoroutine;
-    private static readonly Dictionary<Guid, List<TransitRoute>> InventoryRoutes = new();
     public TransitRoute assignedRoute;
     public ItemInstance itemToRetrieveTemplate;
     public int grabbedAmount;
     public int maxMoveAmount = -1;
     public EState currentState;
     public bool skipPickup;
+
+    private CacheManager _cacheManager;
+    private readonly Queue<PrioritizedRoute> _routeQueue = new();
+    private PrioritizedRoute? _currentRoute;
+    private Action<Employee, EmployeeData, Status> _callback;
+    private Stopwatch _travelStopwatch;
+    private EmployeeData _stateData;
+    private Coroutine _currentCoroutine;
+    private static readonly Dictionary<Guid, List<TransitRoute>> InventoryRoutes = new();
     private PauseState _pauseState = new();
     private bool _isPaused;
     private bool _resumed;
     private bool _anySuccess = false;
     private List<PrioritizedRoute> _sameSourceRoutes = new();
     private Task<bool> _currentTask;
+    private int _processedCount;
 
     /// <summary>
     /// Initializes the behavior with routes, grouping by pickup source and sorting by destination proximity.
     /// Routes are processed in groups from the same pickup source, with items picked up once and delivered
     /// to destinations sorted by distance using TransitDistanceCache.
     /// </summary>
-    public void Initialize(List<PrioritizedRoute> routes, EmployeeStateData stateData = null, Action<Employee, EmployeeStateData, Status> callback = null)
+    public void Initialize(List<PrioritizedRoute> routes, EmployeeData stateData = null, Action<Employee, EmployeeData, Status> callback = null)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Initialize: {Employee.fullName} Initialize", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Initialize: {Employee.fullName} Initialize", Category.Movement);
       if (!InstanceFinder.IsServer)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvMoveItemBeh.Initialize: Skipping client-side for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning, $"AdvMoveItemBeh.Initialize: Skipping client-side for NPC={Employee?.fullName}", Category.Movement);
         return;
       }
-      _success = true;
       _anySuccess = false;
+      _cacheManager = GetOrCreateCacheManager(Employee.AssignedProperty);
       grabbedAmount = 0;
       _routeQueue.Clear();
       _callback = callback;
@@ -189,18 +114,18 @@ namespace NoLazyWorkers.Movement
                   : Employee.transform.position;
           var dropoffPoint = NavMeshUtility.GetAccessPoint(r.DropOff, Employee);
           return dropoffPoint != null
-                  ? TransitDistanceCache.GetDistance(r.PickUp ?? r.DropOff, r.DropOff, Employee)
+                  ? _cacheManager.GetTravelTime(r.PickUp ?? r.DropOff, r.DropOff)
                   : float.MaxValue;
         }).ToList();
         foreach (var route in sortedRoutes)
         {
           _routeQueue.Enqueue(route);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          Log(Level.Verbose,
               $"AdvMoveItemBeh.Initialize: Enqueued route: item={route.Item?.ID}, qty={route.Quantity}, source={route.PickUp?.GUID}, dest={route.DropOff?.GUID} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
         }
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"AdvMoveItemBeh.Initialize: Queued {routes.Count} routes for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Info, $"AdvMoveItemBeh.Initialize: Queued {routes.Count} routes for NPC={Employee?.fullName}", Category.Movement);
       Enable_Networked(null);
       AdvBegin();
     }
@@ -212,14 +137,14 @@ namespace NoLazyWorkers.Movement
 
     private void AdvBegin()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Begin: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Begin: {Employee.fullName}", Category.Movement);
       base.Begin();
       StartTransit();
     }
 
     public void StartTransit()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.StartTransit: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.StartTransit: {Employee.fullName}", Category.Movement);
       if (!InstanceFinder.IsServer)
         return;
       currentState = EState.Idle;
@@ -231,19 +156,19 @@ namespace NoLazyWorkers.Movement
     /// </summary>
     public void StopCurrentActivity()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.StopCurrentActivity: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"StopCurrentActivity: {Employee.fullName}", Category.Movement);
       if (_currentCoroutine != null)
       {
-        MelonCoroutines.Stop(_currentCoroutine);
+        CoroutineRunner.Instance.StopCoroutine(_currentCoroutine);
         _currentCoroutine = null;
       }
-      _currentTask = null; // No cancellation; let task complete gracefully
+      _currentTask = null;
       currentState = EState.Idle;
     }
 
     public override void Pause()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Pause: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Pause: {Employee.fullName}", Category.Movement);
       if (_isPaused) return;
 
       _isPaused = true;
@@ -254,7 +179,7 @@ namespace NoLazyWorkers.Movement
 
     public override void Resume()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Resume: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Resume: {Employee.fullName}", Category.Movement);
       if (!_isPaused) return;
 
       _isPaused = false;
@@ -264,7 +189,7 @@ namespace NoLazyWorkers.Movement
 
     public override void Disable()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.Disable: {Employee.fullName}", DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"AdvMoveItemBeh.Disable: {Employee.fullName}", Category.Movement);
       base.Disable();
     }
 
@@ -279,32 +204,20 @@ namespace NoLazyWorkers.Movement
     /// </summary>
     public override void End()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.End: {Employee.fullName}, anySuccess={_anySuccess}",
-          DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"End: {Employee.fullName}, anySuccess={_anySuccess}", Category.Movement);
       base.End();
       if (_currentCoroutine != null)
       {
-        MelonCoroutines.Stop(_currentCoroutine);
+        CoroutineRunner.Instance.StopCoroutine(_currentCoroutine);
         _currentCoroutine = null;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"AdvMoveItemBeh.End: Stopped coroutine for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
       }
       _currentRoute = null;
       _routeQueue.Clear();
-      // Removed lock; main thread safe
       InventoryRoutes.Remove(Employee.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.End: Cleared inventory routes for NPC={Employee?.fullName}",
-          DebugLogger.Category.EmployeeCore);
       if (_callback != null)
       {
         _callback.Invoke(Employee, _stateData, _anySuccess ? Status.Success : Status.Failure);
         _callback = null;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"AdvMoveItemBeh.End: Invoked callback with status={(_anySuccess ? "Success" : "Failure")} for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
       }
       currentState = EState.Idle;
     }
@@ -343,17 +256,17 @@ namespace NoLazyWorkers.Movement
     {
       if (route.Destination.GetInputCapacityForItem(item, Employee) == 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvMoveItemBeh.IsDestinationValid: Destination has no capacity for item! for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning, $"AdvMoveItemBeh.IsDestinationValid: Destination has no capacity for item! for NPC={Employee?.fullName}", Category.Movement);
         return false;
       }
       if (!CanGetToDropoff(route))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvMoveItemBeh.IsDestinationValid: Cannot get to dropoff! for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning, $"AdvMoveItemBeh.IsDestinationValid: Cannot get to dropoff! for NPC={Employee?.fullName}", Category.Movement);
         return false;
       }
       if (!skipPickup && !CanGetToPickup(route))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvMoveItemBeh.IsDestinationValid: Cannot get to pickup! for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning, $"AdvMoveItemBeh.IsDestinationValid: Cannot get to pickup! for NPC={Employee?.fullName}", Category.Movement);
         return false;
       }
       return true;
@@ -370,74 +283,67 @@ namespace NoLazyWorkers.Movement
     }
 
     /// <summary>
-    /// Asynchronously moves to the pickup location for a group of routes and grabs items.
+    /// Asynchronously moves to the pickup location for a group of routes.
     /// </summary>
-    /// <param name="routes">Routes with the same pickup source.</param>
-    /// <returns>A Task representing the asynchronous operation.</returns>
     private async Task<bool> MoveToPickupGroupAsync(List<PrioritizedRoute> routes)
     {
       if (!InstanceFinder.IsServer)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AdvMoveItemBeh.MoveToPickupGroupAsync: Skipping client-side for NPC={Employee?.fullName}", DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning, $"MoveToPickupGroupAsync: Skipping client-side for {Employee?.fullName}", Category.Movement);
         ProcessNextRoute();
         return false;
       }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.MoveToPickupGroupAsync: {Employee.fullName}, routes={routes.Count}",
-          DebugLogger.Category.EmployeeCore);
-
-      var pickup = routes[0].PickUp;
+      var pickup = routes?[0].PickUp;
+      if (pickup == null)
+      {
+        Log(Level.Warning, $"MoveToPickupGroupAsync: Null pickup for {Employee?.fullName}", Category.Movement);
+        ProcessNextRoute();
+        return false;
+      }
+      Log(Level.Verbose, $"MoveToPickupGroupAsync: {Employee?.fullName}, routes={routes?.Count ?? 0}", Category.Movement);
       try
       {
-        currentState = EState.MovingToPickup; // Updated state
+        currentState = EState.MovingToPickup;
         _currentTask = MoveToAsync(Employee, pickup);
-        bool success = await _currentTask;
-
+        bool success = await Performance.TrackExecutionAsync(nameof(MoveToPickupGroupAsync), () => _currentTask, routes.Count);
         if (!success)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"AdvMoveItemBeh.MoveToPickupGroupAsync: Movement failed for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+          Log(Level.Warning, $"MoveToPickupGroupAsync: Movement failed for {Employee?.fullName} to {pickup.GUID}", Category.Movement);
           ProcessNextRoute();
           return false;
         }
-
+        Log(Level.Info, $"MoveToPickupGroupAsync: Reached pickup {pickup.GUID} for {Employee?.fullName}", Category.Movement);
         currentState = EState.Grabbing;
-        await GrabItemGroupAsync(routes);
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(GrabItemGroupCoroutine), GrabItemGroupCoroutine(routes), routes.Sum(r => r.PickupSlots?.Count ?? 0)));
         return true;
       }
       catch (Exception ex)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"AdvMoveItemBeh.MoveToPickupGroupAsync: Exception for {Employee?.fullName} - {ex.Message}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Error, $"MoveToPickupGroupAsync: Exception for {Employee?.fullName} - {ex}", Category.Movement);
         ProcessNextRoute();
         return false;
       }
       finally
       {
         _currentTask = null;
-        currentState = EState.Idle; // Reset state
+        if (currentState != EState.Grabbing) currentState = EState.Idle;
       }
     }
 
     /// <summary>
-    /// Asynchronously grabs items from all pickup slots for a group of routes.
+    /// Asynchronously grabs items from all pickup slots for a group of routes and starts travel time tracking.
     /// </summary>
-    /// <param name="routes">Routes with the same pickup source.</param>
-    /// <returns>A Task representing the asynchronous operation.</returns>
     private async Task GrabItemGroupAsync(List<PrioritizedRoute> routes)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"AdvMoveItemBeh.GrabItemGroupAsync: {Employee.fullName}, routes={routes.Count}",
-          DebugLogger.Category.EmployeeCore);
+          Category.Movement);
 
       if (!InstanceFinder.IsServer)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"AdvMoveItemBeh.GrabItemGroupAsync: Skipping client-side for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
         ProcessNextRoute();
         return;
       }
@@ -445,9 +351,9 @@ namespace NoLazyWorkers.Movement
       var sourceAccessPoint = NavMeshUtility.GetAccessPoint(routes[0].PickUp, Employee);
       if (sourceAccessPoint == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"AdvMoveItemBeh.GrabItemGroupAsync: No pickup access point for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
         ProcessNextRoute();
         return;
       }
@@ -456,11 +362,10 @@ namespace NoLazyWorkers.Movement
       {
         Employee.Movement.FaceDirection(sourceAccessPoint.forward);
         Employee.SetAnimationTrigger_Networked(null, "GrabItem");
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             $"AdvMoveItemBeh.GrabItemGroupAsync: Triggered GrabItem animation for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
 
-        // Wait for animation (main thread safe in Unity)
         await Task.Delay(TimeSpan.FromSeconds(0.5f));
 
         bool anyGrabSuccess = false;
@@ -471,15 +376,15 @@ namespace NoLazyWorkers.Movement
           {
             var totalAvailable = route.PickupSlots.Sum(s => s.Quantity);
             int quantityToTake = Math.Min(route.Quantity, totalAvailable);
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
+            Log(Level.Info,
                 $"AdvMoveItemBeh.GrabItemGroupAsync: quantityToTake={quantityToTake}, totalAvailable={totalAvailable}, item={route.Item.ID} for NPC={Employee?.fullName}",
-                DebugLogger.Category.EmployeeCore);
+                Category.Movement);
 
             if (quantityToTake <= 0)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              Log(Level.Warning,
                   $"AdvMoveItemBeh.GrabItemGroupAsync: No valid quantity to take for item={route.Item.ID} for NPC={Employee?.fullName}",
-                  DebugLogger.Category.EmployeeCore);
+                  Category.Movement);
               continue;
             }
 
@@ -489,109 +394,210 @@ namespace NoLazyWorkers.Movement
                 break;
 
               int takeAmount = Math.Min(slot.Quantity, quantityToTake);
-              DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+              Log(Level.Verbose,
                   $"AdvMoveItemBeh.GrabItemGroupAsync: Taking {takeAmount} from slot for NPC={Employee?.fullName}",
-                  DebugLogger.Category.EmployeeCore);
+                  Category.Movement);
 
-              if (route.InventorySlot.AdvInsertItem(slot.ItemInstance, takeAmount))
+              if (await route.InventorySlot.AdvInsertItemAsync(slot.ItemInstance, takeAmount, route.PickUp.GUID, Employee))
               {
-                if (slot.AdvRemoveItem(takeAmount, out var takenItem))
+                (var success, var takenItem) = await slot.AdvRemoveItemAsync(takeAmount, route.PickUp.GUID, Employee);
+                if (success)
                 {
                   grabbedAmount += takeAmount;
                   quantityToTake -= takeAmount;
                   anyGrabSuccess = true;
-                  DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  Log(Level.Info,
                       $"AdvMoveItemBeh.GrabItemGroupAsync: Took {takeAmount} {takenItem.ID}, grabbedQty={grabbedAmount} for NPC={Employee?.fullName}",
-                      DebugLogger.Category.EmployeeCore);
+                      Category.Movement);
                 }
                 else
                 {
-                  route.InventorySlot?.AdvRemoveItem(takeAmount, out _);
-                  DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                  await route.InventorySlot?.AdvRemoveItemAsync(takeAmount, route.PickUp.GUID, Employee);
+                  Log(Level.Warning,
                       $"AdvMoveItemBeh.GrabItemGroupAsync: Failed to take {takeAmount} from slot for NPC={Employee?.fullName}",
-                      DebugLogger.Category.EmployeeCore);
+                      Category.Movement);
                 }
               }
               else
               {
-                DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                Log(Level.Warning,
                     $"AdvMoveItemBeh.GrabItemGroupAsync: Failed to insert {takeAmount} into inventory for NPC={Employee?.fullName}",
-                    DebugLogger.Category.EmployeeCore);
+                    Category.Movement);
               }
             }
           }
         }
 
-        // Wait for post-grab delay
         await Task.Delay(TimeSpan.FromSeconds(0.2f));
 
         if (anyGrabSuccess)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"AdvMoveItemBeh.GrabItemGroupAsync: Grabbed {grabbedAmount} items, proceeding to deliver for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+          Log(Level.Info,
+              $"AdvMoveItemBeh.GrabItemGroupAsync: Grabbed {grabbedAmount} items, starting travel timer for NPC={Employee?.fullName}",
+              Category.Movement);
+
+          // Start travel time tracking after grabbing items
+          _travelStopwatch = Stopwatch.StartNew();
           await DeliverToSortedDestinationsAsync(routes, skipPickup: false);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+          Log(Level.Warning,
               $"AdvMoveItemBeh.GrabItemGroupAsync: Failed to grab any items, skipping to next group for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
           ProcessNextRoute();
         }
       }
       catch (Exception ex)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"AdvMoveItemBeh.GrabItemGroupAsync: Exception for {Employee?.fullName} - {ex.Message}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
         ProcessNextRoute();
       }
       finally
       {
         _currentTask = null;
         currentState = EState.Idle;
+        _travelStopwatch = null; // Clear stopwatch if grabbing fails
       }
     }
 
+    private IEnumerator GrabItemGroupCoroutine(List<PrioritizedRoute> routes)
+    {
+      Log(Level.Verbose, $"GrabItemGroupCoroutine: {Employee.fullName}, routes={routes.Count}", Category.Movement);
+      if (!InstanceFinder.IsServer) { ProcessNextRoute(); yield break; }
+      var sourceAccessPoint = NavMeshUtility.GetAccessPoint(routes[0].PickUp, Employee);
+      if (sourceAccessPoint == null) { ProcessNextRoute(); yield break; }
+      bool anyGrabSuccess = false;
+      grabbedAmount = 0;
+      Employee.Movement.FaceDirection(sourceAccessPoint.forward);
+      Employee.SetAnimationTrigger_Networked(null, "GrabItem");
+      float animationTime = 0.5f;
+      while (animationTime > 0)
+      {
+        animationTime -= Time.deltaTime;
+        yield return null;
+      }
+      int batchSize = GetDynamicBatchSize(routes.Sum(r => r.PickupSlots?.Count ?? 0), 0.1f, nameof(GrabItemGroupCoroutine));
+      _processedCount = 0;
+      var stopwatch = Stopwatch.StartNew();
+      foreach (var route in routes)
+      {
+        if (route.PickupSlots?.Count > 0)
+        {
+          var totalAvailable = route.PickupSlots.Sum(s => s.Quantity);
+          int quantityToTake = Math.Min(route.Quantity, totalAvailable);
+          if (quantityToTake <= 0) continue;
+          foreach (var slot in route.PickupSlots)
+          {
+            if (quantityToTake <= 0) break;
+            int takeAmount = Math.Min(slot.Quantity, quantityToTake);
+
+            // Wait for AdvInsertItemAsync and get the bool result
+            var insertTask = route.InventorySlot.AdvInsertItemAsync(slot.ItemInstance, takeAmount, Employee.GUID, Employee);
+            yield return new TaskYieldInstruction<bool>(insertTask);
+            bool insertSuccess = insertTask.Result;
+
+            if (insertSuccess)
+            {
+              // Wait for AdvRemoveItemAsync and get the (bool, ItemInstance) result
+              var removeTask = slot.AdvRemoveItemAsync(takeAmount, route.PickUp.GUID, Employee);
+              yield return new TaskYieldInstruction<(bool, ItemInstance)>(removeTask);
+              var (success, takenItem) = removeTask.Result;
+
+              if (success)
+              {
+                grabbedAmount += takeAmount;
+                quantityToTake -= takeAmount;
+                anyGrabSuccess = true;
+                Log(Level.Info, $"GrabItemGroupCoroutine: Took {takeAmount} {takenItem.ID}", Category.Movement);
+              }
+              else
+              {
+                removeTask = route.InventorySlot.AdvRemoveItemAsync(takeAmount, Employee.GUID, Employee);
+                yield return new TaskYieldInstruction<(bool, ItemInstance)>(removeTask);
+                Log(Level.Warning,
+                    $"PlaceItemToDropoffCoroutine: Failed to grab {takeAmount} from {route.PickUp.GUID}",
+                    Category.Movement);
+              }
+            }
+            _processedCount++;
+            if (_processedCount % batchSize == 0)
+            {
+              if (_processedCount > 0)
+              {
+                double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * _processedCount);
+                DynamicProfiler.AddSample(nameof(GrabItemGroupCoroutine), avgItemTimeMs);
+                stopwatch.Restart();
+              }
+              yield return null;
+              _processedCount = 0;
+            }
+          }
+        }
+      }
+      if (_processedCount > 0)
+      {
+        double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * _processedCount);
+        DynamicProfiler.AddSample(nameof(GrabItemGroupCoroutine), avgItemTimeMs);
+      }
+      float postGrabDelay = 0.2f;
+      while (postGrabDelay > 0)
+      {
+        postGrabDelay -= Time.deltaTime;
+        yield return null;
+      }
+      if (anyGrabSuccess)
+      {
+        _travelStopwatch = Stopwatch.StartNew();
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(DeliverToSortedDestinationsCoroutine(routes, skipPickup: false));
+      }
+      else
+      {
+        ProcessNextRoute();
+      }
+      _currentCoroutine = null;
+      currentState = EState.Idle;
+      if (!anyGrabSuccess) _travelStopwatch = null;
+    }
+
     /// <summary>
-    /// Asynchronously delivers items to sorted destinations sequentially.
+    /// Asynchronously delivers items to sorted destinations sequentially, tracking travel time from pickup.
     /// </summary>
-    /// <param name="routes">Routes to process, sorted by destination.</param>
-    /// <param name="skipPickup">Whether pickup was already handled.</param>
-    /// <returns>A Task representing the asynchronous operation.</returns>
     private async Task<bool> DeliverToSortedDestinationsAsync(List<PrioritizedRoute> routes, bool skipPickup)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: {Employee.fullName}, routes={routes.Count}, skipPickup={skipPickup}",
-          DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose,
+          $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: {Employee?.fullName}, routes={routes?.Count ?? 0}, skipPickup={skipPickup}",
+          Category.Movement);
 
       try
       {
         for (int routeIndex = _pauseState.CurrentRouteIndex; routeIndex < routes.Count; routeIndex++)
         {
           _pauseState.CurrentRouteIndex = routeIndex;
-          currentState = EState.MovingToDropoff; // Updated state
+          currentState = EState.MovingToDropoff;
 
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Processing route {routeIndex + 1}/{routes.Count} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+          Log(Level.Verbose,
+              $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Processing route {routeIndex + 1}/{routes.Count} for {Employee?.fullName}",
+              Category.Movement);
 
           var route = routes[routeIndex];
           var dropoff = route.DropOff;
+
           if (!IsDestinationValid(route.TransitRoute, route.Item))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning,
-                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Invalid destination for item={route.Item.ID}, skipping route for NPC={Employee?.fullName}",
-                DebugLogger.Category.EmployeeCore);
+            Log(Level.Warning,
+                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Invalid destination for item={route.Item?.ID ?? "null"}, skipping route for {Employee?.fullName}",
+                Category.Movement);
             continue;
           }
 
           if (NavMeshUtility.IsAtTransitEntity(dropoff, Employee))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Already at dropoff {dropoff.GUID} for NPC={Employee?.fullName}",
-                DebugLogger.Category.EmployeeCore);
+            Log(Level.Verbose,
+                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Already at dropoff {dropoff.GUID} for {Employee?.fullName}",
+                Category.Movement);
             currentState = EState.Placing;
             await PlaceItemToDropoffAsync(route, routes, routeIndex);
             continue;
@@ -600,29 +606,52 @@ namespace NoLazyWorkers.Movement
           _currentTask = MoveToAsync(Employee, dropoff);
           bool success = await _currentTask;
 
-          if (!success)
+          if (success)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning,
-                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Movement failed for dropoff={dropoff.GUID}, skipping route for NPC={Employee?.fullName}",
-                DebugLogger.Category.EmployeeCore);
+            if (!skipPickup && _travelStopwatch != null)
+            {
+              _travelStopwatch.Stop();
+              float travelTime = (float)_travelStopwatch.Elapsed.TotalSeconds;
+              _cacheManager.UpdateTravelTimeCache(routes[0].PickUp.GUID, dropoff.GUID, travelTime);
+              Log(Level.Info,
+                  $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Moved from pickup {routes[0].PickUp.GUID} to dropoff {dropoff.GUID} in {travelTime:F2}s for {Employee?.fullName}",
+                  Category.Movement);
+              _travelStopwatch = null; // Clear after use
+            }
+            else if (skipPickup)
+            {
+              Log(Level.Verbose,
+                  $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Skipped travel time cache update (skipPickup=true) for dropoff {dropoff.GUID}",
+                  Category.Movement);
+            }
+          }
+          else
+          {
+            Log(Level.Warning,
+                $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Movement failed for dropoff={dropoff.GUID}, skipping route for {Employee?.fullName}",
+                Category.Movement);
+            _travelStopwatch = null; // Clear on failure
             continue;
           }
 
           currentState = EState.Placing;
           await PlaceItemToDropoffAsync(route, routes, routeIndex);
+
+          // Yield to next fishnet tick to spread load
+          await AwaitNextFishNetTickAsync();
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: All dropoffs completed for group, moving to next group for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Info,
+            $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: All dropoffs completed for group, moving to next group for {Employee?.fullName}",
+            Category.Movement);
         ProcessNextRoute();
         return true;
       }
       catch (Exception ex)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"AdvMoveItemBeh.DeliverToSortedDestinationsAsync: Exception for {Employee?.fullName} - {ex.Message}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
         ProcessNextRoute();
         return false;
       }
@@ -631,7 +660,142 @@ namespace NoLazyWorkers.Movement
         _currentTask = null;
         currentState = EState.Idle;
         _pauseState.CurrentRouteIndex = 0;
+        _travelStopwatch = null; // Ensure cleanup
       }
+    }
+
+    private IEnumerator DeliverToSortedDestinationsCoroutine(List<PrioritizedRoute> routes, bool skipPickup)
+    {
+      Log(Level.Verbose, $"DeliverToSortedDestinationsCoroutine: {Employee.fullName}, routes={routes.Count}", Category.Movement);
+      int batchSize = GetDynamicBatchSize(routes.Count, 0.15f, nameof(DeliverToSortedDestinationsCoroutine));
+      int processedCount = 0;
+      var stopwatch = Stopwatch.StartNew();
+      for (int routeIndex = _pauseState.CurrentRouteIndex; routeIndex < routes.Count; routeIndex++)
+      {
+        _pauseState.CurrentRouteIndex = routeIndex;
+        currentState = EState.MovingToDropoff;
+        var route = routes[routeIndex];
+        var dropoff = route.DropOff;
+        if (!IsDestinationValid(route.TransitRoute, route.Item))
+        {
+          Log(Level.Warning, $"DeliverToSortedDestinationsCoroutine: Invalid destination for item={route.Item.ID}", Category.Movement);
+          continue;
+        }
+        bool success = false;
+        if (NavMeshUtility.IsAtTransitEntity(dropoff, Employee))
+        {
+          currentState = EState.Placing;
+          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+          yield return new WaitUntil(() => _currentCoroutine == null);
+          processedCount++;
+        }
+        else
+        {
+          var moveTask = MoveToAsync(Employee, dropoff);
+          yield return new WaitUntil(() => moveTask.IsCompleted);
+          success = moveTask.Result;
+          if (success)
+          {
+            if (!skipPickup && _travelStopwatch != null)
+            {
+              _travelStopwatch.Stop();
+              float travelTime = (float)_travelStopwatch.Elapsed.TotalSeconds;
+              _cacheManager.UpdateTravelTimeCache(routes[0].PickUp.GUID, dropoff.GUID, travelTime);
+              _travelStopwatch = null;
+            }
+            currentState = EState.Placing;
+            _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+            yield return new WaitUntil(() => _currentCoroutine == null);
+            processedCount++;
+          }
+          else
+          {
+            _travelStopwatch = null;
+            Log(Level.Warning, $"DeliverToSortedDestinationsCoroutine: Movement failed for dropoff={dropoff.GUID}", Category.Movement);
+            continue;
+          }
+        }
+        if (processedCount % batchSize == 0)
+        {
+          if (processedCount > 0)
+          {
+            double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * processedCount);
+            DynamicProfiler.AddSample(nameof(DeliverToSortedDestinationsCoroutine), avgItemTimeMs);
+            stopwatch.Restart();
+          }
+          yield return null;
+          processedCount = 0;
+        }
+      }
+      if (processedCount > 0)
+      {
+        double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * processedCount);
+        DynamicProfiler.AddSample(nameof(DeliverToSortedDestinationsCoroutine), avgItemTimeMs);
+      }
+      ProcessNextRoute();
+      _currentTask = null;
+      currentState = EState.Idle;
+      _pauseState.CurrentRouteIndex = 0;
+      _travelStopwatch = null;
+      _currentCoroutine = null;
+    }
+
+    private async Task<bool> ProcessRoute(int routeIndex, List<PrioritizedRoute> routes, bool skipPickup, int batchSize, Stopwatch stopwatch)
+    {
+      _pauseState.CurrentRouteIndex = routeIndex;
+      currentState = EState.MovingToDropoff;
+      var route = routes[routeIndex];
+      var dropoff = route.DropOff;
+      if (!IsDestinationValid(route.TransitRoute, route.Item))
+      {
+        Log(Level.Warning, $"ProcessRoute: Invalid destination for item={route.Item?.ID}, skipping", Category.Movement);
+        return true; // Continue loop
+      }
+      bool success;
+      if (NavMeshUtility.IsAtTransitEntity(dropoff, Employee))
+      {
+        currentState = EState.Placing;
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+        while (_currentCoroutine != null) await Task.Delay(1); // Wait for coroutine
+        _processedCount++;
+      }
+      else
+      {
+        _currentTask = MoveToAsync(Employee, dropoff);
+        success = await Performance.TrackExecutionAsync(nameof(ProcessRoute), () => _currentTask, 1);
+        if (success)
+        {
+          if (!skipPickup && _travelStopwatch != null)
+          {
+            _travelStopwatch.Stop();
+            float travelTime = (float)_travelStopwatch.Elapsed.TotalSeconds;
+            _cacheManager.UpdateTravelTimeCache(routes[0].PickUp.GUID, dropoff.GUID, travelTime);
+            _travelStopwatch = null;
+          }
+          currentState = EState.Placing;
+          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+          while (_currentCoroutine != null) await Task.Delay(1); // Wait for coroutine
+          _processedCount++;
+        }
+        else
+        {
+          _travelStopwatch = null;
+          Log(Level.Warning, $"ProcessRoute: Movement failed for dropoff={dropoff.GUID}", Category.Movement);
+          return true; // Continue loop
+        }
+      }
+      if (_processedCount % batchSize == 0)
+      {
+        if (_processedCount > 0)
+        {
+          double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * _processedCount);
+          DynamicProfiler.AddSample(nameof(DeliverToSortedDestinationsCoroutine), avgItemTimeMs);
+          stopwatch.Restart();
+        }
+        await Task.Delay(1); // Simulate yield return null
+        _processedCount = 0;
+      }
+      return false; // Proceed to next route
     }
 
     /// <summary>
@@ -643,9 +807,9 @@ namespace NoLazyWorkers.Movement
     /// <returns>A Task representing the asynchronous operation.</returns>
     private async Task PlaceItemToDropoffAsync(PrioritizedRoute route, List<PrioritizedRoute> routes, int routeIndex)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"AdvMoveItemBeh.PlaceItemToDropoffAsync: {Employee.fullName}, item={route.Item.ID}, dest={route.DropOff.GUID}",
-          DebugLogger.Category.EmployeeCore);
+          Category.Movement);
 
       try
       {
@@ -653,18 +817,18 @@ namespace NoLazyWorkers.Movement
         var accessPoint = NavMeshUtility.GetAccessPoint(dropoff, Employee);
         Employee.Movement.FaceDirection(accessPoint.forward);
         Employee.SetAnimationTrigger_Networked(null, "GrabItem");
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Triggered GrabItem animation for item={route.Item.ID} for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
 
         await Task.Delay(TimeSpan.FromSeconds(0.5f));
 
         ItemInstance itemToPlace = route.InventorySlot.ItemInstance;
         if (itemToPlace == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+          Log(Level.Warning,
               $"AdvMoveItemBeh.PlaceItemToDropoffAsync: No item to place for item={route.Item.ID}, skipping route for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
           return;
         }
 
@@ -674,37 +838,37 @@ namespace NoLazyWorkers.Movement
         {
           int capacity = slot.GetCapacityForItem(itemToPlace);
           int amount = Math.Min(route.InventorySlot.Quantity, capacity);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          Log(Level.Verbose,
               $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Slot capacity={capacity}, placing {amount} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
 
           if (amount <= 0)
             continue;
-
-          if (slot.AdvInsertItem(itemToPlace, amount))
+          if (await slot.AdvInsertItemAsync(itemToPlace, amount, route.DropOff.GUID, Employee))
           {
-            if (route.InventorySlot.AdvRemoveItem(amount, out _))
+            (var success, _) = await route.InventorySlot.AdvRemoveItemAsync(amount, Employee.GUID, Employee);
+            if (success)
             {
               placedSuccessfully = true;
               placedAmount += amount;
               grabbedAmount -= amount;
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Placed {amount} at {dropoff.GUID} for NPC={Employee?.fullName}",
-                  DebugLogger.Category.EmployeeCore);
+                  Category.Movement);
             }
             else
             {
-              slot.AdvRemoveItem(amount, out _);
-              DebugLogger.Log(DebugLogger.LogLevel.Warning,
+              await slot.AdvRemoveItemAsync(amount, route.DropOff.GUID, Employee);
+              Log(Level.Warning,
                   $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Failed to remove {amount} from inventory slot for NPC={Employee?.fullName}",
-                  DebugLogger.Category.EmployeeCore);
+                  Category.Movement);
             }
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            Log(Level.Warning,
                 $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Failed to insert {amount} into dropoff slot for NPC={Employee?.fullName}",
-                DebugLogger.Category.EmployeeCore);
+                Category.Movement);
           }
         }
 
@@ -713,95 +877,179 @@ namespace NoLazyWorkers.Movement
         if (placedSuccessfully)
         {
           _anySuccess = true;
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Placed {placedAmount}, remaining grabbedAmount={grabbedAmount}, anySuccess={_anySuccess} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+          Log(Level.Warning,
               $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Failed to place any items, skipping route for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+              Category.Movement);
         }
       }
       catch (Exception ex)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"AdvMoveItemBeh.PlaceItemToDropoffAsync: Exception for {Employee?.fullName} - {ex.Message}",
-            DebugLogger.Category.EmployeeCore);
+            Category.Movement);
       }
+    }
+
+    private IEnumerator PlaceItemToDropoffCoroutine(PrioritizedRoute route, List<PrioritizedRoute> routes, int routeIndex)
+    {
+      Log(Level.Verbose, $"PlaceItemToDropoffCoroutine: {Employee.fullName}, item={route.Item.ID}", Category.Movement);
+      var dropoff = route.DropOff;
+      var accessPoint = NavMeshUtility.GetAccessPoint(dropoff, Employee);
+      if (accessPoint == null) yield break;
+
+      Employee.Movement.FaceDirection(accessPoint.forward);
+      Employee.SetAnimationTrigger_Networked(null, "GrabItem");
+
+      float animationTime = 0.5f;
+      while (animationTime > 0)
+      {
+        animationTime -= Time.deltaTime;
+        yield return null;
+      }
+
+      ItemInstance itemToPlace = route.InventorySlot.ItemInstance;
+      if (itemToPlace == null) yield break;
+
+      bool placedSuccessfully = false;
+      int placedAmount = 0;
+      int batchSize = GetDynamicBatchSize(route.DropoffSlots.Count, 0.1f, nameof(PlaceItemToDropoffCoroutine));
+      int processedCount = 0;
+      var stopwatch = Stopwatch.StartNew();
+
+      foreach (var slot in route.DropoffSlots)
+      {
+        int capacity = slot.GetCapacityForItem(itemToPlace);
+        int amount = Math.Min(route.InventorySlot.Quantity, capacity);
+        if (amount <= 0) continue;
+
+        // Wait for AdvInsertItemAsync and get the bool result
+        var insertTask = slot.AdvInsertItemAsync(itemToPlace, amount, route.DropOff.GUID, Employee);
+        yield return new TaskYieldInstruction<bool>(insertTask);
+        bool insertSuccess = insertTask.Result;
+
+        if (insertSuccess)
+        {
+          // Wait for AdvRemoveItemAsync and get the (bool, ItemInstance) result
+          var removeTask = route.InventorySlot.AdvRemoveItemAsync(amount, Employee.GUID, Employee);
+          yield return new TaskYieldInstruction<(bool, ItemInstance)>(removeTask);
+          var (success, removedItem) = removeTask.Result;
+
+          if (success)
+          {
+            placedSuccessfully = true;
+            placedAmount += amount;
+            grabbedAmount -= amount;
+            Log(Level.Info,
+                $"PlaceItemToDropoffCoroutine: Placed {amount} of {removedItem.ID} at {dropoff.GUID}",
+                Category.Movement);
+          }
+          else
+          {
+            // Rollback the insert if removal fails
+            var rollbackTask = slot.AdvRemoveItemAsync(amount, route.DropOff.GUID, Employee);
+            yield return new TaskYieldInstruction<(bool, ItemInstance)>(rollbackTask);
+            Log(Level.Warning,
+                $"PlaceItemToDropoffCoroutine: Failed to remove {amount} from inventory",
+                Category.Movement);
+          }
+        }
+        else
+        {
+          Log(Level.Warning,
+              $"PlaceItemToDropoffCoroutine: Failed to insert {amount} into dropoff slot",
+              Category.Movement);
+        }
+
+        processedCount++;
+        if (processedCount % batchSize == 0)
+        {
+          if (processedCount > 0)
+          {
+            double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * processedCount);
+            DynamicProfiler.AddSample(nameof(PlaceItemToDropoffCoroutine), avgItemTimeMs);
+            stopwatch.Restart();
+          }
+          yield return null;
+          processedCount = 0;
+        }
+      }
+
+      if (processedCount > 0)
+      {
+        double avgItemTimeMs = stopwatch.ElapsedTicks * 1000.0 / (Stopwatch.Frequency * processedCount);
+        DynamicProfiler.AddSample(nameof(PlaceItemToDropoffCoroutine), avgItemTimeMs);
+      }
+
+      float postPlaceDelay = 0.2f;
+      while (postPlaceDelay > 0)
+      {
+        postPlaceDelay -= Time.deltaTime;
+        yield return null;
+      }
+
+      if (placedSuccessfully)
+      {
+        _anySuccess = true;
+        Log(Level.Info,
+            $"PlaceItemToDropoffCoroutine: Placed {placedAmount}, anySuccess={_anySuccess}",
+            Category.Movement);
+      }
+
+      _currentCoroutine = null;
     }
 
     private void ProcessNextRoute()
     {
       if (!_resumed)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"AdvMoveItemBeh.ProcessNextRoute: {Employee.fullName}",
-            DebugLogger.Category.EmployeeCore);
-
+        Log(Level.Verbose, $"ProcessNextRoute: {Employee.fullName}", Category.Movement);
         if (_routeQueue.Count == 0)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"AdvMoveItemBeh.ProcessNextRoute: All routes processed for NPC={Employee.fullName}, anySuccess={_anySuccess}",
-              DebugLogger.Category.EmployeeCore);
-          _success = _anySuccess;
+          Log(Level.Info, $"ProcessNextRoute: All routes processed, anySuccess={_anySuccess}", Category.Movement);
           Disable_Networked(null);
           return;
         }
-
         var currentSource = _routeQueue.Peek().PickUp?.GUID ?? Guid.Empty;
         _sameSourceRoutes = new List<PrioritizedRoute>();
         while (_routeQueue.Count > 0 && (_routeQueue.Peek().PickUp?.GUID ?? Guid.Empty) == currentSource)
           _sameSourceRoutes.Add(_routeQueue.Dequeue());
-
         if (!_sameSourceRoutes.Any() || _sameSourceRoutes.Any(r => r.Item == null || r.DropOff == null))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
-              $"AdvMoveItemBeh.ProcessNextRoute: Invalid routes in group: count={_sameSourceRoutes.Count} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+          Log(Level.Error, $"ProcessNextRoute: Invalid routes in group: count={_sameSourceRoutes.Count}", Category.Movement);
           ProcessNextRoute();
           return;
         }
-
         _currentRoute = _sameSourceRoutes[0];
         var firstRoute = _currentRoute.Value;
         itemToRetrieveTemplate = firstRoute.Item;
         maxMoveAmount = _sameSourceRoutes.Sum(r => r.Quantity);
         skipPickup = firstRoute.PickUp == null;
         assignedRoute = firstRoute.TransitRoute;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
-            $"AdvMoveItemBeh.ProcessNextRoute: Processing {_sameSourceRoutes.Count} routes from source={currentSource}, total qty={maxMoveAmount} for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
-
+        Log(Level.Info, $"ProcessNextRoute: Processing {_sameSourceRoutes.Count} routes from source={currentSource}, total qty={maxMoveAmount}", Category.Movement);
         if (skipPickup)
         {
-          // Removed lock; main thread safe
           if (!InventoryRoutes.ContainsKey(Employee.GUID))
             InventoryRoutes[Employee.GUID] = new();
           InventoryRoutes[Employee.GUID].Add(assignedRoute);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-              $"AdvMoveItemBeh.ProcessNextRoute: Added inventory route for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
         }
-
         if (!IsTransitRouteValid(assignedRoute, itemToRetrieveTemplate, out var invalidReason))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"AdvMoveItemBeh.ProcessNextRoute: Skipping invalid transit route: {invalidReason} for NPC={Employee?.fullName}",
-              DebugLogger.Category.EmployeeCore);
+          Log(Level.Warning, $"ProcessNextRoute: Skipping invalid transit route: {invalidReason}", Category.Movement);
           ProcessNextRoute();
           return;
         }
       }
-
       if (skipPickup)
       {
         grabbedAmount = _sameSourceRoutes.Sum(r => r.InventorySlot.Quantity);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"AdvMoveItemBeh.ProcessNextRoute: SkipPickup enabled, grabbedAmount={grabbedAmount} for NPC={Employee?.fullName}",
-            DebugLogger.Category.EmployeeCore);
-        _currentTask = DeliverToSortedDestinationsAsync(_sameSourceRoutes, skipPickup: true);
+        Log(Level.Verbose, $"ProcessNextRoute: SkipPickup enabled, grabbedAmount={grabbedAmount}", Category.Movement);
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(DeliverToSortedDestinationsCoroutine(_sameSourceRoutes, skipPickup: true));
       }
       else
       {
@@ -814,18 +1062,13 @@ namespace NoLazyWorkers.Movement
       _pauseState.CurrentState = currentState;
       _pauseState.CurrentRouteIndex = _pauseState.CurrentRouteIndex;
       _pauseState.CurrentRouteGroup = _sameSourceRoutes.ToList();
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.SavePauseState: Saved state for {Employee.fullName}, state={currentState}",
-          DebugLogger.Category.EmployeeCore);
+      Log(Level.Verbose, $"SavePauseState: Saved state, state={currentState}", Category.Movement);
     }
 
     private void RestorePauseState()
     {
       currentState = _pauseState.CurrentState;
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"AdvMoveItemBeh.RestorePauseState: Restoring {Employee.fullName}, state={currentState}",
-          DebugLogger.Category.EmployeeCore);
-
+      Log(Level.Verbose, $"RestorePauseState: Restoring state={currentState}", Category.Movement);
       switch (currentState)
       {
         case EState.MovingToPickup:
@@ -834,7 +1077,7 @@ namespace NoLazyWorkers.Movement
           break;
         case EState.MovingToDropoff:
         case EState.Placing:
-          _currentTask = DeliverToSortedDestinationsAsync(_pauseState.CurrentRouteGroup, skipPickup);
+          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(DeliverToSortedDestinationsCoroutine(_pauseState.CurrentRouteGroup, skipPickup));
           break;
         default:
           _resumed = true;
@@ -854,7 +1097,7 @@ namespace NoLazyWorkers.Movement
         {
           if (__instance.Source == null && __instance.Destination != null && InventoryRoutes.Values.Any(v => v.Contains(__instance)))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AdvMoveItemBeh.TransitRoutePatch: Allowing inventory route with null Source", DebugLogger.Category.EmployeeCore);
+            Log(Level.Verbose, $"AdvMoveItemBeh.TransitRoutePatch: Allowing inventory route with null Source", Category.Movement);
             __result = true;
             return false;
           }
@@ -862,7 +1105,7 @@ namespace NoLazyWorkers.Movement
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"AdvMoveItemBeh.TransitRoutePatch: Failed, error={e}", DebugLogger.Category.EmployeeCore);
+          Log(Level.Error, $"AdvMoveItemBeh.TransitRoutePatch: Failed, error={e}", Category.Movement);
           __result = false;
           return false;
         }

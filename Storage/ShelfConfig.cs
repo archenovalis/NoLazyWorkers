@@ -23,11 +23,13 @@ using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
+using static NoLazyWorkers.Storage.Constants;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Storage.ShelfConstants;
 using static NoLazyWorkers.Storage.ShelfExtensions;
 using static NoLazyWorkers.Storage.ShelfUtilities;
+using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Stations.Extensions;
 using FishNet.Managing;
 using FishNet.Managing.Object;
@@ -94,34 +96,34 @@ namespace NoLazyWorkers.Storage
   {
     public static void InitializeStorageModule()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "InitializeStorageModule: Starting", DebugLogger.Category.Storage);
+      Log(Level.Info, "InitializeStorageModule: Starting", Category.Storage);
       GetStorageConfigPanelTemplate();
       CacheCrossSprite();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorageModule: ConfigPanelTemplate {(ConfigPanelTemplate != null ? "initialized" : "null")}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"InitializeStorageModule: ConfigPanelTemplate {(ConfigPanelTemplate != null ? "initialized" : "null")}", Category.Storage);
     }
 
     public static bool InitializeStorage(Guid guid, PlaceableStorageEntity storage)
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Called for GUID: {guid}, storage: {(storage != null ? storage.name : "null")}", DebugLogger.Category.Storage);
+        Log(Level.Info, $"InitializeStorage: Called for GUID: {guid}, storage: {(storage != null ? storage.name : "null")}", Category.Storage);
 
         if (storage == null || guid == Guid.Empty)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: storage is null or guid is empty ({guid})", DebugLogger.Category.Storage);
+          Log(Level.Error, $"InitializeStorage: storage is null or guid is empty ({guid})", Category.Storage);
           return false;
         }
 
         if (!Storages[storage.ParentProperty].ContainsKey(guid))
         {
           Storages[storage.ParentProperty][guid] = storage;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}, Storage count: {Storages.Count}", DebugLogger.Category.Storage);
+          Log(Level.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}, Storage count: {Storages.Count}", Category.Storage);
         }
 
         var proxy = StorageConfigurableProxy.AttachToStorage(storage);
         if (proxy == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed to attach proxy for GUID: {guid}", DebugLogger.Category.Storage);
+          Log(Level.Error, $"InitializeStorage: Failed to attach proxy for GUID: {guid}", Category.Storage);
           return false;
         }
 
@@ -132,7 +134,7 @@ namespace NoLazyWorkers.Storage
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeStorage: Failed for GUID: {guid}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"InitializeStorage: Failed for GUID: {guid}, error: {e.Message}", Category.Storage);
         return false;
       }
     }
@@ -152,14 +154,14 @@ namespace NoLazyWorkers.Storage
             proxy.CreateWorldspaceUI();
             property.AddConfigurable(proxy);
 
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"WaitForProxyInitialization: Completed for GUID: {guid}", DebugLogger.Category.Storage);
+            Log(Level.Info, $"WaitForProxyInitialization: Completed for GUID: {guid}", Category.Storage);
             yield return true;
             yield break;
           }
         }
         yield return new WaitForSeconds(delay);
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Error, $"WaitForProxyInitialization: Failed for GUID: {guid} after {retries} retries", DebugLogger.Category.Storage);
+      Log(Level.Error, $"WaitForProxyInitialization: Failed for GUID: {guid} after {retries} retries", Category.Storage);
       yield return false;
     }
 
@@ -167,9 +169,9 @@ namespace NoLazyWorkers.Storage
     {
       CrossSprite = GetCrossSprite();
       if (CrossSprite == null)
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "CacheCrossSprite: Failed to load cross sprite", DebugLogger.Category.Storage);
+        Log(Level.Warning, "CacheCrossSprite: Failed to load cross sprite", Category.Storage);
       else
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "CacheCrossSprite: Successfully cached cross sprite", DebugLogger.Category.Storage);
+        Log(Level.Info, "CacheCrossSprite: Successfully cached cross sprite", Category.Storage);
     }
 
     public static Sprite GetCrossSprite()
@@ -180,32 +182,32 @@ namespace NoLazyWorkers.Storage
       var prefab = GetPrefabGameObject("Supplier Stash");
       if (prefab == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Supplier Stash prefab not found", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetCrossSprite: Supplier Stash prefab not found", Category.Storage);
         return null;
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"GetCrossSprite: Prefab hierarchy:\n{DebugTransformHierarchy(prefab.transform)}", DebugLogger.Category.Storage);
+        Log(Level.Stacktrace, $"GetCrossSprite: Prefab hierarchy:\n{DebugTransformHierarchy(prefab.transform)}", Category.Storage);
       }
 
       var iconObj = prefab.transform.Find("Dead drop hopper/Icon");
       if (iconObj == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: Icon GameObject not found in Supplier Stash prefab", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetCrossSprite: Icon GameObject not found in Supplier Stash prefab", Category.Storage);
         return null;
       }
 
       var renderer = iconObj.GetComponent<MeshRenderer>();
       if (renderer == null || renderer.material == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No MeshRenderer or material found on Icon GameObject", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetCrossSprite: No MeshRenderer or material found on Icon GameObject", Category.Storage);
         return null;
       }
 
       var texture = renderer.material.mainTexture as Texture2D;
       if (texture == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetCrossSprite: No Texture2D found in material", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetCrossSprite: No Texture2D found in material", Category.Storage);
         return null;
       }
       // Create Sprite from Texture2D
@@ -213,7 +215,7 @@ namespace NoLazyWorkers.Storage
       if (sprite != null)
       {
         sprite.name = "Cross";
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetCrossSprite: Created sprite '{sprite.name}' from Texture2D '{texture.name}'", DebugLogger.Category.Storage);
+        Log(Level.Info, $"GetCrossSprite: Created sprite '{sprite.name}' from Texture2D '{texture.name}'", Category.Storage);
       }
       CrossSprite = sprite;
       return sprite;
@@ -227,18 +229,18 @@ namespace NoLazyWorkers.Storage
       var productIconManager = ProductIconManager.Instance;
       if (productIconManager == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: ProductIconManager instance is null", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetPackagedSprite: ProductIconManager instance is null", Category.Storage);
         return product?.Icon;
       }
 
       var sprite = productIconManager.GetIcon(product.ID, packaging.ID);
       if (sprite == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetPackagedSprite: Sprite is null", DebugLogger.Category.Storage);
+        Log(Level.Warning, "GetPackagedSprite: Sprite is null", Category.Storage);
         return product?.Icon;
       }
       sprite.name = $"{product.Name} ({packaging.Name})";
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetPackagedSprite: Created sprite '{sprite.name}' for product {product.ID}, packaging {packaging.ID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"GetPackagedSprite: Created sprite '{sprite.name}' for product {product.ID}, packaging {packaging.ID}", Category.Storage);
       return sprite;
     }
 
@@ -246,15 +248,15 @@ namespace NoLazyWorkers.Storage
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             "GetStorageConfigPanelTemplate: Starting",
-            DebugLogger.Category.Storage);
+            Category.Storage);
 
         if (ConfigPanelTemplate != null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Returning cached template",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           return ConfigPanelTemplate;
         }
 
@@ -262,9 +264,9 @@ namespace NoLazyWorkers.Storage
         Transform storageTransform = GetTransformTemplateFromConfigPanel(EConfigurableType.Pot, "");
         if (storageTransform == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "GetStorageConfigPanelTemplate: storageTransform is null",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           return null;
         }
 
@@ -274,9 +276,9 @@ namespace NoLazyWorkers.Storage
         {
           storageObj.AddComponent<CanvasRenderer>();
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             "GetStorageConfigPanelTemplate: Instantiated StorageConfigPanel",
-            DebugLogger.Category.Storage);
+            Category.Storage);
 
         // Remove default script
         var defaultScript = storageObj.GetComponent<PotConfigPanel>();
@@ -290,9 +292,9 @@ namespace NoLazyWorkers.Storage
         if (configPanel == null)
         {
           configPanel = storageObj.AddComponent<StorageConfigPanel>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Added StorageConfigPanel",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
 
         // Remove unnecessary components
@@ -313,24 +315,24 @@ namespace NoLazyWorkers.Storage
           var potPanel = GetPrefabGameObject("PotConfigPanel");
           if (potPanel == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
+            Log(Level.Error,
                 "GetStorageConfigPanelTemplate: PotConfigPanel prefab not found",
-                DebugLogger.Category.Storage);
+                Category.Storage);
             return null;
           }
           var templateUI = potPanel.GetComponentInChildren<ItemFieldUI>();
           if (templateUI == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
+            Log(Level.Error,
                 "GetStorageConfigPanelTemplate: ItemFieldUI not found in PotConfigPanel",
-                DebugLogger.Category.Storage);
+                Category.Storage);
             return null;
           }
           itemFieldUITransform = Object.Instantiate(templateUI.gameObject, storageObj.transform, false).transform;
           itemFieldUITransform.name = "StorageItemUI";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Instantiated StorageItemUI from prefab",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
 
         GameObject itemFieldUIObj = itemFieldUITransform.gameObject;
@@ -339,9 +341,9 @@ namespace NoLazyWorkers.Storage
         if (itemFieldUI == null)
         {
           itemFieldUI = itemFieldUIObj.AddComponent<ItemFieldUI>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Added ItemFieldUI to StorageItemUI",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
         if (itemFieldUIObj.GetComponent<CanvasRenderer>() == null)
         {
@@ -351,9 +353,9 @@ namespace NoLazyWorkers.Storage
         configPanel.StorageItemUI = itemFieldUI;
         if (configPanel.StorageItemUI == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "GetStorageConfigPanelTemplate: Failed to assign StorageItemUI",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           return null;
         }
 
@@ -363,35 +365,35 @@ namespace NoLazyWorkers.Storage
         if (titleText != null)
         {
           titleText.text = "Assign Item";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Set Title to 'Assign Item'",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
         TextMeshProUGUI descText = itemFieldUIObj.GetComponentsInChildren<TextMeshProUGUI>()
             .FirstOrDefault(t => t.gameObject.name == "Description");
         if (descText != null)
         {
           descText.text = "Select the item to assign to this shelf";
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Set Description",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
 
         // Setup QualityFieldUI
         var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
         if (dryingRackPanelObj == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "GetStorageConfigPanelTemplate: DryingRackPanel prefab not found",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           return null;
         }
         var qualityFieldUIObj = dryingRackPanelObj.GetComponentInChildren<QualityFieldUI>();
         if (qualityFieldUIObj == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "GetStorageConfigPanelTemplate: QualityFieldUI not found in DryingRackPanel",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           return null;
         }
         var qualityUIObj = Object.Instantiate(qualityFieldUIObj.gameObject, storageObj.transform, false);
@@ -412,9 +414,9 @@ namespace NoLazyWorkers.Storage
         if (configPanel.QualityUI == null)
         {
           configPanel.QualityUI = qualityUIObj.AddComponent<QualityFieldUI>();
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               "GetStorageConfigPanelTemplate: Added QualityFieldUI to QualityFieldUI",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
         if (qualityUIObj.GetComponent<CanvasRenderer>() == null)
         {
@@ -422,16 +424,16 @@ namespace NoLazyWorkers.Storage
         }
 
         ConfigPanelTemplate = configPanel;
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             "GetStorageConfigPanelTemplate: Template initialized successfully",
-            DebugLogger.Category.Storage);
+            Category.Storage);
         return configPanel;
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"GetStorageConfigPanelTemplate: Failed, error: {e.Message}\nStackTrace: {e.StackTrace}",
-            DebugLogger.Category.Storage);
+            Category.Storage);
         return null;
       }
     }
@@ -449,9 +451,9 @@ namespace NoLazyWorkers.Storage
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             "StorageConfigPanel.InitializeUIComponents: Starting",
-            DebugLogger.Category.Storage);
+            Category.Storage);
 
         // Initialize StorageItemUI
         if (StorageItemUI == null)
@@ -459,18 +461,18 @@ namespace NoLazyWorkers.Storage
           var storageItemUITransform = transform.Find("StorageItemUI");
           if (storageItemUITransform == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
+            Log(Level.Error,
                 "StorageConfigPanel.InitializeUIComponents: StorageItemUI transform not found",
-                DebugLogger.Category.Storage);
+                Category.Storage);
             return;
           }
           StorageItemUI = storageItemUITransform.GetComponent<ItemFieldUI>();
           if (StorageItemUI == null)
           {
             StorageItemUI = storageItemUITransform.gameObject.AddComponent<ItemFieldUI>();
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
+            Log(Level.Info,
                 "StorageConfigPanel.InitializeUIComponents: Added ItemFieldUI",
-                DebugLogger.Category.Storage);
+                Category.Storage);
           }
           if (StorageItemUI.gameObject.GetComponent<CanvasRenderer>() == null)
             StorageItemUI.gameObject.AddComponent<CanvasRenderer>();
@@ -483,33 +485,33 @@ namespace NoLazyWorkers.Storage
           var qualityUITransform = transform.Find("QualityFieldUI");
           if (qualityUITransform == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error,
+            Log(Level.Error,
                 "StorageConfigPanel.InitializeUIComponents: QualityFieldUI transform not found",
-                DebugLogger.Category.Storage);
+                Category.Storage);
             return;
           }
           QualityUI = qualityUITransform.GetComponent<QualityFieldUI>();
           if (QualityUI == null)
           {
             QualityUI = qualityUITransform.gameObject.AddComponent<QualityFieldUI>();
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
+            Log(Level.Info,
                 "StorageConfigPanel.InitializeUIComponents: Added QualityFieldUI",
-                DebugLogger.Category.Storage);
+                Category.Storage);
           }
           if (QualityUI.gameObject.GetComponent<CanvasRenderer>() == null)
             QualityUI.gameObject.AddComponent<CanvasRenderer>();
         }
         QualityUI.gameObject.SetActive(false);
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             "StorageConfigPanel.InitializeUIComponents: Completed",
-            DebugLogger.Category.Storage);
+            Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"StorageConfigPanel.InitializeUIComponents: Failed, error={e.Message}",
-            DebugLogger.Category.Storage);
+            Category.Storage);
       }
     }
 
@@ -518,9 +520,9 @@ namespace NoLazyWorkers.Storage
       try
       {
         transform.gameObject.SetActive(true);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             $"StorageConfigPanel.Bind: Binding {configs.Count} configs",
-            DebugLogger.Category.Storage);
+            Category.Storage);
 
         // Initialize UI components (unchanged)
         InitializeUIComponents();
@@ -555,9 +557,9 @@ namespace NoLazyWorkers.Storage
               else if (!item.AdvCanStackWith(config.AssignedItem, allowHigherQuality: true))
               {
                 isConsistent = false;
-                DebugLogger.Log(DebugLogger.LogLevel.Warning,
+                Log(Level.Warning,
                     $"StorageConfigPanel.Bind: Inconsistent items detected",
-                    DebugLogger.Category.Storage);
+                    Category.Storage);
               }
               break;
           }
@@ -572,18 +574,18 @@ namespace NoLazyWorkers.Storage
         Button.onClick.RemoveAllListeners();
         Button.onClick.AddListener(() => OpenItemSelectorScreen(itemFieldList, "Assign Item", itemSlots));
 
-        if (false) //DebugLogger.IsDebugMode
-          AddCacheDebugUI();
+        //if (DebugLogger.IsDebugMode)
+        //AddCacheDebugUI();
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             $"StorageConfigPanel.Bind: Bound {itemFieldList.Count} ItemFields",
-            DebugLogger.Category.Storage);
+            Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"StorageConfigPanel.Bind: Failed, error: {e.Message}",
-            DebugLogger.Category.Storage);
+            Category.Storage);
       }
     }
 
@@ -620,13 +622,13 @@ namespace NoLazyWorkers.Storage
     {
       if (itemFields == null || itemFields.Count == 0 || itemFields.Any(f => f == null))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "StorageConfigPanel: OpenItemSelectorScreen called with null or empty itemFields", DebugLogger.Category.Storage);
+        Log(Level.Warning, "StorageConfigPanel: OpenItemSelectorScreen called with null or empty itemFields", Category.Storage);
         return;
       }
 
       if (Singleton<ManagementInterface>.Instance?.ItemSelectorScreen == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, "StorageConfigPanel: ItemSelectorScreen is null or ManagementInterface is not initialized", DebugLogger.Category.Storage);
+        Log(Level.Error, "StorageConfigPanel: ItemSelectorScreen is null or ManagementInterface is not initialized", Category.Storage);
         return;
       }
 
@@ -717,14 +719,14 @@ namespace NoLazyWorkers.Storage
                                               selectedItem?.Name ?? "None";
           StorageItemUI.gameObject.SetActive(true);
 
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigPanel: Selected mode: {newMode}, item: {selectedItem?.Name ?? "null"}, packaging: {selectedPackaging?.Name ?? "null"} for {fieldName}", DebugLogger.Category.Storage);
+          Log(Level.Info, $"StorageConfigPanel: Selected mode: {newMode}, item: {selectedItem?.Name ?? "null"}, packaging: {selectedPackaging?.Name ?? "null"} for {fieldName}", Category.Storage);
         }));
 
         Singleton<ManagementInterface>.Instance.ItemSelectorScreen.Open();
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigPanel: Failed to open ItemSelectorScreen for {fieldName}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfigPanel: Failed to open ItemSelectorScreen for {fieldName}, error: {e.Message}", Category.Storage);
       }
     }
   }
@@ -741,11 +743,11 @@ namespace NoLazyWorkers.Storage
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfiguration: Initializing for GUID: {storage?.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfiguration: Initializing for GUID: {storage?.GUID}", Category.Storage);
 
       if (replicator == null || configurable == null || storage == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration: Null parameters - replicator: {replicator == null}, configurable: {configurable == null}, storage: {storage == null}, GUID: {storage?.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfiguration: Null parameters - replicator: {replicator == null}, configurable: {configurable == null}, storage: {storage == null}, GUID: {storage?.GUID}", Category.Storage);
         throw new ArgumentNullException("StorageConfiguration: One or more parameters are null");
       }
 
@@ -753,8 +755,30 @@ namespace NoLazyWorkers.Storage
       Proxy = configurable as StorageConfigurableProxy;
       Storage = storage;
 
-      // Add event listener for content changes
-      Storage.StorageEntity.onContentsChanged.AddListener(OnContentsChanged);
+      if (StorageConfigs.TryGetValue(storage.ParentProperty, out var configs) && configs.TryGetValue(storage.GUID, out var config))
+      {
+        if (config.Mode == StorageMode.None)
+          return;
+        var storageKey = new StorageKey
+        {
+          Guid = storage.GUID,
+          Type = config.Mode == StorageMode.Specific ? StorageTypes.SpecificShelf : StorageTypes.AnyShelf
+        };
+        var cacheManager = CacheManager.GetOrCreateCacheManager(storage.ParentProperty);
+        foreach (var slot in storage.InputSlots) // InputSlots and OutputSlots share ItemSlots
+          cacheManager.RegisterItemSlot(slot, storageKey);
+
+        // Queue initial slot update
+        var slotData = storage.InputSlots.Select(s => new SlotData
+        {
+          Item = s.ItemInstance != null ? new ItemKey(s.ItemInstance) : ItemKey.Empty,
+          Quantity = s.Quantity,
+          SlotIndex = s.SlotIndex,
+          StackLimit = s.ItemInstance?.StackLimit ?? -1,
+          IsValid = true
+        });
+        cacheManager.QueueSlotUpdate(storageKey, slotData);
+      }
 
       try
       {
@@ -777,45 +801,14 @@ namespace NoLazyWorkers.Storage
           UpdateStorageConfiguration(Storage, AssignedItem);
           RefreshChanged();
         });
-        Configs[storage.ParentProperty][storage.GUID] = this;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfiguration: Initialized for GUID: {storage.GUID}", DebugLogger.Category.Storage);
+        StorageConfigs[storage.ParentProperty][storage.GUID] = this;
+        Log(Level.Info, $"StorageConfiguration: Initialized for GUID: {storage.GUID}", Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration: Failed to initialize for GUID: {storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfiguration: Failed to initialize for GUID: {storage.GUID}, error: {e.Message}", Category.Storage);
         throw;
       }
-    }
-
-    private void OnContentsChanged()
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"StorageConfiguration.OnContentsChanged: GUID={Storage.GUID}",
-          DebugLogger.Category.Storage);
-
-      var outputSlots = Storage.OutputSlots.ToArray();
-      var property = Storage.ParentProperty;
-      if (property != null)
-      {
-        var cacheKeysToRemove = new List<CacheKey>();
-        foreach (var slot in outputSlots)
-        {
-          if (slot?.ItemInstance == null || slot.Quantity <= 0)
-            continue;
-          var item = slot.ItemInstance;
-          var cacheKey = CreateCacheKey(item, property);
-          if (CacheManager.IsItemNotFound(cacheKey))
-          {
-            cacheKeysToRemove.Add(cacheKey);
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"StorageConfiguration.OnContentsChanged: Clearing not-found cache for {item.ID}",
-                DebugLogger.Category.Storage);
-          }
-        }
-        CacheManager.RemoveShelfSearchCacheEntries(cacheKeysToRemove);
-      }
-
-      UpdateStorageCache(Storage);
     }
 
     private void RefreshChanged()
@@ -829,7 +822,7 @@ namespace NoLazyWorkers.Storage
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfiguration.Load: Loading for GUID={Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Verbose, $"StorageConfiguration.Load: Loading for GUID={Storage.GUID}", Category.Storage);
 
         if (jsonObject["StorageMode"] != null)
         {
@@ -848,7 +841,7 @@ namespace NoLazyWorkers.Storage
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageConfiguration.Load: Invalid StorageMode '{str}' for GUID={Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+            Log(Level.Warning, $"StorageConfiguration.Load: Invalid StorageMode '{str}' for GUID={Storage.GUID}, error: {e.Message}", Category.Storage);
             Mode = StorageMode.None;
           }
         }
@@ -884,15 +877,15 @@ namespace NoLazyWorkers.Storage
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfiguration.Load: Failed for GUID={Storage.GUID}, error: {e.Message}", Category.Storage);
       }
     }
 
     public void SetModeAndItem(StorageMode mode, ItemInstance item)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"StorageConfiguration.SetModeAndItem: GUID={Storage.GUID}, mode={mode}, item={item?.ID ?? "null"}",
-          DebugLogger.Category.Storage);
+          Category.Storage);
 
       Mode = mode;
       ItemInstance previousItem = AssignedItem;
@@ -904,9 +897,9 @@ namespace NoLazyWorkers.Storage
         // Validate quality compatibility
         if (!item.AdvCanStackWith(previousItem, allowHigherQuality: true))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+          Log(Level.Warning,
               $"StorageConfiguration.SetModeAndItem: Quality mismatch for {item.ID}, resetting to default",
-              DebugLogger.Category.Storage);
+              Category.Storage);
           if (item is ProductItemInstance prodItem)
             prodItem.SetQuality(EQuality.Premium);
         }
@@ -920,12 +913,11 @@ namespace NoLazyWorkers.Storage
     // Cleanup to prevent memory leaks
     public void Dispose()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info,
+      Log(Level.Info,
           $"StorageConfiguration.Dispose: GUID={Storage.GUID}",
-          DebugLogger.Category.Storage);
+          Category.Storage);
 
-      Storage.StorageEntity.onContentsChanged.RemoveListener(OnContentsChanged);
-      Configs[Storage.ParentProperty].Remove(Storage.GUID);
+      StorageConfigs[Storage.ParentProperty].Remove(Storage.GUID);
 
       var property = Storage.ParentProperty;
       if (property != null)
@@ -935,7 +927,21 @@ namespace NoLazyWorkers.Storage
             .Where(kvp => kvp.Value.ContainsKey(Storage))
             .Select(kvp => CreateCacheKey(kvp.Key, property))
             .ToList();
-        CacheManager.RemoveShelfSearchCacheEntries(cacheKeysToRemove);
+      }
+
+      if (StorageConfigs.TryGetValue(Storage.ParentProperty, out var configs) && configs.TryGetValue(Storage.GUID, out var config))
+      {
+        if (config.Mode == StorageMode.None)
+          return;
+        var storageKey = new StorageKey
+        {
+          Guid = Storage.GUID,
+          Type = config.Mode == StorageMode.Specific ? StorageTypes.SpecificShelf : StorageTypes.AnyShelf
+        };
+        var cacheManager = CacheManager.GetOrCreateCacheManager(Storage.ParentProperty);
+        foreach (var slot in Storage.InputSlots)
+          cacheManager.UnregisterItemSlot(slot, storageKey);
+        Storages[Storage.ParentProperty].Remove(Storage.GUID);
       }
 
       RemoveStorageFromLists(Storage);
@@ -952,7 +958,7 @@ namespace NoLazyWorkers.Storage
       if (!__instance.gameObject.GetComponent<ConfigurationReplicator>())
       {
         __instance.gameObject.AddComponent<ConfigurationReplicator>();
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PlaceableStorageEntityPatch.Awake: Added ConfigurationReplicator to {__instance.gameObject.name}", DebugLogger.Category.Storage);
+        Log(Level.Info, $"PlaceableStorageEntityPatch.Awake: Added ConfigurationReplicator to {__instance.gameObject.name}", Category.Storage);
       }
       return true;
     }
@@ -961,7 +967,7 @@ namespace NoLazyWorkers.Storage
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(PlaceableStorageEntity __instance, ref string __result)
     {
-      if (!Configs[__instance.ParentProperty].TryGetValue(__instance.GUID, out var config))
+      if (!StorageConfigs[__instance.ParentProperty].TryGetValue(__instance.GUID, out var config))
         return;
 
       JObject jsonObject = string.IsNullOrEmpty(__result) ? new JObject() : JObject.Parse(__result);
@@ -990,32 +996,32 @@ namespace NoLazyWorkers.Storage
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageRackLoaderPatch: Processing for {mainPath}", DebugLogger.Category.Storage);
+        Log(Level.Verbose, $"StorageRackLoaderPatch: Processing for {mainPath}", Category.Storage);
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out GridItem gridItem) || gridItem == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageRackLoaderPatch: No GridItem found for mainPath: {mainPath}", DebugLogger.Category.Storage);
+          Log(Level.Warning, $"StorageRackLoaderPatch: No GridItem found for mainPath: {mainPath}", Category.Storage);
           return;
         }
         if (gridItem is not PlaceableStorageEntity storage)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageRackLoaderPatch: GridItem is not a PlaceableStorageEntity for mainPath: {mainPath}", DebugLogger.Category.Storage);
+          Log(Level.Warning, $"StorageRackLoaderPatch: GridItem is not a PlaceableStorageEntity for mainPath: {mainPath}", Category.Storage);
           return;
         }
         string dataPath = Path.Combine(mainPath, "Data.json");
         if (!File.Exists(dataPath))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageRackLoaderPatch: No Data.json found at: {dataPath}", DebugLogger.Category.Storage);
+          Log(Level.Warning, $"StorageRackLoaderPatch: No Data.json found at: {dataPath}", Category.Storage);
           return;
         }
         string json = File.ReadAllText(dataPath);
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"StorageRackLoaderPatch: Read JSON for GUID: {gridItem.GUID}, JSON: {json}", DebugLogger.Category.Storage);
+        Log(Level.Stacktrace, $"StorageRackLoaderPatch: Read JSON for GUID: {gridItem.GUID}, JSON: {json}", Category.Storage);
         JObject jsonObject = JObject.Parse(json);
         PendingConfigData[storage.GUID] = jsonObject;
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"StorageRackLoaderPatch: Stored pending config data for GUID: {gridItem.GUID}, StorageMode={jsonObject["StorageMode"]}, StorageItem={jsonObject["StorageItem"]}", DebugLogger.Category.Storage);
+        Log(Level.Stacktrace, $"StorageRackLoaderPatch: Stored pending config data for GUID: {gridItem.GUID}, StorageMode={jsonObject["StorageMode"]}, StorageItem={jsonObject["StorageItem"]}", Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageRackLoaderPatch: Failed for {mainPath}, error: {e}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageRackLoaderPatch: Failed for {mainPath}, error: {e}", Category.Storage);
       }
     }
   }
@@ -1032,14 +1038,14 @@ namespace NoLazyWorkers.Storage
     {
       if (storage == null || storage.gameObject == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, "StorageConfigurableProxy: storage or storage.gameObject is null", DebugLogger.Category.Storage);
+        Log(Level.Error, "StorageConfigurableProxy: storage or storage.gameObject is null", Category.Storage);
         throw new ArgumentNullException(nameof(storage));
       }
 
       var existingProxy = storage.gameObject.GetComponent<StorageConfigurableProxy>();
       if (existingProxy != null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: Proxy already exists for {storage.gameObject.name}, GUID: {storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Info, $"StorageConfigurableProxy: Proxy already exists for {storage.gameObject.name}, GUID: {storage.GUID}", Category.Storage);
         return existingProxy;
       }
 
@@ -1051,23 +1057,23 @@ namespace NoLazyWorkers.Storage
 
     private void Initialize()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: Initializing for {Storage.gameObject.name}, GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfigurableProxy: Initializing for {Storage.gameObject.name}, GUID: {Storage.GUID}", Category.Storage);
 
       // Verify NetworkObject
       var networkObject = gameObject.GetComponent<NetworkObject>();
       if (networkObject == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigurableProxy: No NetworkObject on {Storage.gameObject.name}, GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfigurableProxy: No NetworkObject on {Storage.gameObject.name}, GUID: {Storage.GUID}", Category.Storage);
         throw new InvalidOperationException("NetworkObject is required");
       }
 
       // Attach ConfigurationReplicator
       configReplicator = gameObject.GetComponent<ConfigurationReplicator>();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: Replicator: {configReplicator.name}, NetworkObject: {networkObject != null}, IsSpawned: {networkObject.IsSpawned}, GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfigurableProxy: Replicator: {configReplicator.name}, NetworkObject: {networkObject != null}, IsSpawned: {networkObject.IsSpawned}, GUID: {Storage.GUID}", Category.Storage);
 
       configReplicator.NetworkInitializeIfDisabled();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: NetworkInitializeIfDisabled for ConfigurationReplicator on {Storage.GUID}", DebugLogger.Category.Storage);
-      MelonCoroutines.Start(InitializeConfiguration());
+      Log(Level.Info, $"StorageConfigurableProxy: NetworkInitializeIfDisabled for ConfigurationReplicator on {Storage.GUID}", Category.Storage);
+      CoroutineRunner.Instance.RunCoroutine(InitializeConfiguration());
     }
 
     private IEnumerator InitializeConfiguration()
@@ -1077,18 +1083,18 @@ namespace NoLazyWorkers.Storage
       {
         if (configReplicator == null || Storage == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigurableProxy: configReplicator or storage is null for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+          Log(Level.Error, $"StorageConfigurableProxy: configReplicator or storage is null for GUID: {Storage.GUID}", Category.Storage);
           yield break;
         }
         configuration = new StorageConfiguration(configReplicator, this, Storage);
         configReplicator.Configuration = configuration;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: Configuration created for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Info, $"StorageConfigurableProxy: Configuration created for GUID: {Storage.GUID}", Category.Storage);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"StorageConfigurableProxy: Failed to create StorageConfiguration for GUID: {Storage.GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"StorageConfigurableProxy: Failed to create StorageConfiguration for GUID: {Storage.GUID}, error: {e.Message}", Category.Storage);
       }
-      yield return MelonCoroutines.Start(LoadConfigurationWhenReady());
+      yield return CoroutineRunner.Instance.RunCoroutine(LoadConfigurationWhenReady());
     }
 
     private IEnumerator LoadConfigurationWhenReady()
@@ -1096,24 +1102,24 @@ namespace NoLazyWorkers.Storage
       var networkObject = gameObject.GetComponent<NetworkObject>();
       if (networkObject == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadConfigurationWhenReady: No NetworkObject for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"LoadConfigurationWhenReady: No NetworkObject for GUID: {Storage.GUID}", Category.Storage);
         yield break;
       }
       int retries = 10;
       while (!networkObject.IsSpawned && retries > 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadConfigurationWhenReady: Waiting for NetworkObject to spawn for GUID: {Storage.GUID}, retries left: {retries}", DebugLogger.Category.Storage);
+        Log(Level.Verbose, $"LoadConfigurationWhenReady: Waiting for NetworkObject to spawn for GUID: {Storage.GUID}, retries left: {retries}", Category.Storage);
         yield return new WaitForSeconds(1f);
         retries--;
       }
       if (!networkObject.IsSpawned)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadConfigurationWhenReady: NetworkObject failed to spawn after retries for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"LoadConfigurationWhenReady: NetworkObject failed to spawn after retries for GUID: {Storage.GUID}", Category.Storage);
         yield break;
       }
       ManagedObjects.InitializePrefab(networkObject, -1);
       configReplicator._transportManagerCache = NetworkManager.TransportManager;
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageConfigurableProxy: InitializePrefab for ConfigurationReplicator on {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Verbose, $"StorageConfigurableProxy: InitializePrefab for ConfigurationReplicator on {Storage.GUID}", Category.Storage);
       yield return new WaitForSeconds(1f);
       if (PendingConfigData.TryGetValue(Storage.GUID, out var data))
       {
@@ -1128,15 +1134,15 @@ namespace NoLazyWorkers.Storage
           if (IsServer)
             RpcUpdateClientCache(Storage.ParentProperty, Storage.GUID, configuration.AssignedItem);
 
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
+          Log(Level.Info,
               $"LoadConfigurationWhenReady: Loaded for GUID={Storage.GUID}",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               $"LoadConfigurationWhenReady: Failed for GUID={Storage.GUID}, error={e.Message}",
-              DebugLogger.Category.Storage);
+              Category.Storage);
         }
         PendingConfigData.Remove(Storage.GUID);
       }
@@ -1162,17 +1168,17 @@ namespace NoLazyWorkers.Storage
 
     private void OnEnable()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: OnEnable for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfigurableProxy: OnEnable for GUID: {Storage.GUID}", Category.Storage);
     }
 
     private void OnDisable()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: OnDisable for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfigurableProxy: OnDisable for GUID: {Storage.GUID}", Category.Storage);
     }
 
     private void OnDestroy()
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageConfigurableProxy: OnDestroy for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageConfigurableProxy: OnDestroy for GUID: {Storage.GUID}", Category.Storage);
     }
 
     // IConfigurable implementation (unchanged)
@@ -1198,7 +1204,7 @@ namespace NoLazyWorkers.Storage
     }
     public override void OnSpawnServer(NetworkConnection connection)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"OnSpawnServer: Called for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"OnSpawnServer: Called for GUID: {Storage.GUID}", Category.Storage);
       Storage.OnSpawnServer(connection);
       ((IItemSlotOwner)this).SendItemsToClient(connection);
       SendConfigurationToClient(connection);
@@ -1206,11 +1212,11 @@ namespace NoLazyWorkers.Storage
 
     public void SendConfigurationToClient(NetworkConnection conn)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"SendConfigurationToClient: Called for GUID: {Storage.GUID}, conn: {(conn != null ? conn.ClientId : -1)}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"SendConfigurationToClient: Called for GUID: {Storage.GUID}, conn: {(conn != null ? conn.ClientId : -1)}", Category.Storage);
 
       if (!conn.IsHost)
       {
-        StartCoroutine(WaitForConfig());
+        CoroutineRunner.Instance.RunCoroutine(WaitForConfig());
       }
 
       IEnumerator WaitForConfig()
@@ -1224,19 +1230,19 @@ namespace NoLazyWorkers.Storage
     {
       if (ParentProperty == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateWorldspaceUI: ParentProperty is null for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"CreateWorldspaceUI: ParentProperty is null for GUID: {Storage.GUID}", Category.Storage);
         return null;
       }
       GameObject uiPrefab = GetPrefabGameObject("PackagingStationUI");
       if (uiPrefab == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateWorldspaceUI: Failed to load PackagingStationUI prefab for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"CreateWorldspaceUI: Failed to load PackagingStationUI prefab for GUID: {Storage.GUID}", Category.Storage);
         return null;
       }
       var uiInstance = Instantiate(uiPrefab, ParentProperty.WorldspaceUIContainer);
       if (uiInstance == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"CreateWorldspaceUI: uiInstance is null for GUID: {Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"CreateWorldspaceUI: uiInstance is null for GUID: {Storage.GUID}", Category.Storage);
         return null;
       }
       uiInstance.name = "StorageUI";
@@ -1287,30 +1293,30 @@ namespace NoLazyWorkers.Storage
       if (containerRectTransform != null)
         Container = containerRectTransform;
       else
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageUIElement.Initialize: Container (Outline) not found for GUID: {proxy.Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Warning, $"StorageUIElement.Initialize: Container (Outline) not found for GUID: {proxy.Storage.GUID}", Category.Storage);
 
       var titleLabel = GetComponentsInChildren<TextMeshProUGUI>(true).FirstOrDefault(t => t.gameObject.name.Contains("Title"));
       if (titleLabel != null)
         titleLabel.text = proxy.Storage.Name;
       else
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageUIElement.Initialize: No Title TextMeshProUGUI found for GUID: {proxy.Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Warning, $"StorageUIElement.Initialize: No Title TextMeshProUGUI found for GUID: {proxy.Storage.GUID}", Category.Storage);
 
       var iconImg = GetComponentsInChildren<Image>(true).FirstOrDefault(i => i.gameObject.name.Contains("Icon"));
       if (iconImg != null)
         Icon = iconImg;
       else
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"StorageUIElement.Initialize: No Icon Image found for GUID: {proxy.Storage.GUID}", DebugLogger.Category.Storage);
+        Log(Level.Warning, $"StorageUIElement.Initialize: No Icon Image found for GUID: {proxy.Storage.GUID}", Category.Storage);
       if (proxy.configuration.Mode == default)
       {
         proxy.configuration.Mode = StorageMode.None;
         Icon.sprite = GetCrossSprite();
         Icon.color = Color.red;
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"StorageUIElement.Initialize: Sprite: {Icon.sprite?.name}", DebugLogger.Category.Storage);
+      Log(Level.Verbose, $"StorageUIElement.Initialize: Sprite: {Icon.sprite?.name}", Category.Storage);
       Proxy = proxy;
       Proxy.Configuration.onChanged.AddListener(RefreshUI);
       RefreshUI();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"StorageUIElement.Initialize: Completed for GUID: {proxy.Storage.GUID}", DebugLogger.Category.Storage);
+      Log(Level.Info, $"StorageUIElement.Initialize: Completed for GUID: {proxy.Storage.GUID}", Category.Storage);
     }
 
     public void RefreshUI()
@@ -1329,9 +1335,9 @@ namespace NoLazyWorkers.Storage
 
       if (config == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"StorageUIElement.UpdateWorldspaceUIIcon: Config null for GUID={Proxy.Storage.GUID}",
-            DebugLogger.Category.Storage);
+            Category.Storage);
       }
       else if (config.Mode == StorageMode.None)
       {
@@ -1371,42 +1377,50 @@ namespace NoLazyWorkers.Storage
         {
           if (__instance is PlaceableStorageEntity entity)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"GridItemPatch: Initializing storage for GUID: {__instance.GUID}", DebugLogger.Category.Storage);
+            Log(Level.Info, $"GridItemPatch: Initializing storage for GUID: {__instance.GUID}", Category.Storage);
             InitializeStorage(__instance.GUID, entity);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GridItemPatch: {__instance.GUID} is not a PlaceableStorageEntity", DebugLogger.Category.Storage);
+            Log(Level.Warning, $"GridItemPatch: {__instance.GUID} is not a PlaceableStorageEntity", Category.Storage);
           }
         }
         return true;
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GridItemPatch: Failed for GUID: {GUID}, error: {e.Message}", DebugLogger.Category.Storage);
+        Log(Level.Error, $"GridItemPatch: Failed for GUID: {GUID}, error: {e.Message}", Category.Storage);
         return true;
       }
     }
-
-    [HarmonyPostfix]
-    [HarmonyPatch("DestroyItem")]
-    static void DestroyItemPostfix(GridItem __instance, bool callOnServer = true)
-    {
-      if (__instance is PlaceableStorageEntity storage)
-      {
-        if (Configs[__instance.ParentProperty].TryGetValue(__instance.GUID, out var config))
-          config.Dispose();
-        var cacheKeys = ShelfCache
-            .Where(kvp => kvp.Value.ContainsKey(storage))
-            .Select(kvp => CreateCacheKey(kvp.Key, storage.ParentProperty))
-            .ToList();
-        CacheManager.RemoveShelfSearchCacheEntries(cacheKeys);
-      }
-      if (__instance is ITransitEntity)
-        TransitDistanceCache.ClearCacheForEntity(__instance.GUID);
-    }
   }
 
+  [HarmonyPatch(typeof(ItemSelector))]
+  public class ItemSelectorPatch
+  {
+    [HarmonyPostfix]
+    [HarmonyPatch("CreateOptions")]
+    static void CreateOptionsPostfix(ItemSelector __instance, List<ItemSelector.Option> options)
+    {
+      for (int i = 0; i < __instance.optionButtons.Count; i++)
+      {
+        var button = __instance.optionButtons[i];
+        var btnComponent = button.GetComponent<Button>();
+        Log(Level.Verbose, $"ItemSelectorPatch.CreateOptionsPostfix: Button {i}, Title={options[i].Title}, interactable={btnComponent?.interactable}, active={button.gameObject.activeSelf}", Category.Storage);
+        var option = options[i];
+        if (option is StorageItemOption storageOption && storageOption.PackagingDefinition != null && storageOption.Item != null)
+        {
+          var icon = button.transform.Find("Icon").gameObject.GetComponent<Image>();
+          icon.sprite = GetPackagedSprite(storageOption.Item, storageOption.PackagingDefinition);
+          icon.gameObject.SetActive(icon.sprite != null);
+        }
+        if (option.Title == "None")
+          button.transform.Find("Icon").gameObject.GetComponent<Image>().color = Color.red;
+        if (option.Title == "Any")
+          button.transform.Find("Icon").gameObject.GetComponent<Image>().gameObject.SetActive(false);
+      }
+    }
+  }
   [HarmonyPatch(typeof(ConfigurableType))]
   public class ConfigurableTypePatch
   {
@@ -1436,88 +1450,6 @@ namespace NoLazyWorkers.Storage
         return false;
       }
       return true;
-    }
-  }
-
-  [HarmonyPatch(typeof(ItemSelector))]
-  public class ItemSelectorPatch
-  {
-    [HarmonyPostfix]
-    [HarmonyPatch("CreateOptions")]
-    static void CreateOptionsPostfix(ItemSelector __instance, List<ItemSelector.Option> options)
-    {
-      for (int i = 0; i < __instance.optionButtons.Count; i++)
-      {
-        var button = __instance.optionButtons[i];
-        var btnComponent = button.GetComponent<Button>();
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ItemSelectorPatch.CreateOptionsPostfix: Button {i}, Title={options[i].Title}, interactable={btnComponent?.interactable}, active={button.gameObject.activeSelf}", DebugLogger.Category.Storage);
-        var option = options[i];
-        if (option is StorageItemOption storageOption && storageOption.PackagingDefinition != null && storageOption.Item != null)
-        {
-          var icon = button.transform.Find("Icon").gameObject.GetComponent<Image>();
-          icon.sprite = GetPackagedSprite(storageOption.Item, storageOption.PackagingDefinition);
-          icon.gameObject.SetActive(icon.sprite != null);
-        }
-        if (option.Title == "None")
-          button.transform.Find("Icon").gameObject.GetComponent<Image>().color = Color.red;
-        if (option.Title == "Any")
-          button.transform.Find("Icon").gameObject.GetComponent<Image>().gameObject.SetActive(false);
-      }
-    }
-  }
-
-  [HarmonyPatch(typeof(ItemSlot))]
-  public class ItemSlotPatch
-  {
-    [HarmonyPostfix]
-    [HarmonyPatch("ChangeQuantity")]
-    public static void ChangeQuantityPostfix(ItemSlot __instance, int change, bool _internal)
-    {
-      if (change == 0 || __instance.ItemInstance == null) return;
-      var owner = __instance.SlotOwner as PlaceableStorageEntity;
-      if (owner == null) return;
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"ItemSlotPatch.ChangeQuantityPostfix: Slot={__instance.SlotIndex}, item={__instance.ItemInstance.ID}{(__instance.ItemInstance is QualityItemInstance qual ? $" Quality={qual.Quality}" : "")}, change={change}, newQty={__instance.Quantity}, shelf={owner.GUID}",
-          DebugLogger.Category.Storage);
-
-      if (change > 0)
-        CacheManager.ClearItemNotFoundCache(__instance.ItemInstance, owner.ParentProperty);
-
-      Utilities.UpdateStorageCache(owner);
-      if (__instance.Quantity <= 0)
-        CacheManager.ClearZeroQuantityEntries(owner, new[] { __instance.ItemInstance });
-    }
-
-    [HarmonyPostfix]
-    [HarmonyPatch("SetStoredItem")]
-    public static void SetStoredItemPostfix(ItemSlot __instance, ItemInstance instance, bool _internal)
-    {
-      var owner = __instance.SlotOwner as PlaceableStorageEntity;
-      if (owner == null || instance == null) return;
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"ItemSlotPatch.SetStoredItemPostfix: Slot={__instance.SlotIndex}, item={(instance?.ID ?? "null")}{(instance is QualityItemInstance qual ? $" Quality={qual.Quality}" : "")}, shelf={owner.GUID}",
-          DebugLogger.Category.Storage);
-
-      CacheManager.ClearItemNotFoundCache(instance, owner.ParentProperty);
-      Utilities.UpdateStorageCache(owner);
-    }
-
-    [HarmonyPostfix]
-    [HarmonyPatch("ClearStoredInstance")]
-    public static void ClearStoredInstancePostfix(ItemSlot __instance, bool _internal)
-    {
-      var owner = __instance.SlotOwner as PlaceableStorageEntity;
-      if (owner == null) return;
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"ItemSlotPatch.ClearStoredInstancePostfix: Slot={__instance.SlotIndex}, shelf={owner.GUID}",
-          DebugLogger.Category.Storage);
-
-      Utilities.UpdateStorageCache(owner);
-      if (__instance.ItemInstance != null)
-        CacheManager.ClearZeroQuantityEntries(owner, new[] { __instance.ItemInstance });
     }
   }
 }

@@ -20,6 +20,7 @@ using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
 using NoLazyWorkers.Storage;
 using ScheduleOne.EntityFramework;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Stations
 {
@@ -75,7 +76,7 @@ namespace NoLazyWorkers.Stations
         // Validate input
         if (station == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "DryingRackAdapter: Station is null", DebugLogger.Category.DryingRack);
+          Log(Level.Error, "DryingRackAdapter: Station is null", Category.DryingRack);
           throw new ArgumentNullException(nameof(station));
         }
 
@@ -90,7 +91,7 @@ namespace NoLazyWorkers.Stations
 
         // Add adapter to property stations
         propertyStations.Add(GUID, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"DryingRackAdapter: Initialized for station {station.GUID}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"DryingRackAdapter: Initialized for station {station.GUID}", Category.DryingRack);
       }
     }
   }
@@ -105,11 +106,11 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static List<ItemInstance> GetRefillList(DryingRack station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetRefillList: Retrieving refill list for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"GetRefillList: Retrieving refill list for station {station?.GUID.ToString() ?? "null"}", Category.DryingRack);
 
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetRefillList: Station is null", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, "GetRefillList: Station is null", Category.DryingRack);
         return new List<ItemInstance>();
       }
 
@@ -123,7 +124,7 @@ namespace NoLazyWorkers.Stations
           var item = fields[i]?.SelectedItem;
           if (item == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetRefillList: Skipping null item at index {i} for station {station.GUID}", DebugLogger.Category.DryingRack);
+            Log(Level.Verbose, $"GetRefillList: Skipping null item at index {i} for station {station.GUID}", Category.DryingRack);
             continue;
           }
 
@@ -132,16 +133,16 @@ namespace NoLazyWorkers.Stations
           {
             prodItem.SetQuality(qualities[i].Value);
             items.Add(prodItem);
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", DebugLogger.Category.DryingRack);
+            Log(Level.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", Category.DryingRack);
           }
         }
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GetRefillList: Fields or qualities missing or mismatched for station {station.GUID}", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, $"GetRefillList: Fields or qualities missing or mismatched for station {station.GUID}", Category.DryingRack);
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", DebugLogger.Category.DryingRack);
+      Log(Level.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", Category.DryingRack);
       return items;
     }
 
@@ -150,18 +151,18 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static void Cleanup(DryingRack station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", Category.DryingRack);
 
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, "Cleanup: Station is null", Category.DryingRack);
         return;
       }
 
       ItemFields.Remove(station.GUID);
       QualityFields.Remove(station.GUID);
       StationRefillLists.Remove(station.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
+      Log(Level.Info, $"Cleanup: Removed data for station {station.GUID}", Category.DryingRack);
     }
 
     /// <summary>
@@ -169,13 +170,13 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static void InitializeFields(DryingRack station, DryingRackConfiguration config)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeFields: Starting for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"InitializeFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.DryingRack);
 
       try
       {
         if (station == null || config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeFields: Station or config is null", DebugLogger.Category.DryingRack);
+          Log(Level.Error, $"InitializeFields: Station or config is null", Category.DryingRack);
           return;
         }
 
@@ -186,7 +187,7 @@ namespace NoLazyWorkers.Stations
         {
           adapter = new DryingRackAdapter(station);
           IStations[station.ParentProperty][guid] = adapter;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeFields: Created new adapter for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Info, $"InitializeFields: Created new adapter for station {guid}", Category.DryingRack);
         }
 
         // Initialize station refills list
@@ -218,13 +219,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count && refills[i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeFields: Set quality {quality} for index {i} in station {guid}", DebugLogger.Category.DryingRack);
+                Log(Level.Verbose, $"InitializeFields: Set quality {quality} for index {i} in station {guid}", Category.DryingRack);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeFields: Failed to set quality for index {i} in station {guid}, error: {e.Message}", DebugLogger.Category.DryingRack);
+              Log(Level.Error, $"InitializeFields: Failed to set quality for index {i} in station {guid}, error: {e.Message}", Category.DryingRack);
             }
           });
           qualityFields.Add(qualityField);
@@ -240,13 +241,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count)
               {
                 refills[i] = item?.GetDefaultInstance();
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeFields: Set item {item?.ID ?? "null"} for index {i} in station {guid}", DebugLogger.Category.DryingRack);
+                Log(Level.Verbose, $"InitializeFields: Set item {item?.ID ?? "null"} for index {i} in station {guid}", Category.DryingRack);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeFields: Failed to set item for index {i} in station {guid}, error: {e.Message}", DebugLogger.Category.DryingRack);
+              Log(Level.Error, $"InitializeFields: Failed to set item for index {i} in station {guid}, error: {e.Message}", Category.DryingRack);
             }
           });
           itemFields.Add(itemField);
@@ -255,14 +256,14 @@ namespace NoLazyWorkers.Stations
         // Store fields
         ItemFields[guid] = itemFields;
         QualityFields[guid] = qualityFields;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeFields: Initialized {itemFields.Count} ItemFields and {qualityFields.Count} QualityFields for station {guid}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"InitializeFields: Initialized {itemFields.Count} ItemFields and {qualityFields.Count} QualityFields for station {guid}", Category.DryingRack);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e.Message}", DebugLogger.Category.DryingRack);
+        Log(Level.Error, $"InitializeFields: Failed for station {station?.GUID.ToString() ?? "null"}, error: {e.Message}", Category.DryingRack);
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeFields: Completed for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"InitializeFields: Completed for station {station?.GUID.ToString() ?? "null"}", Category.DryingRack);
     }
   }
 
@@ -285,7 +286,7 @@ namespace NoLazyWorkers.Stations
         _cachedItemFieldUITemplate = potPanel?.GetComponentInChildren<ItemFieldUI>();
         if (_cachedItemFieldUITemplate == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "CachePrefabs: Failed to find ItemFieldUI template", DebugLogger.Category.DryingRack);
+          Log(Level.Error, "CachePrefabs: Failed to find ItemFieldUI template", Category.DryingRack);
         }
       }
     }
@@ -294,13 +295,13 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Bind")]
     static void BindPostfix(DryingRackConfigPanel __instance, List<EntityConfiguration> configs)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"BindPostfix: Starting binding for {configs?.Count ?? 0} configs", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"BindPostfix: Starting binding for {configs?.Count ?? 0} configs", Category.DryingRack);
 
       try
       {
         if (configs == null || !configs.Any())
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, "BindPostfix: No configurations provided", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, "BindPostfix: No configurations provided", Category.DryingRack);
           return;
         }
 
@@ -308,14 +309,14 @@ namespace NoLazyWorkers.Stations
         if (__instance.DestinationUI != null)
         {
           __instance.DestinationUI.gameObject.SetActive(false);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, "BindPostfix: Disabled DestinationUI", DebugLogger.Category.DryingRack);
+          Log(Level.Verbose, "BindPostfix: Disabled DestinationUI", Category.DryingRack);
         }
 
         // Cache prefabs
         CachePrefabs();
         if (_cachedItemFieldUITemplate == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "BindPostfix: Missing UI templates, aborting", DebugLogger.Category.DryingRack);
+          Log(Level.Error, "BindPostfix: Missing UI templates, aborting", Category.DryingRack);
           return;
         }
         __instance.QualityUI.transform.Find("Description").gameObject.SetActive(false);
@@ -328,7 +329,7 @@ namespace NoLazyWorkers.Stations
         if (ProductManager.FavouritedProducts != null)
         {
           favorites.AddRange(ProductManager.FavouritedProducts.Where(item => item != null));
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"BindPostfix: Loaded {favorites.Count} favorite items", DebugLogger.Category.DryingRack);
+          Log(Level.Verbose, $"BindPostfix: Loaded {favorites.Count} favorite items", Category.DryingRack);
         }
 
         // Initialize field lists
@@ -345,7 +346,7 @@ namespace NoLazyWorkers.Stations
         {
           if (config?.Rack == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, "BindPostfix: Skipping null config or rack", DebugLogger.Category.DryingRack);
+            Log(Level.Warning, "BindPostfix: Skipping null config or rack", Category.DryingRack);
             continue;
           }
 
@@ -355,7 +356,7 @@ namespace NoLazyWorkers.Stations
               itemFields?.Count < DryingRackConstants.MaxOptions ||
               qualityFields?.Count < DryingRackConstants.MaxOptions)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Initializing fields for station {config.Rack.GUID}", DebugLogger.Category.DryingRack);
+            Log(Level.Info, $"BindPostfix: Initializing fields for station {config.Rack.GUID}", Category.DryingRack);
             InitializeFields(config.Rack, config);
             itemFields = ItemFields.GetValueOrDefault(config.Rack.GUID);
             qualityFields = QualityFields.GetValueOrDefault(config.Rack.GUID);
@@ -363,7 +364,7 @@ namespace NoLazyWorkers.Stations
 
           if (itemFields == null || qualityFields == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"BindPostfix: Failed to initialize fields for station {config.Rack.GUID}", DebugLogger.Category.DryingRack);
+            Log(Level.Error, $"BindPostfix: Failed to initialize fields for station {config.Rack.GUID}", Category.DryingRack);
             continue;
           }
 
@@ -424,20 +425,20 @@ namespace NoLazyWorkers.Stations
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"BindPostfix: QualityFieldUI_{i} missing Title TextMeshProUGUI", DebugLogger.Category.DryingRack);
+            Log(Level.Warning, $"BindPostfix: QualityFieldUI_{i} missing Title TextMeshProUGUI", Category.DryingRack);
           }
 
           // Bind UI elements
           itemFieldUI.Bind(itemFieldLists[i]);
           qualityFieldUI.Bind(qualityFieldLists[i]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Bound {DryingRackConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} ItemFields and {DryingRackConstants.QualityFieldUIPrefix}{i} to {qualityFieldLists[i].Count} QualityFields", DebugLogger.Category.DryingRack);
+          Log(Level.Info, $"BindPostfix: Bound {DryingRackConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} ItemFields and {DryingRackConstants.QualityFieldUIPrefix}{i} to {qualityFieldLists[i].Count} QualityFields", Category.DryingRack);
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Completed binding {DryingRackConstants.MaxOptions} ItemFieldUIs for {configs.Count} configs", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"BindPostfix: Completed binding {DryingRackConstants.MaxOptions} ItemFieldUIs for {configs.Count} configs", Category.DryingRack);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"BindPostfix: Failed, error: {e.Message}", DebugLogger.Category.DryingRack, DebugLogger.Category.Stacktrace);
+        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.DryingRack, Category.Stacktrace);
       }
     }
   }
@@ -456,10 +457,10 @@ namespace NoLazyWorkers.Stations
       {
         if (rack == null || __instance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeFields: rack or Configuration is null", DebugLogger.Category.DryingRack);
+          Log(Level.Error, "InitializeFields: rack or Configuration is null", Category.DryingRack);
           return;
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"DryingRackConfigurationPatch.ConstructorPostfix: Initializing for rack {rack?.GUID}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"DryingRackConfigurationPatch.ConstructorPostfix: Initializing for rack {rack?.GUID}", Category.DryingRack);
         if (!ItemFields.ContainsKey(rack.GUID))
         {
           InitializeFields(rack, __instance);
@@ -467,7 +468,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"DryingRackConfigurationPatch.ConstructorPostfix: Failed for rack, error: {e}", DebugLogger.Category.DryingRack);
+        Log(Level.Error, $"DryingRackConfigurationPatch.ConstructorPostfix: Failed for rack, error: {e}", Category.DryingRack);
       }
     }
 
@@ -475,7 +476,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("ShouldSave")]
     static bool ShouldSavePrefix(DryingRackConfiguration __instance, ref bool __result)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ShouldSavePrefix: Forcing save for station {__instance?.Rack?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"ShouldSavePrefix: Forcing save for station {__instance?.Rack?.GUID.ToString() ?? "null"}", Category.DryingRack);
       __result = true;
       return false;
     }
@@ -484,13 +485,13 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(DryingRackConfiguration __instance, ref string __result)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Saving for station {__instance?.Rack?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"GetSaveStringPostfix: Saving for station {__instance?.Rack?.GUID.ToString() ?? "null"}", Category.DryingRack);
 
       try
       {
         if (__instance?.Rack == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetSaveStringPostfix: Rack is null", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, "GetSaveStringPostfix: Rack is null", Category.DryingRack);
           return;
         }
 
@@ -507,7 +508,7 @@ namespace NoLazyWorkers.Stations
             itemFieldsData.Add(new JObject { ["ItemID"] = field.SelectedItem?.ID });
           }
           json["ItemFields"] = itemFieldsData;
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Saved {itemFieldsData.Count} item fields for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Verbose, $"GetSaveStringPostfix: Saved {itemFieldsData.Count} item fields for station {guid}", Category.DryingRack);
         }
 
         // Save quality fields
@@ -519,15 +520,15 @@ namespace NoLazyWorkers.Stations
             qualityFieldsArray.Add(new JObject { ["Quality"] = qualityFields[i].Value.ToString() });
           }
           json["Qualities"] = qualityFieldsArray;
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Saved {qualityFieldsArray.Count} quality fields for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Verbose, $"GetSaveStringPostfix: Saved {qualityFieldsArray.Count} quality fields for station {guid}", Category.DryingRack);
         }
 
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", Category.DryingRack);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetSaveStringPostfix: Failed for station {__instance?.Rack?.GUID.ToString() ?? "null"}, error: {e.Message}", DebugLogger.Category.DryingRack, DebugLogger.Category.Stacktrace);
+        Log(Level.Error, $"GetSaveStringPostfix: Failed for station {__instance?.Rack?.GUID.ToString() ?? "null"}, error: {e.Message}", Category.DryingRack, Category.Stacktrace);
       }
     }
 
@@ -535,22 +536,22 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Destroy")]
     static void DestroyPostfix(DryingRackConfiguration __instance)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DestroyPostfix: Cleaning up for station {__instance?.Rack?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"DestroyPostfix: Cleaning up for station {__instance?.Rack?.GUID.ToString() ?? "null"}", Category.DryingRack);
 
       try
       {
         if (__instance?.Rack == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, "DestroyPostfix: Rack is null", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, "DestroyPostfix: Rack is null", Category.DryingRack);
           return;
         }
 
         Cleanup(__instance.Rack);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"DestroyPostfix: Completed cleanup for station {__instance.Rack.GUID}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"DestroyPostfix: Completed cleanup for station {__instance.Rack.GUID}", Category.DryingRack);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"DestroyPostfix: Failed for station {__instance?.Rack?.GUID.ToString() ?? "null"}, error: {e.Message}", DebugLogger.Category.DryingRack, DebugLogger.Category.Stacktrace);
+        Log(Level.Error, $"DestroyPostfix: Failed for station {__instance?.Rack?.GUID.ToString() ?? "null"}, error: {e.Message}", Category.DryingRack, Category.Stacktrace);
       }
     }
   }
@@ -565,26 +566,26 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Load")]
     static void LoadPostfix(string mainPath)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Loading configuration from {mainPath}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"LoadPostfix: Loading configuration from {mainPath}", Category.DryingRack);
 
       try
       {
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"LoadPostfix: No grid item found for {mainPath}", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, $"LoadPostfix: No grid item found for {mainPath}", Category.DryingRack);
           return;
         }
 
         if (!(gridItem is DryingRack station))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"LoadPostfix: Grid item is not a DryingRack for {mainPath}", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, $"LoadPostfix: Grid item is not a DryingRack for {mainPath}", Category.DryingRack);
           return;
         }
 
         string configPath = Path.Combine(mainPath, "Configuration.json");
         if (!File.Exists(configPath))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"LoadPostfix: Configuration file not found at {configPath}", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, $"LoadPostfix: Configuration file not found at {configPath}", Category.DryingRack);
           return;
         }
 
@@ -593,7 +594,7 @@ namespace NoLazyWorkers.Stations
         var config = station.stationConfiguration;
         if (config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Station configuration is null for {station.GUID}", DebugLogger.Category.DryingRack);
+          Log(Level.Error, $"LoadPostfix: Station configuration is null for {station.GUID}", Category.DryingRack);
           return;
         }
 
@@ -602,13 +603,13 @@ namespace NoLazyWorkers.Stations
         {
           config.Destination.SelectedObject = null;
           config.DestinationRoute = null;
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Cleared destination for station {station.GUID}", DebugLogger.Category.DryingRack);
+          Log(Level.Verbose, $"LoadPostfix: Cleared destination for station {station.GUID}", Category.DryingRack);
         }
 
         Guid guid = station.GUID;
         if (!ItemFields.ContainsKey(guid))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadPostfix: Initializing fields for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Info, $"LoadPostfix: Initializing fields for station {guid}", Category.DryingRack);
           InitializeFields(station, config);
         }
 
@@ -617,7 +618,7 @@ namespace NoLazyWorkers.Stations
         var qualityFields = QualityFields.GetValueOrDefault(guid);
         if (itemFields == null || qualityFields == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Failed to retrieve fields for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Error, $"LoadPostfix: Failed to retrieve fields for station {guid}", Category.DryingRack);
           return;
         }
 
@@ -640,11 +641,11 @@ namespace NoLazyWorkers.Stations
                 if (item != null)
                 {
                   itemFields[i].SelectedItem = item;
-                  DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Loaded item {itemID} for index {i} in station {guid}", DebugLogger.Category.DryingRack);
+                  Log(Level.Verbose, $"LoadPostfix: Loaded item {itemID} for index {i} in station {guid}", Category.DryingRack);
                 }
                 else
                 {
-                  DebugLogger.Log(DebugLogger.LogLevel.Warning, $"LoadPostfix: Item {itemID} not found for index {i} in station {guid}", DebugLogger.Category.DryingRack);
+                  Log(Level.Warning, $"LoadPostfix: Item {itemID} not found for index {i} in station {guid}", Category.DryingRack);
                 }
               }
             }
@@ -657,25 +658,25 @@ namespace NoLazyWorkers.Stations
               {
                 var quality = Enum.Parse<EQuality>(qualityData["Quality"].ToString());
                 qualityFields[i].SetValue(quality, false);
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Loaded quality {quality} for index {i} in station {guid}", DebugLogger.Category.DryingRack);
+                Log(Level.Verbose, $"LoadPostfix: Loaded quality {quality} for index {i} in station {guid}", Category.DryingRack);
               }
               catch (ArgumentException e)
               {
-                DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Invalid quality value {qualityData["Quality"]} for index {i} in station {guid}, error: {e.Message}", DebugLogger.Category.DryingRack);
+                Log(Level.Error, $"LoadPostfix: Invalid quality value {qualityData["Quality"]} for index {i} in station {guid}, error: {e.Message}", Category.DryingRack);
               }
             }
           }
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"LoadPostfix: Invalid or missing ItemFields/Qualities data for station {guid}", DebugLogger.Category.DryingRack);
+          Log(Level.Warning, $"LoadPostfix: Invalid or missing ItemFields/Qualities data for station {guid}", Category.DryingRack);
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadPostfix: Completed loading config for station {guid}", DebugLogger.Category.DryingRack);
+        Log(Level.Info, $"LoadPostfix: Completed loading config for station {guid}", Category.DryingRack);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Failed for {mainPath}, error: {e.Message}", DebugLogger.Category.DryingRack, DebugLogger.Category.Stacktrace);
+        Log(Level.Error, $"LoadPostfix: Failed for {mainPath}, error: {e.Message}", Category.DryingRack, Category.Stacktrace);
       }
     }
   }

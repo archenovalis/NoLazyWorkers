@@ -15,6 +15,7 @@ using NoLazyWorkers.Storage;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using static NoLazyWorkers.Employees.Constants;
+using static NoLazyWorkers.Storage.Constants;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.Extensions;
 using NoLazyWorkers.Stations;
@@ -26,6 +27,7 @@ using NoLazyWorkers.TaskService;
 using static NoLazyWorkers.TaskService.TaskRegistry;
 using static NoLazyWorkers.TaskService.Extensions;
 using Unity.Collections;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Employees
 {
@@ -37,7 +39,7 @@ namespace NoLazyWorkers.Employees
         : base(chemist, adapter)
     {
       _chemist = chemist ?? throw new ArgumentNullException(nameof(chemist));
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistBehaviour: Initialized for NPC {_chemist.fullName}", DebugLogger.Category.Chemist);
+      Log(Level.Info, $"ChemistBehaviour: Initialized for NPC {_chemist.fullName}", Category.Chemist);
     }
 
     [HarmonyPatch(typeof(Chemist))]
@@ -49,14 +51,14 @@ namespace NoLazyWorkers.Employees
       {
         try
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix:NPC={__instance.fullName} at position={__instance.transform.position}", DebugLogger.Category.Chemist);
+          Log(Level.Verbose, $"UpdateBehaviourPrefix:NPC={__instance.fullName} at position={__instance.transform.position}", Category.Chemist);
           if (__instance == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Chemist instance is null", DebugLogger.Category.Chemist);
+            Log(Level.Error, "UpdateBehaviourPrefix: Chemist instance is null", Category.Chemist);
             return false;
           }
 
-          if (!EmployeeAdapters.TryGetValue(__instance.GUID, out var employeeAdapter))
+          if (!IEmployees[__instance.AssignedProperty].TryGetValue(__instance.GUID, out var employeeAdapter))
           {
             // Check if this NPC is already pending adapter creation
             if (PendingAdapters.TryGetValue(__instance.GUID, out float requestTime))
@@ -65,27 +67,27 @@ namespace NoLazyWorkers.Employees
               float elapsed = Time.time - requestTime;
               if (elapsed < ADAPTER_DELAY_SECONDS)
               {
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                Log(Level.Verbose,
                     $"UpdateBehaviourPrefix: Delaying adapter for NPC={__instance.fullName}, {ADAPTER_DELAY_SECONDS - elapsed:F2}s remaining",
-                    DebugLogger.Category.Chemist);
+                    Category.Chemist);
                 return false;
               }
 
               // Delay elapsed, create adapter
               employeeAdapter = new ChemistAdapter(__instance);
-              EmployeeAdapters[__instance.GUID] = employeeAdapter;
+              IEmployees[__instance.AssignedProperty][__instance.GUID] = employeeAdapter;
               PendingAdapters.Remove(__instance.GUID); // Cleanup
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"UpdateBehaviourPrefix: Registered ChemistAdapter for NPC={__instance.fullName} after {elapsed:F2}s delay",
-                  DebugLogger.Category.Chemist);
+                  Category.Chemist);
             }
             else
             {
               // First request, record timestamp and skip behavior
               PendingAdapters[__instance.GUID] = Time.time;
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"UpdateBehaviourPrefix: Initiated {ADAPTER_DELAY_SECONDS}s delay for NPC={__instance.fullName}",
-                  DebugLogger.Category.Chemist);
+                  Category.Chemist);
               return false;
             }
           }
@@ -94,7 +96,7 @@ namespace NoLazyWorkers.Employees
 
           if (__instance.Fired || (__instance.behaviour.activeBehaviour != null && __instance.behaviour.activeBehaviour != __instance.WaitOutside))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Fired={__instance.Fired} or activeBehaviour={__instance.behaviour.activeBehaviour?.Name ?? "null"} for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: Fired={__instance.Fired} or activeBehaviour={__instance.behaviour.activeBehaviour?.Name ?? "null"} for NPC={__instance.fullName}", Category.Chemist);
             return false;
           }
 
@@ -102,19 +104,19 @@ namespace NoLazyWorkers.Employees
           bool needsPay = false;
           if (__instance.GetBed() == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: No bed assigned for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: No bed assigned for NPC={__instance.fullName}", Category.Chemist);
             noWork = true;
             __instance.SubmitNoWorkReason("I haven't been assigned a bed", "You can use your management clipboard to assign me a bed.");
           }
           else if (NetworkSingleton<ScheduleOne.GameTime.TimeManager>.Instance.IsEndOfDay)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: End of day for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: End of day for NPC={__instance.fullName}", Category.Chemist);
             noWork = true;
             __instance.SubmitNoWorkReason("Sorry boss, my shift ends at 4AM.", string.Empty);
           }
           else if (!__instance.PaidForToday)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Not paid for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: Not paid for NPC={__instance.fullName}", Category.Chemist);
             if (__instance.IsPayAvailable())
             {
               needsPay = true;
@@ -135,14 +137,14 @@ namespace NoLazyWorkers.Employees
 
           if (InstanceFinder.IsServer && needsPay && __instance.IsPayAvailable())
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Processing payment for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: Processing payment for NPC={__instance.fullName}", Category.Chemist);
             __instance.RemoveDailyWage();
             __instance.SetIsPaid();
           }
 
           if (!InstanceFinder.IsServer)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Client-side, skipping for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: Client-side, skipping for NPC={__instance.fullName}", Category.Chemist);
             return false;
           }
 
@@ -151,23 +153,23 @@ namespace NoLazyWorkers.Employees
             __instance.SubmitNoWorkReason("I am unable to work right now", "Check my status to see why I can't work.");
             __instance.SetIdle(true);
             state.CurrentState = EState.Idle;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"UpdateBehaviourPrefix: Cannot work for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Verbose, $"UpdateBehaviourPrefix: Cannot work for NPC={__instance.fullName}", Category.Chemist);
             return false;
           }
 
           if (__instance.AnyWorkInProgress())
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 1 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            Log(Level.Warning, $"UpdateBehaviourPrefix: 1 NPC={__instance.fullName}", Category.Chemist);
             __instance.MarkIsWorking();
             return false;
           }
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"UpdateBehaviourPrefix: 2 NPC={__instance.fullName}", DebugLogger.Category.Chemist);
-          state.EmployeeBeh.Update().GetAwaiter().GetResult();
+          Log(Level.Warning, $"UpdateBehaviourPrefix: 2 NPC={__instance.fullName}", Category.Chemist);
+          state.AdvBehaviour.Update().GetAwaiter().GetResult();
           return false;
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: Failed for chemist {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Chemist);
+          Log(Level.Error, $"UpdateBehaviourPrefix: Failed for chemist {__instance?.fullName ?? "null"}, error: {e}", Category.Chemist);
           if (__instance != null)
             __instance.SetIdle(true);
           return false;
@@ -180,18 +182,18 @@ namespace NoLazyWorkers.Employees
       {
         try
         {
-          GetState(__instance).EmployeeBeh.Disable().GetAwaiter().GetResult();
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistFirePatch: Disabled MixingStationBeh for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+          GetState(__instance).AdvBehaviour.Disable().GetAwaiter().GetResult();
+          Log(Level.Info, $"ChemistFirePatch: Disabled MixingStationBeh for NPC={__instance.fullName}", Category.Chemist);
 
-          if (EmployeeAdapters.ContainsKey(__instance.GUID))
+          if (IEmployees[__instance.AssignedProperty].ContainsKey(__instance.GUID))
           {
-            EmployeeAdapters.Remove(__instance.GUID);
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistFirePatch: Removed ChemistAdapter for NPC={__instance.fullName}", DebugLogger.Category.Chemist);
+            IEmployees[__instance.AssignedProperty].Remove(__instance.GUID);
+            Log(Level.Info, $"ChemistFirePatch: Removed ChemistAdapter for NPC={__instance.fullName}", Category.Chemist);
           }
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"ChemistFirePatch: Failed for Chemist {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Chemist);
+          Log(Level.Error, $"ChemistFirePatch: Failed for Chemist {__instance?.fullName ?? "null"}, error: {e}", Category.Chemist);
         }
       }
     }

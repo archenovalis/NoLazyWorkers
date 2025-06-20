@@ -24,6 +24,7 @@ using ScheduleOne.NPCs;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using ScheduleOne.EntityFramework;
 using NoLazyWorkers.Stations;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Employees
 {
@@ -38,12 +39,12 @@ namespace NoLazyWorkers.Employees
       {
         _packager = packager ?? throw new ArgumentNullException(nameof(packager));
         _employeeBehaviour = new PackagerBehaviour(packager, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Handler);
+        Log(Level.Info, $"PackagerAdapter: Initialized for NPC {_packager.fullName}", Category.Handler);
       }
 
       public NpcSubType SubType => NpcSubType.Handler;
       public Property AssignedProperty => _packager.AssignedProperty;
-      public EmployeeBehaviour EmpBehaviour => _employeeBehaviour;
+      public EmployeeBehaviour AdvBehaviour => _employeeBehaviour;
     }
   }
 }

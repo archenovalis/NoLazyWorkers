@@ -22,6 +22,7 @@ using ScheduleOne;
 using ScheduleOne.Property;
 using NoLazyWorkers.Storage;
 using ScheduleOne.EntityFramework;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Stations
 {
@@ -53,7 +54,7 @@ namespace NoLazyWorkers.Stations
           Extensions.IStations[station.ParentProperty] = propertyStations;
         }
         propertyStations.Add(GUID, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"LabOvenAdapter: Initialized for station {station.GUID}", DebugLogger.Category.LabOven);
+        Log(Level.Info, $"LabOvenAdapter: Initialized for station {station.GUID}", Category.LabOven);
       }
 
       public Guid GUID => _station.GUID;
@@ -84,26 +85,26 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static void Cleanup(LabOven station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", CategoryDryingRack);
 
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, "Cleanup: Station is null", CategoryDryingRack);
         return;
       }
 
       ItemFields.Remove(station.GUID);
       QualityFields.Remove(station.GUID);
       StationRefillLists.Remove(station.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
+      Log(Level.Info, $"Cleanup: Removed data for station {station.GUID}", CategoryDryingRack);
     }
 
     public static List<ItemInstance> GetRefillList(LabOven station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetRefillList: Retrieving for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"GetRefillList: Retrieving for station {station?.GUID.ToString() ?? "null"}", Category.LabOven);
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "GetRefillList: Station is null", DebugLogger.Category.LabOven);
+        Log(Level.Warning, "GetRefillList: Station is null", Category.LabOven);
         return new List<ItemInstance>();
       }
 
@@ -121,22 +122,22 @@ namespace NoLazyWorkers.Stations
           {
             prodItem.SetQuality(qualities[i].Value);
             items.Add(prodItem);
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", DebugLogger.Category.LabOven);
+            Log(Level.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", Category.LabOven);
           }
         }
       }
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", DebugLogger.Category.LabOven);
+      Log(Level.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", Category.LabOven);
       return items;
     }
 
     public static void InitializeItemFields(LabOven station, LabOvenConfiguration config)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Starting for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"InitializeItemFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
         if (station == null || config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeItemFields: Station or config is null", DebugLogger.Category.LabOven);
+          Log(Level.Error, "InitializeItemFields: Station or config is null", Category.LabOven);
           return;
         }
 
@@ -144,7 +145,7 @@ namespace NoLazyWorkers.Stations
         if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
           IStations[station.ParentProperty][guid] = new LabOvenAdapter(station);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Created adapter for station {guid}", DebugLogger.Category.LabOven);
+          Log(Level.Info, $"InitializeItemFields: Created adapter for station {guid}", Category.LabOven);
         }
 
         if (!StationRefillLists.ContainsKey(guid))
@@ -168,13 +169,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count && refills[i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set quality {quality} for index {i}", DebugLogger.Category.LabOven);
+                Log(Level.Verbose, $"InitializeItemFields: Set quality {quality} for index {i}", Category.LabOven);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed to set quality for index {i}, error: {e.Message}", DebugLogger.Category.LabOven);
+              Log(Level.Error, $"InitializeItemFields: Failed to set quality for index {i}, error: {e.Message}", Category.LabOven);
             }
           });
           qualityFields.Add(qualityField);
@@ -189,13 +190,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count)
               {
                 refills[i] = item?.GetDefaultInstance();
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i}", DebugLogger.Category.LabOven);
+                Log(Level.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i}", Category.LabOven);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed to set item for index {i}, error: {e.Message}", DebugLogger.Category.LabOven);
+              Log(Level.Error, $"InitializeItemFields: Failed to set item for index {i}, error: {e.Message}", Category.LabOven);
             }
           });
           itemFields.Add(itemField);
@@ -203,11 +204,11 @@ namespace NoLazyWorkers.Stations
 
         ItemFields[guid] = itemFields;
         QualityFields[guid] = qualityFields;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeItemFields: Initialized {itemFields.Count} fields for station {guid}", DebugLogger.Category.LabOven);
+        Log(Level.Info, $"InitializeItemFields: Initialized {itemFields.Count} fields for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeItemFields: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"InitializeItemFields: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
@@ -219,7 +220,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Bind")]
     static void BindPostfix(LabOvenConfigPanel __instance, List<EntityConfiguration> configs)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", Category.LabOven);
       try
       {
         __instance.DestinationUI?.gameObject.SetActive(false);
@@ -231,7 +232,7 @@ namespace NoLazyWorkers.Stations
 
         if (itemFieldTemplate == null || qualityFieldTemplate == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "BindPostfix: Missing UI templates", DebugLogger.Category.LabOven);
+          Log(Level.Error, "BindPostfix: Missing UI templates", Category.LabOven);
           return;
         }
 
@@ -309,12 +310,12 @@ namespace NoLazyWorkers.Stations
 
           itemFieldUI.Bind(itemFieldLists[i]);
           qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityFieldLists[i]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Bound {LabOvenConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} fields", DebugLogger.Category.LabOven);
+          Log(Level.Info, $"BindPostfix: Bound {LabOvenConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} fields", Category.LabOven);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"BindPostfix: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
@@ -326,7 +327,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(LabOven) })]
     static void ConstructorPostfix(LabOvenConfiguration __instance, LabOven oven)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ConstructorPostfix: Starting for station {oven?.GUID.ToString() ?? "null"}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"ConstructorPostfix: Starting for station {oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
         if (!ItemFields.ContainsKey(oven.GUID))
@@ -334,7 +335,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ConstructorPostfix: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"ConstructorPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
 
@@ -350,7 +351,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(LabOvenConfiguration __instance, ref string __result)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
         if (__instance?.Oven == null) return;
@@ -374,11 +375,11 @@ namespace NoLazyWorkers.Stations
         }
 
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", DebugLogger.Category.LabOven);
+        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
 
@@ -386,7 +387,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Destroy")]
     static void DestroyPostfix(LabOvenConfiguration __instance)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DestroyPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"DestroyPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
         if (__instance?.Oven != null)
@@ -394,7 +395,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"DestroyPostfix: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"DestroyPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
@@ -406,7 +407,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Load")]
     static void LoadPostfix(string mainPath)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Starting for {mainPath}", DebugLogger.Category.LabOven);
+      Log(Level.Verbose, $"LoadPostfix: Starting for {mainPath}", Category.LabOven);
       try
       {
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null || !(gridItem is LabOven station))
@@ -459,11 +460,11 @@ namespace NoLazyWorkers.Stations
           }
         }
 
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadPostfix: Loaded config for station {guid}", DebugLogger.Category.LabOven);
+        Log(Level.Info, $"LoadPostfix: Loaded config for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Failed, error: {e.Message}", DebugLogger.Category.LabOven);
+        Log(Level.Error, $"LoadPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }

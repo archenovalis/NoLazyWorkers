@@ -12,7 +12,7 @@ using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Constants;
 using NoLazyWorkers.Stations;
 using static NoLazyWorkers.Storage.Utilities;
-using NoLazyWorkers.Employees.Tasks.Packagers;
+using static NoLazyWorkers.Debug;
 using UnityEngine;
 
 namespace NoLazyWorkers.Employees
@@ -25,7 +25,7 @@ namespace NoLazyWorkers.Employees
         : base(packager, adapter)
     {
       _packager = packager ?? throw new ArgumentNullException(nameof(packager));
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"PackagerBehaviour: Initialized for NPC {_packager.fullName}", DebugLogger.Category.Handler);
+      Log(Level.Info, $"PackagerBehaviour: Initialized for NPC {_packager.fullName}", Category.Handler);
     }
 
     [HarmonyPatch(typeof(Packager))]
@@ -39,7 +39,7 @@ namespace NoLazyWorkers.Employees
         {
           if (__instance == null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Error, "UpdateBehaviourPrefix: Packager instance is null", DebugLogger.Category.Handler);
+            Log(Level.Error, "UpdateBehaviourPrefix: Packager instance is null", Category.Handler);
             return false;
           }
 
@@ -52,9 +52,9 @@ namespace NoLazyWorkers.Employees
               float elapsed = Time.time - requestTime;
               if (elapsed < ADAPTER_DELAY_SECONDS)
               {
-                DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+                Log(Level.Verbose,
                     $"UpdateBehaviourPrefix: Delaying adapter for NPC={__instance.fullName}, {ADAPTER_DELAY_SECONDS - elapsed:F2}s remaining",
-                    DebugLogger.Category.Chemist);
+                    Category.Chemist);
                 return false;
               }
 
@@ -62,17 +62,17 @@ namespace NoLazyWorkers.Employees
               employeeAdapter = new PackagerAdapter(__instance);
               EmployeeAdapters[__instance.GUID] = employeeAdapter;
               PendingAdapters.Remove(__instance.GUID); // Cleanup
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"UpdateBehaviourPrefix: Registered ChemistAdapter for NPC={__instance.fullName} after {elapsed:F2}s delay",
-                  DebugLogger.Category.Chemist);
+                  Category.Chemist);
             }
             else
             {
               // First request, record timestamp and skip behavior
               PendingAdapters[__instance.GUID] = Time.time;
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"UpdateBehaviourPrefix: Initiated {ADAPTER_DELAY_SECONDS}s delay for NPC={__instance.fullName}",
-                  DebugLogger.Category.Chemist);
+                  Category.Chemist);
               return false;
             }
           }
@@ -135,12 +135,12 @@ namespace NoLazyWorkers.Employees
             __instance.MarkIsWorking();
             return false;
           }
-          state.EmployeeBeh.Update().GetAwaiter().GetResult();
+          state.AdvBehaviour.Update().GetAwaiter().GetResult();
           return false;
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"UpdateBehaviourPrefix: Failed for packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Handler);
+          Log(Level.Error, $"UpdateBehaviourPrefix: Failed for packager {__instance?.fullName ?? "null"}, error: {e}", Category.Handler);
           __instance?.SetIdle(true);
           return false;
         }
@@ -152,12 +152,12 @@ namespace NoLazyWorkers.Employees
       {
         try
         {
-          GetState(__instance).EmployeeBeh.Disable().GetAwaiter().GetResult();
+          GetState(__instance).AdvBehaviour.Disable().GetAwaiter().GetResult();
           EmployeeAdapters.Remove(__instance.GUID);
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"PackagerFirePatch: Failed for Packager {__instance?.fullName ?? "null"}, error: {e}", DebugLogger.Category.Handler);
+          Log(Level.Error, $"PackagerFirePatch: Failed for Packager {__instance?.fullName ?? "null"}, error: {e}", Category.Handler);
         }
       }
     }

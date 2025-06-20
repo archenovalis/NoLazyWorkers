@@ -907,9 +907,9 @@ namespace NoLazyWorkers.TaskEngine
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           "TaskValidationManager.Initialize: Subscribing to TimeManager.OnTick and registering validators",
           DebugLogger.Category.TaskManager);
-      InstanceFinder.TimeManager.OnTick += ProcessPendingValidations;
-      InstanceFinder.TimeManager.OnTick += ProcessPendingCompletions;
-      InstanceFinder.TimeManager.OnTick += ProcessPendingRevalidations;
+      TimeManager.OnTick += ProcessPendingValidations;
+      TimeManager.OnTick += ProcessPendingCompletions;
+      TimeManager.OnTick += ProcessPendingRevalidations;
 
       Utilities.InitializeTasks();
     }
@@ -930,9 +930,9 @@ namespace NoLazyWorkers.TaskEngine
         if (job.TaskKeys.IsCreated) job.TaskKeys.Dispose();
         if (job.TasksToRevalidate.IsCreated) job.TasksToRevalidate.Dispose();
       }
-      InstanceFinder.TimeManager.OnTick -= ProcessPendingValidations;
-      InstanceFinder.TimeManager.OnTick -= ProcessPendingCompletions;
-      InstanceFinder.TimeManager.OnTick -= ProcessPendingRevalidations;
+      TimeManager.OnTick -= ProcessPendingValidations;
+      TimeManager.OnTick -= ProcessPendingCompletions;
+      TimeManager.OnTick -= ProcessPendingRevalidations;
       _registeredValidators.Clear();
       foreach (var kvp in _pendingSingleRevalidations)
       {
@@ -1377,8 +1377,8 @@ namespace NoLazyWorkers.TaskEngine
       DebugLogger.Log(DebugLogger.LogLevel.Info,
           "TaskManager.Initialize: Subscribing to TimeManager.OnTick and initializing tasks",
           DebugLogger.Category.EmployeeCore);
-      InstanceFinder.TimeManager.OnTick += ProcessPendingUpdates;
-      InstanceFinder.TimeManager.OnTick += QueuePeriodicUpdates;
+      TimeManager.OnTick += ProcessPendingUpdates;
+      TimeManager.OnTick += QueuePeriodicUpdates;
       TaskValidationManager.Initialize();
       // initializing properties is handled by employeebehaviour initialization
       //// Initialize tasks for all active properties
@@ -1729,8 +1729,8 @@ namespace NoLazyWorkers.TaskEngine
       foreach (var kvp in _nativeSpecificShelvesCache)
         if (kvp.Value.IsCreated) kvp.Value.Dispose();
       TaskValidationManager.Cleanup();
-      InstanceFinder.TimeManager.OnTick -= ProcessPendingUpdates;
-      InstanceFinder.TimeManager.OnTick -= QueuePeriodicUpdates;
+      TimeManager.OnTick -= ProcessPendingUpdates;
+      TimeManager.OnTick -= QueuePeriodicUpdates;
       _disabledTasks.Clear();
       _availableEmployeeTypes.Clear();
     }

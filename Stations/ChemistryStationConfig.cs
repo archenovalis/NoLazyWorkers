@@ -23,6 +23,7 @@ using ScheduleOne.Property;
 using NoLazyWorkers.Storage;
 using ScheduleOne.StationFramework;
 using ScheduleOne.EntityFramework;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Stations
 {
@@ -50,7 +51,7 @@ namespace NoLazyWorkers.Stations
           Extensions.IStations[station.ParentProperty] = propertyStations;
         }
         propertyStations.Add(GUID, this);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"ChemistryStationAdapter: Initialized for station {station.GUID}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Info, $"ChemistryStationAdapter: Initialized for station {station.GUID}", Category.ChemistryStation);
       }
 
       public Guid GUID => _station.GUID;
@@ -81,27 +82,27 @@ namespace NoLazyWorkers.Stations
     /// </summary>
     public static void Cleanup(ChemistryStation station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.DryingRack);
+      Log(Level.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", CategoryDryingRack);
 
       if (station == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "Cleanup: Station is null", DebugLogger.Category.DryingRack);
+        Log(Level.Warning, "Cleanup: Station is null", CategoryDryingRack);
         return;
       }
 
       RecipeFields.Remove(station.GUID);
       StationRefillLists.Remove(station.GUID);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Cleanup: Removed data for station {station.GUID}", DebugLogger.Category.DryingRack);
+      Log(Level.Info, $"Cleanup: Removed data for station {station.GUID}", CategoryDryingRack);
     }
 
     public static void InitializeRecipeFields(ChemistryStation station, ChemistryStationConfiguration config)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeRecipeFields: Starting for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"InitializeRecipeFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.ChemistryStation);
       try
       {
         if (station == null || config == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InitializeRecipeFields: Station or config is null", DebugLogger.Category.ChemistryStation);
+          Log(Level.Error, "InitializeRecipeFields: Station or config is null", Category.ChemistryStation);
           return;
         }
 
@@ -109,7 +110,7 @@ namespace NoLazyWorkers.Stations
         if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
           IStations[station.ParentProperty][guid] = new ChemistryStationAdapter(station);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeRecipeFields: Created adapter for station {guid}", DebugLogger.Category.ChemistryStation);
+          Log(Level.Info, $"InitializeRecipeFields: Created adapter for station {guid}", Category.ChemistryStation);
         }
 
         if (!StationRefillLists.ContainsKey(guid))
@@ -122,18 +123,18 @@ namespace NoLazyWorkers.Stations
           recipeField.onRecipeChanged.RemoveAllListeners();
           recipeField.onRecipeChanged.AddListener(recipe =>
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InitializeRecipeFields: Set recipe {recipe?.RecipeID ?? "null"} for index {i}", DebugLogger.Category.ChemistryStation);
+            Log(Level.Verbose, $"InitializeRecipeFields: Set recipe {recipe?.RecipeID ?? "null"} for index {i}", Category.ChemistryStation);
             config.InvokeChanged();
           });
           recipeFields.Add(recipeField);
         }
 
         RecipeFields[guid] = recipeFields;
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"InitializeRecipeFields: Initialized {recipeFields.Count} fields for station {guid}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Info, $"InitializeRecipeFields: Initialized {recipeFields.Count} fields for station {guid}", Category.ChemistryStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"InitializeRecipeFields: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"InitializeRecipeFields: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
   }
@@ -145,14 +146,14 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Bind")]
     static void BindPostfix(ChemistryStationConfigPanel __instance, List<EntityConfiguration> configs)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", Category.ChemistryStation);
       try
       {
         __instance.DestinationUI?.gameObject.SetActive(false);
         var recipeFieldTemplate = __instance.RecipeUI.gameObject;
         if (recipeFieldTemplate == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "BindPostfix: Missing recipe field template", DebugLogger.Category.ChemistryStation);
+          Log(Level.Error, "BindPostfix: Missing recipe field template", Category.ChemistryStation);
           return;
         }
 
@@ -198,12 +199,12 @@ namespace NoLazyWorkers.Stations
           }
 
           recipeFieldUI.Bind(recipeFieldLists[i]);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"BindPostfix: Bound {ChemistryStationConstants.RecipeFieldUIPrefix}{i} to {recipeFieldLists[i].Count} fields", DebugLogger.Category.ChemistryStation);
+          Log(Level.Info, $"BindPostfix: Bound {ChemistryStationConstants.RecipeFieldUIPrefix}{i} to {recipeFieldLists[i].Count} fields", Category.ChemistryStation);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"BindPostfix: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
   }
@@ -215,7 +216,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(ChemistryStation) })]
     static void ConstructorPostfix(ChemistryStationConfiguration __instance, ChemistryStation station)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ConstructorPostfix: Starting for station {station?.GUID.ToString() ?? "null"}", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"ConstructorPostfix: Starting for station {station?.GUID.ToString() ?? "null"}", Category.ChemistryStation);
       try
       {
         if (!RecipeFields.ContainsKey(station.GUID))
@@ -223,7 +224,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ConstructorPostfix: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"ConstructorPostfix: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
 
@@ -239,7 +240,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(ChemistryStationConfiguration __instance, ref string __result)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", Category.ChemistryStation);
       try
       {
         if (__instance?.Station == null) return;
@@ -252,11 +253,11 @@ namespace NoLazyWorkers.Stations
           json["RecipeFields"] = recipeFieldsData;
         }
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {__instance.Station.GUID}", Category.ChemistryStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
 
@@ -264,7 +265,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Destroy")]
     static void DestroyPostfix(ChemistryStationConfiguration __instance)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"DestroyPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"DestroyPostfix: Starting for station {__instance?.Station?.GUID.ToString() ?? "null"}", Category.ChemistryStation);
       try
       {
         if (__instance?.Station != null)
@@ -272,7 +273,7 @@ namespace NoLazyWorkers.Stations
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"DestroyPostfix: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"DestroyPostfix: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
   }
@@ -284,7 +285,7 @@ namespace NoLazyWorkers.Stations
     [HarmonyPatch("Load")]
     static void LoadPostfix(string mainPath)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"LoadPostfix: Starting for {mainPath}", DebugLogger.Category.ChemistryStation);
+      Log(Level.Verbose, $"LoadPostfix: Starting for {mainPath}", Category.ChemistryStation);
       try
       {
         if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null || !(gridItem is ChemistryStation station))
@@ -330,11 +331,11 @@ namespace NoLazyWorkers.Stations
             }
           }
         }
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"LoadPostfix: Loaded config for station {guid}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Info, $"LoadPostfix: Loaded config for station {guid}", Category.ChemistryStation);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"LoadPostfix: Failed, error: {e.Message}", DebugLogger.Category.ChemistryStation);
+        Log(Level.Error, $"LoadPostfix: Failed, error: {e.Message}", Category.ChemistryStation);
       }
     }
   }

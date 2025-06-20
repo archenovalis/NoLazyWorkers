@@ -33,6 +33,12 @@ using UnityEngine.AI;
 using ScheduleOne.NPCs;
 using NoLazyWorkers.TaskService;
 using FishNet.Managing.Timing;
+using UnityEngine.InputSystem.EnhancedTouch;
+using NoLazyWorkers.Metrics;
+using static NoLazyWorkers.NoLazyUtilities;
+using Unity.Collections;
+using Unity.Burst;
+using static NoLazyWorkers.Debug;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -46,12 +52,16 @@ namespace NoLazyWorkers
     public static bool All = true; // enables all but stacktrace logs
     public static bool Core = true;
     public static bool Settings = false;
+    public static bool Movement = false;
+    public static bool Jobs = true;
     // employees
     public static bool AllEmployees = false;
     public static bool EmployeeCore = true;
     public static bool Chemist = false;
+    public static bool Cleaner = false;
+    public static bool Driver = false;
     public static bool Botanist = true;
-    public static bool Packager = true;
+    public static bool Handler = true;
     // generic
     public static bool Storage = true;
     public static bool General = true;
@@ -65,22 +75,50 @@ namespace NoLazyWorkers
     public static bool MixingStation = false;
     public static bool PackagingStation = true;
     //
-    public static bool TaskManager = true;
+    public static bool Tasks = true;
     public static bool Stacktrace = false;
+    public static bool Performance = false;
   }
 
-  public static class DebugLogger
+  public static class Debug
   {
-    public enum LogLevel { None, Error, Warning, Info, Verbose, Stacktrace }
+    /// <summary>
+    /// Processes deferred logs from Burst jobs.
+    /// </summary>
+    public static class Deferred
+    {
+      public static void ProcessLogs(NativeList<LogEntry> logs)
+      {
+        foreach (var log in logs)
+          Log(log.Level, log.Message.ToString(), log.Category);
+        logs.Dispose();
+      }
+
+      /// <summary>
+      /// Represents a log entry for deferred logging in Burst jobs.
+      /// </summary>
+      [BurstCompile]
+      public struct LogEntry
+      {
+        public FixedString128Bytes Message;
+        public Level Level;
+        public Category Category;
+      }
+    }
+
+    public enum Level { None, Error, Warning, Info, Verbose, Stacktrace }
     public enum Category
     {
       None,
       Core,
       Settings,
-      AllEmployees,
+      Movement,
+      Jobs,
       AnyEmployee,
       EmployeeCore,
       Chemist,
+      Cleaner,
+      Driver,
       Botanist,
       Handler,
       Storage,
@@ -93,23 +131,31 @@ namespace NoLazyWorkers
       ChemistryStation,
       MixingStation,
       General,
-      TaskManager,
-      Stacktrace
+      Tasks,
+      Stacktrace,
+      Performance
     }
     public static bool AnyEmployee;
-    public static LogLevel CurrentLevel { get; set; } = (LogLevel)DebugLogs.Level;
+    public static Level CurrentLevel { get; set; } = (Level)DebugLogs.Level;
 
     private static readonly Dictionary<Category, Func<bool>> CategoryEnabled = new()
     {
         { Category.Core, () => DebugLogs.Core },
+        // services
+        { Category.Tasks, () => DebugLogs.Tasks },
         { Category.Settings, () => DebugLogs.Settings },
-        { Category.AllEmployees, () => DebugLogs.AllEmployees },
+        { Category.Movement, () => DebugLogs.Movement },
+        { Category.Jobs, () => DebugLogs.Jobs },
+        { Category.Storage, () => DebugLogs.Storage },
+        // employees
         { Category.AnyEmployee, () => AnyEmployee },
         { Category.EmployeeCore, () => DebugLogs.EmployeeCore },
         { Category.Chemist, () => DebugLogs.Chemist },
+        { Category.Cleaner, () => DebugLogs.Cleaner },
+        { Category.Driver, () => DebugLogs.Driver },
         { Category.Botanist, () => DebugLogs.Botanist },
-        { Category.Handler, () => DebugLogs.Packager },
-        { Category.Storage, () => DebugLogs.Storage },
+        { Category.Handler, () => DebugLogs.Handler },
+        // stations
         { Category.Pot, () => DebugLogs.Pot },
         { Category.BrickPress, () => DebugLogs.BrickPress },
         { Category.Cauldron, () => DebugLogs.Cauldron },
@@ -119,20 +165,21 @@ namespace NoLazyWorkers
         { Category.General, () => DebugLogs.General },
         { Category.MixingStation, () => DebugLogs.MixingStation },
         { Category.PackagingStation, () => DebugLogs.PackagingStation },
+        // other
+        { Category.Performance, () => DebugLogs.Performance },
         { Category.Stacktrace, () => DebugLogs.Stacktrace },
-        { Category.TaskManager, () => DebugLogs.TaskManager },
         { Category.None, () => true } // Always enabled if All is true
     };
 
-    public static void Log(LogLevel level, string message, params Category[] categories)
+    private static readonly Dictionary<Category, bool> CachedCategoryEnabled = new();
+    public static void Log(Level level, string message, params Category[] categories)
     {
       if (!DebugLogs.Enabled || level > CurrentLevel)
         return;
 
-      // Determine if any category is enabled
-      AnyEmployee = DebugLogs.Chemist || DebugLogs.Botanist || DebugLogs.Packager;
-      bool isEnabled = DebugLogs.All || categories.Any(c => c != Category.Stacktrace && CategoryEnabled[c]());
-      if (!isEnabled)
+      AnyEmployee = DebugLogs.Chemist || DebugLogs.Botanist || DebugLogs.Handler || DebugLogs.Cleaner || DebugLogs.Driver;
+      if (!DebugLogs.All && !categories.Any(c => c != Category.Stacktrace &&
+          CachedCategoryEnabled.GetOrAdd(c, _ => CategoryEnabled[c]())))
         return;
 
       // Get the first non-Stacktrace category for labeling (or "None" if only Stacktrace)
@@ -150,10 +197,10 @@ namespace NoLazyWorkers
       // Output to MelonLogger
       switch (level)
       {
-        case LogLevel.Error:
+        case Level.Error:
           MelonLogger.Error(fullMessage);
           break;
-        case LogLevel.Warning:
+        case Level.Warning:
           MelonLogger.Warning(fullMessage);
           break;
         default:
@@ -185,7 +232,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to initialize NoLazyWorkers_Alternative: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"Failed to initialize NoLazyWorkers_Alternative: {e}", Category.Core);
       }
 
       Instance = this;
@@ -193,13 +240,13 @@ namespace NoLazyWorkers
       if (File.Exists(configPath))
       {
         Config = Settings.Default.LoadFromFile(configPath);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "Config loaded.", DebugLogger.Category.Core);
+        Log(Level.Info, "Config loaded.", Category.Core);
       }
       else
       {
         Config = new Settings.Default();
         Config.SaveToFile(configPath);
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "Default config created.", DebugLogger.Category.Core);
+        Log(Level.Info, "Default config created.", Category.Core);
       }
 
       MelonEvents.OnSceneWasLoaded.Subscribe(OnSceneWasLoaded);
@@ -210,71 +257,137 @@ namespace NoLazyWorkers
       if (sceneName == "Main")
       {
         var configure = new Settings.Configure();
-        MelonCoroutines.Start(configure.ApplyOneShotSettingsRoutine());
-        DebugLogger.Log(DebugLogger.LogLevel.Info, "Applied Fixer and Misc settings on main scene load.", DebugLogger.Category.Core);
+        _ = CoroutineRunner.Instance;
+        CoroutineRunner.Instance.RunCoroutine(configure.ApplyOneShotSettingsRoutine());
+        Log(Level.Info, "Applied Fixer and Misc settings on main scene load.", Category.Core);
         MixingStationConfigUtilities.InitializeStaticRouteListTemplate();
         ShelfUtilities.InitializeStorageModule();
-        CacheManager.Initialize();
-        TaskCoordinator.Initialize();
+        TaskServiceManager.Initialize();
+        Performance.Initialize();
+        TimeManagerExtensions.TimeManagerInstance = InstanceFinder.TimeManager;
       }
     }
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
-      NoLazyUtilities.ClearPrefabs();
-      Employees.Utilities.ClearAll();
+      ClearPrefabs();
+      Employees.Utilities.Clear();
       NoLazyWorkersExtensions.NPCSupply.Clear();
       Settings.SettingsExtensions.Configured.Clear();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", DebugLogger.Category.Core);
+      TaskServiceManager.Clear();
+      Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
     }
   }
 
   public static class TimeManagerExtensions
   {
+    public static TimeManager TimeManagerInstance;
+    private static readonly ConcurrentDictionary<TimeManager, ConcurrentDictionary<double, TaskCompletionSource<bool>>> _tickAwaiters = new();
+
     /// <summary>
     /// Asynchronously waits for the next FishNet TimeManager tick.
     /// </summary>
-    /// <param name="timeManager">The FishNet TimeManager instance.</param>
+    /// <param name="TimeManagerInstance">The FishNet TimeManager instance.</param>
     /// <returns>A Task that completes on the next tick.</returns>
-    public static async Task AwaitNextTickAsync(this TimeManager timeManager)
+    private static Task AwaitNextTickAsyncInternal()
     {
-      var tcs = new TaskCompletionSource<bool>();
-      double currentTick = timeManager.Tick;
+      var tick = TimeManagerInstance.Tick;
+      var awaiters = _tickAwaiters.GetOrAdd(TimeManagerInstance, _ => new ConcurrentDictionary<double, TaskCompletionSource<bool>>());
+      if (awaiters.TryGetValue(tick + 1, out var tcs))
+        return tcs.Task;
+
+      tcs = new TaskCompletionSource<bool>();
+      if (!awaiters.TryAdd(tick + 1, tcs))
+        return awaiters[tick + 1].Task;
 
       void OnTick()
       {
-        if (timeManager.Tick > currentTick)
-        {
-          timeManager.OnTick -= OnTick;
-          tcs.SetResult(true);
-        }
+        if (TimeManagerInstance.Tick <= tick) return;
+        TimeManagerInstance.OnTick -= OnTick;
+        awaiters.TryRemove(tick + 1, out _);
+        tcs.TrySetResult(true);
       }
-
-      timeManager.OnTick += OnTick;
-      await tcs.Task;
+      TimeManagerInstance.OnTick += OnTick;
+      return tcs.Task;
     }
 
     /// <summary>
     /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
     /// </summary>
-    /// <param name="timeManager">The FishNet TimeManager instance.</param>
+    /// <param name="TimeManagerInstance">The FishNet TimeManager instance.</param>
     /// <param name="seconds">The duration to wait in seconds.</param>
     /// <returns>A Task that completes after the specified delay.</returns>
-    public static async Task AwaitNextTickAsync(this TimeManager timeManager, float seconds)
+    public static async Task AwaitNextFishNetTickAsync(float seconds = 0)
     {
-      if (seconds <= 0f)
+      if (seconds < 0f)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", DebugLogger.Category.TaskManager);
+        Log(Level.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", Category.Tasks);
         return;
       }
 
-      int ticksToWait = Mathf.CeilToInt(seconds * timeManager.TickRate);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {timeManager.TickRate}", DebugLogger.Category.TaskManager);
-
-      for (int i = 0; i < ticksToWait; i++)
+      if (seconds > 0f)
       {
-        await timeManager.AwaitNextTickAsync();
+        int ticksToWait = Mathf.CeilToInt(seconds * TimeManagerInstance.TickRate);
+        Log(Level.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {TimeManagerInstance.TickRate}", Category.Tasks);
+
+        for (int i = 0; i < ticksToWait; i++)
+        {
+          await AwaitNextTickAsyncInternal();
+        }
       }
+      else
+        await AwaitNextTickAsyncInternal();
+    }
+
+    public static IEnumerator WaitForNextTick()
+    {
+      long currentTick = TimeManagerInstance.Tick;
+      while (TimeManagerInstance.Tick == currentTick)
+        yield return null;
+    }
+
+    public static int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs = 0.15f, string methodName = null)
+    {
+      float TICK_DURATION_MS = 1000f / TimeManagerInstance.TickRate; // Dynamic tick rate
+      const float MAX_TICK_USAGE = 0.5f; // Use up to 50% of tick
+      float avgProcessingTimeMs = methodName != null
+          ? DynamicProfiler.GetDynamicAvgProcessingTimeMs(methodName, defaultAvgProcessingTimeMs)
+          : defaultAvgProcessingTimeMs;
+      int maxItemsPerTick = Mathf.FloorToInt(TICK_DURATION_MS * MAX_TICK_USAGE / avgProcessingTimeMs);
+      return Mathf.Clamp(totalItems / 10, Mathf.Min(5, maxItemsPerTick), Mathf.Min(50, maxItemsPerTick));
+    }
+  }
+
+  public static class TaskExtensions
+  {
+    public static TaskYieldInstruction AsCoroutine(this Task task) => new TaskYieldInstruction(task);
+    public static TaskYieldInstruction<T> AsCoroutine<T>(this Task<T> task) => new TaskYieldInstruction<T>(task);
+
+    /// <summary>
+    /// Custom yield instruction to wait for a Task in a Unity coroutine.
+    /// </summary>
+    public class TaskYieldInstruction : CustomYieldInstruction
+    {
+      private readonly Task _task;
+
+      public TaskYieldInstruction(Task task)
+      {
+        _task = task ?? throw new ArgumentNullException(nameof(task));
+      }
+
+      public override bool keepWaiting => !_task.IsCompleted;
+    }
+    public class TaskYieldInstruction<T> : CustomYieldInstruction
+    {
+      private readonly Task<T> _task;
+
+      public TaskYieldInstruction(Task<T> task)
+      {
+        _task = task ?? throw new ArgumentNullException(nameof(task));
+      }
+
+      public override bool keepWaiting => !_task.IsCompleted;
+      public T Result => _task.IsCompleted ? _task.Result : default;
     }
   }
 
@@ -283,6 +396,35 @@ namespace NoLazyWorkers
     public static int GetListenerCount(this UnityEventBase unityEvent)
     {
       return unityEvent.GetPersistentEventCount() + unityEvent.m_Calls.Count;
+    }
+  }
+
+  public static class DictionaryExtensions
+  {
+    /// <summary>
+    /// Gets the value associated with the specified key, or adds a new value using the provided factory if the key doesn't exist.
+    /// </summary>
+    /// <typeparam name="TKey">The type of the keys in the dictionary.</typeparam>
+    /// <typeparam name="TValue">The type of the values in the dictionary.</typeparam>
+    /// <param name="dictionary">The dictionary to operate on.</param>
+    /// <param name="key">The key to look up or add.</param>
+    /// <param name="valueFactory">The function to create a new value if the key is not found.</param>
+    /// <returns>The existing or newly added value.</returns>
+    public static TValue GetOrAdd<TKey, TValue>(this Dictionary<TKey, TValue> dictionary, TKey key, Func<TKey, TValue> valueFactory)
+    {
+      if (dictionary == null)
+        throw new ArgumentNullException(nameof(dictionary));
+      if (key == null)
+        throw new ArgumentNullException(nameof(key));
+      if (valueFactory == null)
+        throw new ArgumentNullException(nameof(valueFactory));
+
+      if (dictionary.TryGetValue(key, out var value))
+        return value;
+
+      value = valueFactory(key);
+      dictionary[key] = value;
+      return value;
     }
   }
 
@@ -329,7 +471,7 @@ namespace NoLazyWorkers
     }
     public static void LogHierarchy(Transform transform, int depth = 0)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"{new string(' ', depth * 2)}{transform.name}", DebugLogger.Category.MixingStation);
+      Log(Level.Info, $"{new string(' ', depth * 2)}{transform.name}", Category.MixingStation);
       for (int i = 0; i < transform.childCount; i++)
       {
         LogHierarchy(transform.GetChild(i), depth + 1);
@@ -396,9 +538,9 @@ namespace NoLazyWorkers
         }
       }
 
-      public void RunCoroutine(IEnumerator coroutine)
+      public Coroutine RunCoroutine(IEnumerator coroutine)
       {
-        StartCoroutine(RunCoroutineInternal(coroutine));
+        return StartCoroutine(RunCoroutineInternal(coroutine));
       }
 
       private IEnumerator RunCoroutineInternal(IEnumerator coroutine)
@@ -414,16 +556,16 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core);
+            Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
             yield break;
           }
           yield return current;
         }
       }
 
-      public void RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
+      public Coroutine RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
       {
-        StartCoroutine(RunCoroutineInternal(coroutine, callback));
+        return StartCoroutine(RunCoroutineInternal(coroutine, callback));
       }
 
       private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, Action<T> callback)
@@ -439,7 +581,7 @@ namespace NoLazyWorkers
           }
           catch (Exception e)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", DebugLogger.Category.Core);
+            Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
             callback?.Invoke(default);
             yield break;
           }
@@ -481,14 +623,14 @@ namespace NoLazyWorkers
             break;
           // Add other types as needed
           default:
-            DebugLogger.Log(DebugLogger.LogLevel.Error, $"Unsupported EConfigurableType: {configType}", DebugLogger.Category.Core);
+            Log(Level.Error, $"Unsupported EConfigurableType: {configType}", Category.Core);
             UnityEngine.Object.Destroy(dummyEntity);
             return null;
         }
 
         if (configPanelPrefab == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"No ConfigPanel prefab found for {configType}", DebugLogger.Category.Core);
+          Log(Level.Error, $"No ConfigPanel prefab found for {configType}", Category.Core);
           return null;
         }
 
@@ -497,7 +639,7 @@ namespace NoLazyWorkers
         ConfigPanel tempPanel = tempPanelObj.GetComponent<ConfigPanel>();
         if (tempPanel == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Instantiated prefab for {configType} lacks ConfigPanel component", DebugLogger.Category.Core);
+          Log(Level.Error, $"Instantiated prefab for {configType} lacks ConfigPanel component", Category.Core);
           UnityEngine.Object.Destroy(tempPanelObj);
           return null;
         }
@@ -506,14 +648,14 @@ namespace NoLazyWorkers
         List<EntityConfiguration> configs = [];
         configs.Add(config);
         tempPanel.Bind(configs);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Bound temporary ConfigPanel for {configType} to initialize UI components", DebugLogger.Category.Core);
+        Log(Level.Verbose, $"Bound temporary ConfigPanel for {configType} to initialize UI components", Category.Core);
 
         // Get the UI template
         var uiTemplate = tempPanel.transform.Find(componentStr);
         if (uiTemplate == null)
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed to retrieve UI template from ConfigPanel for {configType}", DebugLogger.Category.Core);
+          Log(Level.Error, $"Failed to retrieve UI template from ConfigPanel for {configType}", Category.Core);
         else
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Successfully retrieved UI template from ConfigPanel for {configType}", DebugLogger.Category.Core);
+          Log(Level.Info, $"Successfully retrieved UI template from ConfigPanel for {configType}", Category.Core);
 
         // Clean up
         UnityEngine.Object.Destroy(tempPanelObj);
@@ -522,7 +664,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to get UI template from ConfigPanel for {configType}: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"Failed to get UI template from ConfigPanel for {configType}: {e}", Category.Core);
         return null;
       }
     }
@@ -540,7 +682,7 @@ namespace NoLazyWorkers
         {
           if (obj.name.Contains(id))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Found prefab: {obj.name}", DebugLogger.Category.Core);
+            Log(Level.Verbose, $"Found prefab: {obj.name}", Category.Core);
             prefab = obj;
             break;
           }
@@ -549,35 +691,35 @@ namespace NoLazyWorkers
         if (prefab != null)
         {
           GameObject instance = UnityEngine.Object.Instantiate(prefab);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"Instantiated prefab: {instance.name}", DebugLogger.Category.Core);
+          Log(Level.Info, $"Instantiated prefab: {instance.name}", Category.Core);
           CachedPrefabs[id] = prefab;
           return instance;
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, $"Prefab {id} not found in Resources.", DebugLogger.Category.Core);
+          Log(Level.Error, $"Prefab {id} not found in Resources.", Category.Core);
           return null;
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"Failed to find prefab: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"Failed to find prefab: {e}", Category.Core);
         return null;
       }
     }
 
     public static void LogItemFieldUIDetails(ItemFieldUI itemfieldUI)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "=== ItemFieldUI Details ===", DebugLogger.Category.Core);
+      Log(Level.Info, "=== ItemFieldUI Details ===", Category.Core);
 
       // Log basic info
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}", DebugLogger.Category.Core);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}", DebugLogger.Category.Core);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemFieldUI Type: {itemfieldUI.GetType().Name}", DebugLogger.Category.Core);
+      Log(Level.Info, $"ItemFieldUI GameObject: {(itemfieldUI.gameObject != null ? itemfieldUI.gameObject.name : "null")}", Category.Core);
+      Log(Level.Info, $"ItemFieldUI Active: {itemfieldUI.gameObject?.activeSelf}", Category.Core);
+      Log(Level.Info, $"ItemFieldUI Type: {itemfieldUI.GetType().Name}", Category.Core);
 
       // Log ItemFieldUI properties
       LogComponentDetails(itemfieldUI, 0);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "--- Hierarchy and Components ---", DebugLogger.Category.Core);
+      Log(Level.Info, "--- Hierarchy and Components ---", Category.Core);
 
       // Log hierarchy and components
       if (itemfieldUI.gameObject != null)
@@ -586,7 +728,7 @@ namespace NoLazyWorkers
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, "ItemFieldUI GameObject is null, cannot log hierarchy and components", DebugLogger.Category.Core);
+        Log(Level.Warning, "ItemFieldUI GameObject is null, cannot log hierarchy and components", Category.Core);
       }
     }
 
@@ -594,11 +736,11 @@ namespace NoLazyWorkers
     {
       if (go == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, new string(' ', indentLevel * 2) + "GameObject: null", DebugLogger.Category.Core);
+        Log(Level.Warning, new string(' ', indentLevel * 2) + "GameObject: null", Category.Core);
         return;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}", DebugLogger.Category.Core);
+      Log(Level.Verbose, new string(' ', indentLevel * 2) + $"GameObject: {go.name}, Active: {go.activeSelf}", Category.Core);
 
       // Log components on this GameObject
       foreach (var component in go.GetComponents<Component>())
@@ -628,11 +770,11 @@ namespace NoLazyWorkers
     {
       if (component == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, new string(' ', indentLevel * 2) + "Component: null", DebugLogger.Category.Core);
+        Log(Level.Warning, new string(' ', indentLevel * 2) + "Component: null", Category.Core);
         return;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}", DebugLogger.Category.Core);
+      Log(Level.Verbose, new string(' ', indentLevel * 2) + $"Component: {component.GetType().Name}", Category.Core);
 
       // Use reflection to log all public fields
       var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
@@ -642,11 +784,11 @@ namespace NoLazyWorkers
         {
           var value = field.GetValue(component);
           string valueStr = ValueToString(value);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}", DebugLogger.Category.Core);
+          Log(Level.Verbose, new string(' ', indentLevel * 2) + $"  Field: {field.Name} = {valueStr}", Category.Core);
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}", DebugLogger.Category.Core);
+          Log(Level.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get field {field.Name}: {e.Message}", Category.Core);
         }
       }
 
@@ -660,11 +802,11 @@ namespace NoLazyWorkers
         {
           var value = property.GetValue(component);
           string valueStr = ValueToString(value);
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}", DebugLogger.Category.Core);
+          Log(Level.Verbose, new string(' ', indentLevel * 2) + $"  Property: {property.Name} = {valueStr}", Category.Core);
         }
         catch (Exception e)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}", DebugLogger.Category.Core);
+          Log(Level.Stacktrace, new string(' ', indentLevel * 2) + $"  Failed to get property {property.Name}: {e.Message}", Category.Core);
         }
       }
     }
@@ -696,24 +838,24 @@ namespace NoLazyWorkers
       {
         if (option is ItemField itemField)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}", DebugLogger.Category.Core);
+          Log(Level.Info, $"ItemSetterScreenOpenPatch: Opening for ItemField, SelectedItem: {itemField.SelectedItem?.Name ?? "null"}", Category.Core);
           if (itemField.Options != null)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}", DebugLogger.Category.Core);
+            Log(Level.Info, $"ItemSetterScreenOpenPatch: ItemField options count: {itemField.Options.Count}", Category.Core);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, "ItemSetterScreenOpenPatch: ItemField Options is null", DebugLogger.Category.Core);
+            Log(Level.Warning, "ItemSetterScreenOpenPatch: ItemField Options is null", Category.Core);
           }
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}", DebugLogger.Category.Core);
+          Log(Level.Info, $"ItemSetterScreenOpenPatch: Opening for {option?.GetType().Name ?? "null"}", Category.Core);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"ItemSetterScreenOpenPatch: Prefix failed, error: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"ItemSetterScreenOpenPatch: Prefix failed, error: {e}", Category.Core);
       }
     }
   }
@@ -725,7 +867,7 @@ namespace NoLazyWorkers
       var field = obj.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
       if (field == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Field {fieldName} not found on {obj.GetType().Name}", DebugLogger.Category.Core);
+        Log(Level.Error, $"Field {fieldName} not found on {obj.GetType().Name}", Category.Core);
         return null;
       }
       return field.GetValue(obj) as T;
@@ -736,7 +878,7 @@ namespace NoLazyWorkers
       var field = obj.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
       if (field == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"Field {fieldName} not found on {obj.GetType().Name}", DebugLogger.Category.Core);
+        Log(Level.Error, $"Field {fieldName} not found on {obj.GetType().Name}", Category.Core);
         return;
       }
       field.SetValue(obj, value);
@@ -780,7 +922,7 @@ namespace NoLazyWorkers
       {
         __instance.onLoadComplete.AddListener(delegate
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Info, "onLoadComplete fired, restoring configurations", DebugLogger.Category.Core);
+          Log(Level.Info, "onLoadComplete fired, restoring configurations", Category.Core);
           PotExtensions.RestoreConfigurations();
           MixingStationConfigUtilities.RestoreConfigurations();
           //StorageExtensions.RestoreConfigurations();
@@ -788,7 +930,7 @@ namespace NoLazyWorkers
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"LoadManagerPatch.Awake failed: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"LoadManagerPatch.Awake failed: {e}", Category.Core);
       }
     }
   }
@@ -802,20 +944,20 @@ namespace NoLazyWorkers
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}", DebugLogger.Category.Core);
+        Log(Level.Info, $"GridItemLoaderPatch: Processing LoadAndCreate for mainPath: {mainPath}", Category.Core);
         if (__result != null)
         {
           LoadedGridItems[mainPath] = __result;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}", DebugLogger.Category.Core);
+          Log(Level.Info, $"GridItemLoaderPatch: Captured GridItem (type: {__result.GetType().Name}) for mainPath: {mainPath}", Category.Core);
         }
         else
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}", DebugLogger.Category.Core);
+          Log(Level.Warning, $"GridItemLoaderPatch: No GridItem returned for mainPath: {mainPath}", Category.Core);
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", DebugLogger.Category.Core);
+        Log(Level.Stacktrace, $"GridItemLoaderPatch: Postfix failed for mainPath: {mainPath}, error: {e}", Category.Core);
       }
     }
   }
@@ -825,47 +967,47 @@ namespace NoLazyWorkers
   {
     static bool Prefix(ConfigurationReplicator __instance, int fieldIndex, string value)
     {
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"ConfigurationReplicatorReceiveItemFieldPatch: Received update for fieldIndex={fieldIndex}, value={value ?? "null"}",
-          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+          Category.Core, Category.AnyEmployee);
+      Log(Level.Verbose,
           $"ConfigurationReplicatorReceiveItemFieldPatch: Fields count={__instance.Configuration.Fields.Count}",
-          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+          Category.Core, Category.AnyEmployee);
       for (int i = 0; i < __instance.Configuration.Fields.Count; i++)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             $"ConfigurationReplicatorReceiveItemFieldPatch: Fields[{i}]={__instance.Configuration.Fields[i]?.GetType().Name ?? "null"}",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
       }
 
       if (fieldIndex < 0 || fieldIndex >= __instance.Configuration.Fields.Count)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"ConfigurationReplicatorReceiveItemFieldPatch: Invalid fieldIndex={fieldIndex}, Configuration.Fields.Count={__instance.Configuration.Fields.Count}, skipping",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
         return false;
       }
 
       var itemField = __instance.Configuration.Fields[fieldIndex] as ItemField;
       if (itemField == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"ConfigurationReplicatorReceiveItemFieldPatch: No ItemField at fieldIndex={fieldIndex}, Fields[{fieldIndex}]={__instance.Configuration.Fields[fieldIndex]?.GetType().Name ?? "null"}, skipping",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
         return false;
       }
 
       if (string.IsNullOrEmpty(value) && !itemField.CanSelectNone)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"ConfigurationReplicatorReceiveItemFieldPatch: Blocked null update for ItemField with CanSelectNone={itemField.CanSelectNone}, CurrentItem={itemField.SelectedItem?.Name ?? "null"}",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
         return false;
       }
 
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"ConfigurationReplicatorReceiveItemFieldPatch: Allowing update for ItemField, CanSelectNone={itemField.CanSelectNone}, value={value}",
-          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+          Category.Core, Category.AnyEmployee);
       return true;
     }
 
@@ -873,29 +1015,29 @@ namespace NoLazyWorkers
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+        Log(Level.Verbose,
             $"ConfigurationReplicatorReceiveObjectFieldPatch: Received update for fieldIndex={fieldIndex}, value={value}",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
 
         if (__instance.Configuration is PotConfiguration potConfig && fieldIndex == 6)
         {
           if (PotExtensions.Supply.TryGetValue(potConfig.Pot.GUID, out ObjectField supply))
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
+            Log(Level.Info,
                 $"ConfigurationReplicatorReceiveObjectFieldPatch: Updated supply for pot: {potConfig.Pot.GUID}, SelectedObject: unknown because value is a string",
-                DebugLogger.Category.Core, DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+                Category.Core, Category.Botanist, Category.Pot);
           }
           else
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning,
+            Log(Level.Warning,
                 $"ConfigurationReplicatorReceiveObjectFieldPatch: No supply found for pot: {potConfig.Pot.GUID}",
-                DebugLogger.Category.Core, DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+                Category.Core, Category.Botanist, Category.Pot);
           }
         }
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}", DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+        Log(Level.Stacktrace, $"ConfigurationReplicatorReceiveObjectFieldPatch: Failed for fieldIndex={fieldIndex}, error: {e}", Category.Core, Category.AnyEmployee);
       }
     }
   }
@@ -909,17 +1051,17 @@ namespace NoLazyWorkers
     static bool Prefix(ItemField __instance, ItemDefinition item, bool network)
     {
       string callStack = Environment.StackTrace; // Capture stack trace for debugging
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"ItemFieldSetItemPatch: Called for ItemField, network={network}, CanSelectNone={__instance.CanSelectNone}, Item={item?.Name ?? "null"}, CurrentItem={__instance.SelectedItem?.Name ?? "null"}",
-          DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+          Category.Core, Category.AnyEmployee);
 
       // Anti-bounce: Block redundant updates within 0.2s
       if (!network && RecentUpdates.TryGetValue(__instance, out var recentUpdate) &&
           Time.time - recentUpdate.Time < AntiBounceWindow)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"ItemFieldSetItemPatch: Blocked redundant update for ItemField, Item={item?.Name ?? "null"}, Network={network}, TimeSinceLast={Time.time - recentUpdate.Time:F3}s\nCallStack: {callStack}",
-            DebugLogger.Category.Core, DebugLogger.Category.Chemist, DebugLogger.Category.Botanist);
+            Category.Core, Category.AnyEmployee);
         return false;
       }
 

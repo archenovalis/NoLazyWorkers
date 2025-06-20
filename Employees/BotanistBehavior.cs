@@ -8,6 +8,7 @@ using ScheduleOne.ObjectScripts;
 using ScheduleOne.Quests;
 using ScheduleOne.UI.Management;
 using UnityEngine;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Botanists
 {
@@ -22,62 +23,62 @@ namespace NoLazyWorkers.Botanists
     {
       try
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             $"BotanistConfigPanelBindPatch: Processing configs, count: {configs?.Count ?? 0}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+            Category.Botanist, Category.Botanist);
 
         if (__instance == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "BotanistConfigPanelBindPatch: __instance is null",
-              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+              Category.Botanist, Category.Botanist);
           return;
         }
 
         // Verify UI components
         if (__instance.SuppliesUI == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "BotanistConfigPanelBindPatch: SuppliesUI is null",
-              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+              Category.Botanist, Category.Botanist);
           return;
         }
         if (__instance.PotsUI == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "BotanistConfigPanelBindPatch: PotsUI is null",
-              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+              Category.Botanist, Category.Botanist);
           return;
         }
 
         // Hide SuppliesUI
         __instance.SuppliesUI.gameObject.SetActive(false);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             "BotanistConfigPanelBindPatch: Hid SuppliesUI",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+            Category.Botanist, Category.Botanist);
 
         // Move PotsUI to SuppliesUI's y-coordinate
         RectTransform suppliesRect = __instance.SuppliesUI.GetComponent<RectTransform>();
         RectTransform potsRect = __instance.PotsUI.GetComponent<RectTransform>();
         if (suppliesRect == null || potsRect == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Error,
+          Log(Level.Error,
               "BotanistConfigPanelBindPatch: SuppliesUI or PotsUI RectTransform is null",
-              DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+              Category.Botanist, Category.Botanist);
           return;
         }
 
         float suppliesY = suppliesRect.anchoredPosition.y;
         potsRect.anchoredPosition = new Vector2(potsRect.anchoredPosition.x, suppliesY);
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             $"BotanistConfigPanelBindPatch: Moved PotsUI to y={suppliesY}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+            Category.Botanist, Category.Botanist);
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"BotanistConfigPanelBindPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+            Category.Botanist, Category.Botanist);
       }
     }
   }
@@ -102,9 +103,9 @@ namespace NoLazyWorkers.Botanists
                 if (PotExtensions.Supply.TryGetValue(pot.GUID, out var potSupply) && potSupply != null)
                 {
                   __instance.AssignSuppliesEntry.Complete();
-                  DebugLogger.Log(DebugLogger.LogLevel.Info,
+                  Log(Level.Info,
                       $"QuestBotanistsMinPassPatch: Completed AssignSuppliesEntry for botanist {botanist.name}, pot {pot.name}",
-                      DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+                      Category.Botanist, Category.Pot);
                   return true;
                 }
               }
@@ -115,9 +116,9 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"QuestBotanistsMinPassPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+            Category.Botanist, Category.Pot);
         return true;
       }
     }
@@ -130,9 +131,9 @@ namespace NoLazyWorkers.Botanists
     public static void Prefix(BotanistConfiguration __instance)
     {
       __instance.Supplies.SelectedObject = null; // Clear before serialization
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
+      Log(Level.Verbose,
           $"BotanistConfigurationGetSaveStringPatch: Cleared Supplies.SelectedObject for serialization",
-          DebugLogger.Category.Botanist, DebugLogger.Category.Settings);
+          Category.Botanist, Category.Botanist);
     }
   }
 
@@ -146,9 +147,9 @@ namespace NoLazyWorkers.Botanists
       {
         if (!(__instance.Configuration is BotanistConfiguration botanistConfig))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
+          Log(Level.Warning,
               "BotanistGetDryableInSuppliesPatch: BotanistConfiguration is null",
-              DebugLogger.Category.Botanist);
+              Category.Botanist);
           __result = null;
           return false;
         }
@@ -171,9 +172,9 @@ namespace NoLazyWorkers.Botanists
             if (slot.Quantity > 0 && ItemFilter_Dryable.IsItemDryable(slot.ItemInstance))
             {
               __result = slot.ItemInstance as QualityItemInstance;
-              DebugLogger.Log(DebugLogger.LogLevel.Info,
+              Log(Level.Info,
                   $"BotanistGetDryableInSuppliesPatch: Found dryable {__result?.ID ?? "null"} in pot {pot.name}'s supply",
-                  DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+                  Category.Botanist, Category.Pot);
               return false;
             }
           }
@@ -184,9 +185,9 @@ namespace NoLazyWorkers.Botanists
       }
       catch (Exception e)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
+        Log(Level.Error,
             $"BotanistGetDryableInSuppliesPatch: Failed, error: {e}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+            Category.Botanist, Category.Pot);
         __result = null;
         return false;
       }
@@ -202,17 +203,17 @@ namespace NoLazyWorkers.Botanists
     {
       if (PotExtensions.Supply.TryGetValue(pot.GUID, out var supply))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Info,
+        Log(Level.Info,
             $"PotActionBehaviourPatch InitializePrefix: Found supply {supply.SelectedObject.GUID} for {__instance.botanist.fullName}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+            Category.Botanist, Category.Pot);
         __instance.botanist.configuration.Supplies.SelectedObject = supply.SelectedObject;
         return true;
       }
       else
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
+        Log(Level.Warning,
             $"PotActionBehaviourPatch InitializePrefix: Pot {pot.GUID} does not have a supply for {__instance.botanist.fullName}",
-            DebugLogger.Category.Botanist, DebugLogger.Category.Pot);
+            Category.Botanist, Category.Pot);
         __instance.Disable();
         return false;
       }

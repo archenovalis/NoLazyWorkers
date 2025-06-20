@@ -12,35 +12,56 @@ using System.Collections;
 using UnityEngine;
 using ScheduleOne.DevUtilities;
 using MelonLoader;
-using FishNet.Managing.Timing;
 using NoLazyWorkers.TaskService;
 using static NoLazyWorkers.Movement.Extensions;
+using static NoLazyWorkers.TimeManagerExtensions;
+using NoLazyWorkers.Storage;
+using static NoLazyWorkers.TaskService.Extensions;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Movement
 {
   public static class Utilities
   {
-    public static async Task<(bool Success, string Error)> TransitAsync(Employee employee, EmployeeStateData state, TaskDescriptor task, List<TransferRequest> requests)
+    /// <summary>
+    /// Asynchronously executes a sequence of transfer requests for an employee, handling item movement.
+    /// </summary>
+    /// <returns>A tuple indicating success and an error message if applicable.</returns>
+    public static async Task<(bool success, string error)> TransitAsync(Employee employee, EmployeeData state, TaskDescriptor task, List<TransferRequest> requests)
     {
       if (!requests.Any())
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"MoveAsync: No valid requests for {employee.fullName}", DebugLogger.Category.MixingStation);
+        Log(Level.Warning,
+            $"Transit: No valid requests for {employee.fullName}",
+            Category.Movement);
         return (false, "No valid requests");
       }
 
-      var tcs = new TaskCompletionSource<(bool Success, string Error)>();
-      var routes = requests.Select(r => new PrioritizedRoute(r, task.Priority)).ToList();
-
-      state.EmployeeBeh.StartMovement(routes, task.Type, (emp, s, status) =>
+      try
       {
-        var result = status == Status.Success
-              ? (true, "Success")
-              : (false, $"Movement failed with status {status}");
-        DebugLogger.Log(DebugLogger.LogLevel.Info, $"MoveAsync: Movement completed with status={status} for {emp.fullName}", DebugLogger.Category.MixingStation);
-        tcs.SetResult(result);
-      });
+        var tcs = new TaskCompletionSource<(bool success, string error)>();
+        var routes = requests.Select(r => new PrioritizedRoute(r, task.Priority)).ToList();
 
-      return await tcs.Task;
+        state.AdvBehaviour.StartMovement(routes, task.Type, (emp, s, status) =>
+        {
+          var result = status == Status.Success
+              ? (true, "Success")
+              : (false, $"Movement failed: {status}");
+          Log(Level.Info,
+              $"Transit: Movement completed with status={status} for {emp.fullName}",
+              Category.Movement);
+          tcs.TrySetResult(result);
+        });
+
+        return await tcs.Task;
+      }
+      catch (Exception ex)
+      {
+        Log(Level.Error,
+            $"Transit: Failed for {employee.fullName} - {ex.Message}",
+            Category.Movement);
+        return (false, ex.Message);
+      }
     }
 
     /// <summary>
@@ -54,118 +75,58 @@ namespace NoLazyWorkers.Movement
     {
       if (employee == null || transitEntity == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"MovementUtilities.MoveToAsync: Invalid employee={employee?.fullName ?? "null"} or transitEntity={transitEntity?.GUID.ToString() ?? "null"}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Error,
+            $"MoveTo: Invalid employee={employee?.fullName ?? "null"} or transitEntity={transitEntity.GUID.ToString() ?? "null"}",
+            Category.Movement);
         return false;
       }
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-          $"MovementUtilities.MoveToAsync: Moving {employee.fullName} to transitEntity={transitEntity.GUID}",
-          DebugLogger.Category.EmployeeCore);
 
       var accessPoint = NavMeshUtility.GetAccessPoint(transitEntity, employee);
       if (accessPoint == null)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"MovementUtilities.MoveToAsync: No access point for transitEntity={transitEntity.GUID} for {employee.fullName}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning,
+            $"MoveTo: No access point for transitEntity={transitEntity.GUID} for {employee.fullName}",
+            Category.Movement);
         return false;
       }
 
       try
       {
         employee.Movement.SetDestination(accessPoint.position);
-        var timeManager = InstanceFinder.TimeManager;
-        double startTick = timeManager.Tick;
-        double startTimeoutTick = startTick + timeManager.TimeToTicks(10.0f);
-        bool startedMoving = false;
+        double startTick = TimeManagerInstance.Tick;
+        double timeoutTick = startTick + TimeManagerInstance.TimeToTicks(30.0f);
 
-        while (timeManager.Tick < startTimeoutTick)
+        while (TimeManagerInstance.Tick < timeoutTick)
         {
-          if (employee.Movement.IsMoving)
+          if (!employee.Movement.IsMoving)
           {
-            startedMoving = true;
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-                $"MovementUtilities.MoveToAsync: Started moving for {employee.fullName}",
-                DebugLogger.Category.EmployeeCore);
-            break;
+            if (NavMeshUtility.IsAtTransitEntity(transitEntity, employee))
+            {
+              Log(Level.Info,
+                  $"MoveTo: {employee.fullName} reached {transitEntity.GUID}",
+                  Category.Movement);
+              return true;
+            }
+            Log(Level.Warning,
+                $"MoveTo: {employee.fullName} stopped moving but not at {transitEntity.GUID}",
+                Category.Movement);
+            return false;
           }
-          await timeManager.AwaitNextTickAsync();
+          await AwaitNextFishNetTickAsync();
         }
 
-        if (!startedMoving)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"MovementUtilities.MoveToAsync: Timeout: Failed to start moving for {employee.fullName}",
-              DebugLogger.Category.EmployeeCore);
-          return false;
-        }
-
-        double moveTimeoutTick = startTick + timeManager.TimeToTicks(30.0f);
-        while (employee.Movement.IsMoving && timeManager.Tick < moveTimeoutTick)
-        {
-          if (NavMeshUtility.IsAtTransitEntity(transitEntity, employee))
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Info,
-                $"MovementUtilities.MoveToAsync: {employee.fullName} reached transitEntity={transitEntity.GUID}",
-                DebugLogger.Category.EmployeeCore);
-            return true;
-          }
-          await timeManager.AwaitNextTickAsync();
-        }
-
-        if (employee.Movement.IsMoving)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning,
-              $"MovementUtilities.MoveToAsync: Timeout: Movement did not complete for {employee.fullName}",
-              DebugLogger.Category.EmployeeCore);
-          return false;
-        }
-
-        if (NavMeshUtility.IsAtTransitEntity(transitEntity, employee))
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Info,
-              $"MovementUtilities.MoveToAsync: {employee.fullName} successfully reached transitEntity={transitEntity.GUID}",
-              DebugLogger.Category.EmployeeCore);
-          return true;
-        }
-
-        DebugLogger.Log(DebugLogger.LogLevel.Warning,
-            $"MovementUtilities.MoveToAsync: {employee.fullName} did not reach transitEntity={transitEntity.GUID}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Warning,
+            $"MoveTo: Timeout for {employee.fullName} to reach {transitEntity.GUID}",
+            Category.Movement);
         return false;
       }
       catch (Exception ex)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error,
-            $"MovementUtilities.MoveToAsync: Exception for {employee.fullName} - {ex.Message}",
-            DebugLogger.Category.EmployeeCore);
+        Log(Level.Error,
+            $"MoveTo: Error for {employee.fullName} - {ex.Message}",
+            Category.Movement);
         return false;
       }
-    }
-
-    //TODO: not implemented? add to MoveToAsync?
-    public static async Task<bool> MoveToRetryAsync(Func<Task<(bool Success, string Error)>> action, int maxRetries = 3, float delaySeconds = 1f)
-    {
-      var timeManager = InstanceFinder.TimeManager;
-      for (int i = 0; i < maxRetries; i++)
-      {
-        try
-        {
-          var result = await action();
-          if (result.Success) return true;
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"Retry {i + 1}/{maxRetries}: {result.Error}", DebugLogger.Category.TaskManager);
-          await timeManager.AwaitNextTickAsync(delaySeconds * Mathf.Pow(2, i));
-        }
-        catch (Exception ex)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"Retry {i + 1}/{maxRetries}: {ex}", DebugLogger.Category.TaskManager);
-          await timeManager.AwaitNextTickAsync(delaySeconds * Mathf.Pow(2, i));
-        }
-      }
-      DebugLogger.Log(DebugLogger.LogLevel.Error, $"Failed after {maxRetries} retries", DebugLogger.Category.TaskManager);
-      return false;
     }
   }
 
@@ -173,7 +134,7 @@ namespace NoLazyWorkers.Movement
   {
     public class TransferRequest
     {
-      private static readonly Stack<TransferRequest> Pool = new();
+      private static readonly Stack<TransferRequest> Pool = new(16);
       public Employee Employee { get; private set; }
       public ItemInstance Item { get; private set; }
       public int Quantity { get; private set; }
@@ -183,49 +144,49 @@ namespace NoLazyWorkers.Movement
       public ITransitEntity DropOff { get; private set; }
       public List<ItemSlot> DropOffSlots { get; private set; }
 
-      private TransferRequest(Employee employee, ItemInstance item, int quantity, ItemSlot inventorySlot, ITransitEntity pickup, List<ItemSlot> pickupSlots,
-          ITransitEntity dropOff, List<ItemSlot> dropOffSlots)
+      private static bool _isInitialized;
+      public static void Initialize()
       {
-        // Initialize transfer request with validation
-        Employee = employee ?? throw new ArgumentNullException(nameof(employee));
-        Item = item ?? throw new ArgumentNullException(nameof(item));
-        Quantity = quantity > 0 ? quantity : throw new ArgumentException("Quantity must be positive", nameof(quantity));
-        InventorySlot = inventorySlot ?? throw new ArgumentNullException(nameof(inventorySlot));
-        PickUp = pickup;
-        DropOff = dropOff ?? throw new ArgumentNullException(nameof(dropOff));
-        PickupSlots = pickupSlots?.Where(slot => slot != null && slot.ItemInstance != null && slot.Quantity > 0).ToList() ?? new List<ItemSlot>();
-        DropOffSlots = dropOffSlots?.Where(slot => slot != null).ToList() ?? throw new ArgumentNullException(nameof(dropOffSlots));
-        if (PickUp == null && PickupSlots.Count == 0)
-          throw new ArgumentException("No valid pickup slots for inventory route");
-        if (DropOffSlots.Count == 0)
-          throw new ArgumentException("No valid delivery slots");
+        if (_isInitialized) return;
+        for (int i = 0; i < 32; i++)
+          Pool.Push(new TransferRequest());
+        _isInitialized = true;
+        Log(Level.Info, "TransferRequest pool initialized", Category.Movement);
       }
 
-      // Retrieves or creates a transfer request
-      public static TransferRequest Get(Employee employee, ItemInstance item, int quantity, ItemSlot inventorySlot, ITransitEntity pickup, List<ItemSlot> pickupSlots,
-          ITransitEntity dropOff, List<ItemSlot> dropOffSlots)
+      private TransferRequest() { }
+
+      /// <summary>
+      /// Retrieves or creates a transfer request
+      /// </summary>
+      public static TransferRequest Get(Employee employee, ItemInstance item, int quantity, ItemSlot inventorySlot,
+              ITransitEntity pickup, List<ItemSlot> pickupSlots, ITransitEntity dropOff, List<ItemSlot> dropOffSlots)
       {
-        if (Pool.Count > 0)
-        {
-          var request = Pool.Pop();
-          request.Employee = employee;
-          request.Item = item;
-          request.Quantity = quantity;
-          request.InventorySlot = inventorySlot;
-          request.PickUp = pickup;
-          request.PickupSlots = pickupSlots?.Where(slot => slot != null && slot.ItemInstance != null && slot.Quantity > 0).ToList() ?? new List<ItemSlot>();
-          request.DropOff = dropOff;
-          request.DropOffSlots = dropOffSlots?.Where(slot => slot != null).ToList() ?? new List<ItemSlot>();
-          return request;
-        }
-        return new TransferRequest(employee, item, quantity, inventorySlot, pickup, pickupSlots, dropOff, dropOffSlots);
+        var request = Pool.Count > 0 ? Pool.Pop() : new TransferRequest();
+        request.Employee = employee ?? throw new ArgumentNullException(nameof(employee));
+        request.Item = item ?? throw new ArgumentNullException(nameof(item));
+        request.Quantity = quantity > 0 ? quantity : throw new ArgumentException("Quantity must be positive", nameof(quantity));
+        request.InventorySlot = inventorySlot ?? throw new ArgumentNullException(nameof(inventorySlot));
+        request.PickUp = pickup;
+        request.PickupSlots = pickupSlots ?? new List<ItemSlot>();
+        request.DropOff = dropOff ?? throw new ArgumentNullException(nameof(dropOff));
+        request.DropOffSlots = dropOffSlots ?? new List<ItemSlot>();
+
+        if (request.PickUp == null && request.PickupSlots.Count == 0)
+          throw new ArgumentException("No valid pickup slots");
+
+        // Reserve slots using SlotManager
+        foreach (var slot in request.PickupSlots.Where(s => s != null))
+          SlotManager.ReserveSlot(request.PickUp.GUID, slot, employee.NetworkObject, "pickup", item, quantity);
+        foreach (var slot in request.DropOffSlots.Where(s => s != null))
+          SlotManager.ReserveSlot(request.DropOff.GUID, slot, employee.NetworkObject, "dropoff", item, quantity);
+        SlotManager.ReserveSlot(employee.GUID, request.InventorySlot, employee.NetworkObject, "inventory", request.Item, request.Quantity);
+        return request;
       }
 
-      // Releases a transfer request back to the pool
       public static void Release(TransferRequest request)
       {
-        if (request == null)
-          return;
+        if (request == null) return;
         request.Employee = null;
         request.Item = null;
         request.Quantity = 0;
@@ -236,8 +197,18 @@ namespace NoLazyWorkers.Movement
         request.DropOffSlots?.Clear();
         Pool.Push(request);
       }
+
+      public static void Cleanup()
+      {
+        Pool.Clear();
+        _isInitialized = false;
+        Log(Level.Info, "TransferRequest pool cleaned up", Category.Movement);
+      }
     }
 
+    /// <summary>
+    /// Represents a prioritized movement route for item transfer, including transit details and priority.
+    /// </summary>
     public struct PrioritizedRoute
     {
       public ItemInstance Item;

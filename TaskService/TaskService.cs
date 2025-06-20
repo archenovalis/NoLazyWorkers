@@ -1,7 +1,6 @@
 using FishNet;
 using ScheduleOne.Employees;
 using UnityEngine;
-using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
 using System.Collections.Concurrent;
@@ -10,451 +9,41 @@ using Unity.Collections;
 using ScheduleOne.Property;
 using Unity.Burst;
 using ScheduleOne.ObjectScripts;
-using static NoLazyWorkers.TaskService.Extensions;
-using ScheduleOne.ItemFramework;
-using ScheduleOne.Product;
 using NoLazyWorkers.Storage;
 using static NoLazyWorkers.Employees.Extensions;
-using static NoLazyWorkers.Employees.Utilities;
-using ScheduleOne.Management;
+using static NoLazyWorkers.TaskService.Extensions;
+using static NoLazyWorkers.Storage.Constants;
 using ScheduleOne.Delivery;
 using NoLazyWorkers.Employees;
-using static NoLazyWorkers.TaskService.TaskRegistry;
+using static NoLazyWorkers.TimeManagerExtensions;
+using NoLazyWorkers.Metrics;
+using System.Collections;
+using static NoLazyWorkers.Metrics.Performance;
+using NoLazyWorkers.JobService;
+using static NoLazyWorkers.Debug;
+using static NoLazyWorkers.Debug.Deferred;
+using static NoLazyWorkers.NoLazyUtilities;
+using NoLazyWorkers.TaskService.StationTasks;
 
 namespace NoLazyWorkers.TaskService
 {
-  /// <summary>
-  /// Manages task processing for a property, integrating with FishNet's TimeManager.
-  /// </summary>
-  public class TaskService
-  {
-    private readonly Property _property;
-    private bool _isActive;
-    private bool _isProcessing;
-    private readonly ConcurrentQueue<(TaskDescriptor, int)> _pendingTasks = new();
-    private readonly ConcurrentDictionary<string, TaskService> _activeTasks = new();
-    private static readonly ConcurrentQueue<(Property, int)> _pendingValidations = new();
-    private static readonly ConcurrentDictionary<string, float> _lastValidationTimes = new();
-    private static readonly SemaphoreSlim _validationSemaphore = new(4); // Limit concurrent validations
-    private const float VALIDATION_INTERVAL = 5f;
-    private int _currentPriority;
-
-    public TaskService(Property property)
-    {
-      _property = property ?? throw new ArgumentNullException(nameof(property));
-      _isActive = false;
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"TaskService initialized for property {_property.name}", DebugLogger.Category.TaskManager);
-    }
-
-    public void Activate()
-    {
-      if (_isActive) return;
-      if (InstanceFinder.IsServer)
-        InstanceFinder.TimeManager.OnTick += ProcessPendingTasksSync;
-      _isActive = true;
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] TaskService activated", DebugLogger.Category.TaskManager);
-    }
-
-    public void Deactivate()
-    {
-      if (!_isActive) return;
-      _isActive = false;
-      Dispose();
-      _pendingTasks.Clear();
-      _activeTasks.Clear();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] TaskService deactivated", DebugLogger.Category.TaskManager);
-    }
-
-    public void SubmitPriorityTask(Employee employee, TaskDescriptor task, bool isEmployeeInitiated = false)
-    {
-      if (!_isActive || employee.AssignedProperty != _property)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"SubmitPriorityTask: Invalid submission by {employee.fullName} for property {_property.name}", DebugLogger.Category.TaskManager);
-        return;
-      }
-
-      var modifiedTask = TaskDescriptor.Create(
-          task.Type,
-          task.EmployeeType,
-          task.Priority,
-          task.PropertyName.ToString(),
-          task.Item,
-          task.Quantity,
-          task.PickupType,
-          task.PickupGuid,
-          new[] { task.PickupSlotIndex1, task.PickupSlotIndex2, task.PickupSlotIndex3 }.Take(task.PickupSlotCount).ToArray(),
-          task.DropoffType,
-          task.DropoffGuid,
-          new[] { task.DropoffSlotIndex1, task.DropoffSlotIndex2, task.DropoffSlotIndex3 }.Take(task.DropoffSlotCount).ToArray(),
-          Time.time,
-          isEmployeeInitiated ? employee.GUID : default,
-          isEmployeeInitiated
-      );
-
-      EnqueueTaskAsync(modifiedTask, modifiedTask.Priority).GetAwaiter().GetResult(); // Synchronous for compatibility
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] Priority task {task.TaskId} submitted by {employee.fullName}, initiated: {isEmployeeInitiated}", DebugLogger.Category.TaskManager);
-    }
-
-    public async Task EnqueueTaskAsync(TaskDescriptor task, int priority)
-    {
-      if (!_isActive)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"[{_property.name}] TaskService is inactive, cannot enqueue task {task.TaskId}", DebugLogger.Category.TaskManager);
-        return;
-      }
-
-      string uniqueKey = task.UniqueKey.ToString();
-      if (_activeTasks.TryGetValue(uniqueKey, out var existingService))
-      {
-        if (_pendingTasks.Any(t => t.Item1.UniqueKey.ToString() == uniqueKey && t.Item2 < priority))
-        {
-          _activeTasks.TryRemove(uniqueKey, out _);
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] Replaced task {task.TaskId} with higher priority {priority} (key: {uniqueKey})", DebugLogger.Category.TaskManager);
-        }
-        else
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"[{_property.name}] Skipped duplicate task {task.TaskId} (key: {uniqueKey})", DebugLogger.Category.TaskManager);
-          return;
-        }
-      }
-
-      if (!_activeTasks.TryAdd(uniqueKey, this))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"[{_property.name}] Failed to add task {task.TaskId} to active tasks (key: {uniqueKey})", DebugLogger.Category.TaskManager);
-        return;
-      }
-
-      _pendingTasks.Enqueue((task, priority));
-      UpdatePropertyPriority(priority);
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"[{_property.name}] Enqueued task {task.TaskId} with priority {priority} (key: {uniqueKey})", DebugLogger.Category.TaskManager);
-      await InstanceFinder.TimeManager.AwaitNextTickAsync();
-    }
-
-    public void EnqueueValidation(Property property, int priority = 50)
-    {
-      if (!_isActive)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"[{_property.name}] TaskService is inactive, cannot enqueue validation", DebugLogger.Category.TaskManager);
-        return;
-      }
-
-      _pendingValidations.Enqueue((property, priority));
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"[{_property.name}] Enqueued validation with priority {priority}", DebugLogger.Category.TaskManager);
-    }
-
-    public async Task<(bool Success, TaskDescriptor Task, string Error)> TryGetTaskAsync(Employee employee)
-    {
-      TaskDescriptor task = default;
-      if (!_isActive || employee.AssignedProperty != _property)
-        return (false, task, $"Invalid service or property for {employee.fullName}");
-
-      try
-      {
-        var employeeType = Enum.Parse<EmployeeTypes>(employee.Type.ToString());
-        var state = EmployeeBehaviour.GetState(employee);
-        var sortedTasks = new List<(TaskDescriptor, int)>();
-        while (_pendingTasks.TryDequeue(out var candidate))
-          sortedTasks.Add(candidate);
-
-        sortedTasks.Sort((a, b) => b.Item2.CompareTo(a.Item2));
-
-        foreach (var (candidateTask, priority) in sortedTasks)
-        {
-          if (candidateTask.EmployeeType != employeeType && candidateTask.EmployeeType != EmployeeTypes.Any)
-          {
-            _pendingTasks.Enqueue((candidateTask, priority));
-            continue;
-          }
-
-          if (candidateTask.IsFollowUp && candidateTask.FollowUpEmployeeGUID != employee.GUID)
-          {
-            _pendingTasks.Enqueue((candidateTask, priority));
-            continue;
-          }
-
-          if (candidateTask.IsValid(employee) && await TaskValidationService.ReValidateTaskAsync(employee, state, candidateTask))
-          {
-            task = candidateTask;
-            _activeTasks.TryRemove(candidateTask.UniqueKey.ToString(), out _);
-            UpdatePropertyPriority();
-            DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] Assigned task {task.TaskId} to {employee.fullName} (key: {task.UniqueKey})", DebugLogger.Category.TaskManager);
-            return (true, task, null);
-          }
-
-          _pendingTasks.Enqueue((candidateTask, priority));
-        }
-
-        return (false, task, "No valid task found");
-      }
-      catch (Exception ex)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"TryGetTaskAsync: Failed for {employee.fullName} - {ex}", DebugLogger.Category.TaskManager);
-        return (false, task, ex.ToString());
-      }
-    }
-
-    private void ProcessPendingTasksSync()
-    {
-      if (!_isActive || !InstanceFinder.IsServer)
-        return;
-      _ = ProcessPendingValidationsAsync(); // Fire and forget
-    }
-
-    private async Task ProcessPendingValidationsAsync()
-    {
-      if (!_isActive || _isProcessing || !InstanceFinder.IsServer)
-        return;
-      _isProcessing = true;
-      try
-      {
-        await _validationSemaphore.WaitAsync();
-        var sortedValidations = new List<(Property, int)>();
-        while (_pendingValidations.TryDequeue(out var validation))
-          sortedValidations.Add(validation);
-        sortedValidations.Sort((a, b) => b.Item2.CompareTo(a.Item2));
-        foreach (var (property, priority) in sortedValidations)
-        {
-          float dynamicInterval = GetDynamicValidationInterval(property);
-          if (_lastValidationTimes.TryGetValue(property.name, out var lastTime) && Time.time < lastTime + dynamicInterval)
-          {
-            DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"[{property.name}] Skipped validation due to interval, last: {lastTime:F2}, interval: {dynamicInterval:F2}", DebugLogger.Category.TaskManager);
-            continue;
-          }
-          var tasks = await ValidateProperty(property);
-          foreach (var t in tasks)
-            await EnqueueTaskAsync(t, t.Priority);
-          _lastValidationTimes[property.name] = Time.time;
-          DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{property.name}] Processed validation, priority: {priority}, tasks: {tasks.Length}", DebugLogger.Category.TaskManager);
-          await InstanceFinder.TimeManager.AwaitNextTickAsync();
-        }
-      }
-      catch (Exception ex)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ProcessPendingValidations: Failed - {ex}", DebugLogger.Category.TaskManager);
-      }
-      finally
-      {
-        _isProcessing = false;
-        _validationSemaphore.Release();
-      }
-    }
-
-    private float GetDynamicValidationInterval(Property property)
-    {
-      int entityCount = property.Employees.Count + (IStations.TryGetValue(property, out var stations) ? stations.Count : 0);
-      float loadFactor = InstanceFinder.TimeManager.TickRate / 60f; // Normalize based on tick rate
-      float queueFactor = Mathf.Clamp(_pendingTasks.Count / 50f, 0.5f, 2f); // Scale with queue size
-      return Mathf.Clamp(VALIDATION_INTERVAL * (entityCount / 50f) * loadFactor * queueFactor, 2f, 10f);
-    }
-
-    private async Task<NativeList<TaskDescriptor>> ValidateProperty(Property property)
-    {
-      var validTasks = new NativeList<TaskDescriptor>(Allocator.TempJob);
-      try
-      {
-        (bool got, List<IStationAdapter> stations, List<PlaceableStorageEntity> storages) = await CacheManager.TryGetPropertyDataAsync(property);
-        if (!got)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"[{property.name}] No property data for validation", DebugLogger.Category.TaskManager);
-          return validTasks;
-        }
-        var entities = new NativeList<EntityKey>(Allocator.TempJob);
-        var context = new TaskValidatorContext
-        {
-          AssignedPropertyName = property.name,
-          CurrentTime = Time.time,
-          ReservedSlots = new NativeParallelHashMap<SlotKey, SlotReservation>(100, Allocator.TempJob),
-          SpecificShelves = new NativeParallelHashMap<ItemKey, NativeList<StorageKey>>(10, Allocator.TempJob),
-          StorageInputSlots = new NativeParallelHashMap<StorageKey, NativeList<SlotData>>(10, Allocator.TempJob),
-          StationInputSlots = new NativeParallelHashMap<StorageKey, NativeList<SlotData>>(10, Allocator.TempJob),
-          Task = default // Initialize with default task
-        };
-        foreach (var station in stations)
-          entities.Add(new EntityKey { Guid = station.GUID, Type = TransitTypes.MixingStation });
-        foreach (var storage in storages)
-          entities.Add(new EntityKey { Guid = storage.GUID, Type = TransitTypes.PlaceableStorageEntity });
-        foreach (var employee in property.Employees)
-          entities.Add(new EntityKey { Guid = employee.GUID, Type = TransitTypes.Inventory });
-        foreach (var definition in TaskDefinitionRegistry.AllDefinitions)
-        {
-          var job = new TaskValidationJob
-          {
-            Definition = definition,
-            Entities = entities,
-            Context = context,
-            ValidTasks = validTasks,
-            Property = property
-          };
-          var jobHandle = job.Schedule(entities.Length, 64);
-          await InstanceFinder.TimeManager.AwaitNextTickAsync();
-          jobHandle.Complete();
-        }
-        entities.Dispose();
-        context.ReservedSlots.Dispose();
-        context.SpecificShelves.Dispose();
-        context.StorageInputSlots.Dispose();
-        context.StationInputSlots.Dispose();
-        return validTasks;
-      }
-      catch (Exception ex)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, $"ValidateProperty: Failed for {property.name} - {ex}", DebugLogger.Category.TaskManager);
-        validTasks.Dispose();
-        return new NativeList<TaskDescriptor>(Allocator.TempJob);
-      }
-    }
-
-    private void UpdatePropertyPriority(int priority = 0)
-    {
-      _currentPriority = Math.Max(_currentPriority, priority);
-      TaskServiceManager.UpdatePropertyPriority(_property, _currentPriority);
-    }
-
-    public void Dispose()
-    {
-      _isActive = false;
-      if (InstanceFinder.IsServer)
-        InstanceFinder.TimeManager.OnTick -= ProcessPendingTasksSync;
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"TaskService disposed for property {_property.name}", DebugLogger.Category.TaskManager);
-    }
-
-    public void Cleanup()
-    {
-      Deactivate();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"[{_property.name}] TaskService cleaned up", DebugLogger.Category.TaskManager);
-    }
-  }
-
-  public static class TaskServiceManager
-  {
-    private static readonly ConcurrentDictionary<Property, TaskService> _services = new();
-
-    public static void Initialize()
-    {
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "TaskServiceManager initialized", DebugLogger.Category.TaskManager);
-    }
-
-    public static TaskService GetOrCreateService(Property property)
-    {
-      return _services.GetOrAdd(property, p => new TaskService(p));
-    }
-
-    public static void ActivateProperty(Property property)
-    {
-      var service = GetOrCreateService(property);
-      service.Activate();
-    }
-
-    public static void DeactivateProperty(Property property)
-    {
-      if (_services.TryGetValue(property, out var service))
-        service.Deactivate();
-    }
-
-    public static void UpdatePropertyPriority(Property property, int priority)
-    {
-      if (_services.TryGetValue(property, out var service))
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"TaskServiceManager: Updated priority for property {property.name} to {priority}", DebugLogger.Category.TaskManager);
-      }
-    }
-
-    public static async Task<(bool Success, TaskDescriptor Task, string Error)> TryGetTask(Employee employee)
-    {
-      if (_services.TryGetValue(employee.AssignedProperty, out var service))
-        return await service.TryGetTaskAsync(employee);
-      return (false, default, $"No service found for property {employee.AssignedProperty.name}");
-    }
-
-    public static void Cleanup()
-    {
-      foreach (var service in _services.Values)
-        service.Cleanup();
-      _services.Clear();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "TaskServiceManager cleaned up", DebugLogger.Category.TaskManager);
-    }
-  }
-
   public static class Extensions
   {
-    public interface ITaskDefinition
+    public static List<ITask> InitializeTasks()
     {
-      TaskTypes Type { get; }
-      int Priority { get; }
-      EmployeeTypes EmployeeType { get; }
-      bool RequiresPickup { get; }
-      bool RequiresDropoff { get; }
-      TransitTypes PickupType { get; }
-      TransitTypes DropoffType { get; }
-      IEntitySelector EntitySelector { get; }
-      ITaskValidator Validator { get; }
-      ITaskExecutor Executor { get; }
-      public TaskTypes FollowUpTask => TaskTypes.NoFollowUp;
-    }
-
-    public static async Task EnqueueFollowUpTasksAsync(this ITaskDefinition definition, Employee employee, TaskDescriptor task)
-    {
-      var followUpTask = TaskDescriptor.Create(
-          definition.FollowUpTask,
-          definition.EmployeeType,
-          TaskDefinitionRegistry.Get(definition.FollowUpTask).Priority,
-          employee.AssignedProperty.name,
-          ItemKey.Empty,
-          0,
-          task.PickupType,
-          task.PickupGuid,
-          new int[] { },
-          task.DropoffType,
-          task.DropoffGuid,
-          new int[] { },
-          Time.time,
-          employee.GUID,
-          true
-      );
-      await TaskServiceManager.GetOrCreateService(employee.AssignedProperty).EnqueueTaskAsync(followUpTask, followUpTask.Priority);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"Enqueued follow-up task {definition.FollowUpTask} for {employee.fullName}", DebugLogger.Category.TaskManager);
-    }
-
-    public interface IEntitySelector
-    {
-      NativeList<EntityKey> SelectEntities(Property property, Allocator allocator);
-    }
-
-    public interface ITaskValidator
-    {
-      void Validate(ITaskDefinition definition, EntityKey entityKey, TaskValidatorContext context, Property property, NativeList<TaskDescriptor> validTasks);
-    }
-
-    public interface ITaskExecutor
-    {
-      Task ExecuteAsync(Employee employee, EmployeeStateData state, TaskDescriptor task);
+      return [
+        new MixingStationTask()
+      ];
     }
 
     public enum TaskTypes
     {
-      NoFollowUp,
-
-      // Any Employee Tasks
       DeliverInventory,
-
-      // Packager Tasks
       PackagerRefillStation,
       PackagerEmptyLoadingDock,
       PackagerRestock,
-
-      // PackagingStation Tasks
-      PackagingStationState,
-      PackagingStationFetchPackaging,
-      PackagingStationUnpackage,
-      PackagingStationOperate,
-      PackagingStationDeliver,
-
-      // MixingStation Tasks
-      MixingStationState,
-      MixingStationOperate,
-      MixingStationRestock,
-      MixingStationLoop,
-      MixingStationDeliver
+      PackagingStation,
+      MixingStation
     }
 
     public enum EmployeeTypes
@@ -467,7 +56,135 @@ namespace NoLazyWorkers.TaskService
       Cleaner
     }
 
-    public enum NEQuality
+    [BurstCompile]
+    public struct TaskDescriptor
+    {
+      public Guid EntityGuid;
+      public Guid TaskId;
+      public TaskTypes Type;
+      public int ActionId;
+      public EmployeeTypes EmployeeType;
+      public int Priority;
+      public ItemKey Item;
+      public int Quantity;
+      public Guid PickupGuid;
+      public NativeArray<int> PickupSlotIndices;
+      public Guid DropoffGuid;
+      public NativeArray<int> DropoffSlotIndices;
+      public FixedString32Bytes PropertyName;
+      public float CreationTime;
+
+      public static TaskDescriptor Create(
+          Guid entityGuid, TaskTypes type, int actionId, EmployeeTypes employeeType, int priority,
+          string propertyName, ItemKey item, int quantity,
+          Guid pickupGuid, int[] pickupSlotIndices,
+          Guid dropoffGuid, int[] dropoffSlotIndices,
+          float creationTime)
+      {
+        var descriptor = new TaskDescriptor
+        {
+          EntityGuid = entityGuid,
+          TaskId = Guid.NewGuid(),
+          Type = type,
+          ActionId = actionId,
+          EmployeeType = employeeType,
+          Priority = priority,
+          PropertyName = propertyName,
+          Item = item,
+          Quantity = quantity,
+          PickupGuid = pickupGuid,
+          PickupSlotIndices = pickupSlotIndices != null ? new NativeArray<int>(pickupSlotIndices, Allocator.Persistent) : default,
+          DropoffGuid = dropoffGuid,
+          DropoffSlotIndices = dropoffSlotIndices != null ? new NativeArray<int>(dropoffSlotIndices, Allocator.Persistent) : default,
+          CreationTime = creationTime
+        };
+#if DEBUG
+        Log(Level.Verbose, $"Created task {descriptor.TaskId} for entity {entityGuid}, type {type}, action {actionId}", Category.Tasks);
+#endif
+        return descriptor;
+      }
+
+      public void Dispose()
+      {
+        if (PickupSlotIndices.IsCreated) PickupSlotIndices.Dispose();
+        if (DropoffSlotIndices.IsCreated) DropoffSlotIndices.Dispose();
+      }
+    }
+
+    [BurstCompile]
+    public struct TaskTypeEntityKey : IEquatable<TaskTypeEntityKey>
+    {
+      public TaskTypes Type;
+      public Guid EntityGuid;
+
+      public bool Equals(TaskTypeEntityKey other) => EntityGuid == other.EntityGuid && Type == other.Type;
+      public override bool Equals(object obj) => obj is TaskTypeEntityKey other && Equals(other);
+      public override int GetHashCode() => HashCode.Combine(EntityGuid, Type);
+    }
+
+    public interface IEntitySelector
+    {
+      NativeList<Guid> SelectEntities(Property property, Allocator allocator);
+    }
+
+    public interface ITask
+    {
+      TaskTypes Type { get; }
+      IEntitySelector EntitySelector { get; }
+      JobHandle ScheduleValidationJob(
+        NativeList<Guid> entityGuids,
+        NativeArray<ValidationResultData> results,
+        NativeList<LogEntry> logs,
+        Property property,
+        TaskService taskService,
+        CacheManager cacheManager,
+        DisabledEntityService disabledService
+      );
+      Task ValidateEntityStateAsync(object entity);
+      Task ExecuteAsync(Employee employee, TaskDescriptor task);
+      Task FollowUpAsync(Employee employee, TaskDescriptor task);
+      IEnumerator CreateTaskForState(object entity, Property property, ValidationResultData result, TaskDispatcher dispatcher, DisabledEntityService disabledService, NativeList<LogEntry> logs);
+    }
+
+    public struct TaskResult
+    {
+      public TaskDescriptor Task { get; }
+      public bool Success { get; }
+      public string FailureReason { get; }
+      public TaskResult(TaskDescriptor task, bool success, string failureReason = null)
+      {
+        Task = task;
+        Success = success;
+        FailureReason = success ? "" : failureReason ?? "Unknown failure";
+      }
+    }
+
+    [BurstCompile]
+    public struct ValidationResultData
+    {
+      public bool IsValid;
+      public int State;
+      public ItemKey Item;
+      public int Quantity;
+      public int DestinationCapacity;
+    }
+
+    [BurstCompile]
+    public struct DisabledEntityData
+    {
+      public int ActionId;
+      public DisabledReasonType ReasonType;
+      public NativeList<ItemKey> RequiredItems;
+      public bool AnyItem;
+
+      public enum DisabledReasonType
+      {
+        MissingItem,
+        NoDestination
+      }
+    }
+
+    public enum EQualityBurst
     {
       Trash,
       Poor,
@@ -476,541 +193,496 @@ namespace NoLazyWorkers.TaskService
       Heavenly,
       None
     }
+  }
 
-    public enum TransitTypes
+  public class DisabledEntityService
+  {
+    public NativeParallelHashMap<Guid, DisabledEntityData> disabledEntities;
+    private readonly CacheManager cacheManager;
+
+    public DisabledEntityService(CacheManager cache)
     {
-      Inventory, // Only invenotry
-      LoadingDock, // Only loadingdock
-      PlaceableStorageEntity, // Only storages
-      AnyStation, // All Stations and storages
-      MixingStation, // MixingStation/MixingStationMk2 and storages
-      PackagingStation, // PackagingStation and storages
-      BrickPress, // BrickPress and storages
-      LabOven, // LabOven and storages
-      Pot, // Pot and storages
-      DryingRack, // DryingRack and storages
-      ChemistryStation, // ChemistryStation and storages
-      Cauldron // Cauldron and storages
-    }
-  }
-
-  [BurstCompile]
-  public struct TaskValidationJob : IJobParallelFor
-  {
-    public ITaskDefinition Definition;
-    public TaskValidatorContext Context;
-    public NativeList<EntityKey> Entities;
-    public Property Property;
-    public NativeList<TaskDescriptor> ValidTasks;
-
-    public void Execute(int index)
-    {
-      var entityKey = Context.Entities[index];
-      Definition.Validator.Validate(Definition, entityKey, Context, Property, ValidTasks);
-    }
-  }
-
-  public struct TaskValidatorContext
-  {
-    public FixedString32Bytes AssignedPropertyName;
-    public NativeParallelHashMap<SlotKey, SlotReservation> ReservedSlots;
-    public NativeParallelHashMap<ItemKey, NativeList<StorageKey>> SpecificShelves;
-    public NativeParallelHashMap<StorageKey, NativeList<SlotData>> StorageInputSlots;
-    public NativeParallelHashMap<StorageKey, NativeList<SlotData>> StationInputSlots;
-    public float CurrentTime;
-    public NativeArray<EntityKey> Entities;
-    public TaskDescriptor Task;
-    public IStationAdapter StationAdapter;
-
-  }
-
-  public struct SlotData
-  {
-    public int SlotIndex;
-    public ItemKey ItemKey;
-    public int Quantity;
-    public bool IsLocked;
-  }
-
-  public struct StorageKey : IEquatable<StorageKey>
-  {
-    public Guid Guid;
-    public StorageKey(Guid guid) => Guid = guid != Guid.Empty ? guid : throw new ArgumentException("Invalid GUID");
-    public bool Equals(StorageKey other) => Guid.Equals(other.Guid);
-    public override bool Equals(object obj) => obj is StorageKey other && Equals(other);
-    public override int GetHashCode() => Guid.GetHashCode();
-  }
-
-  public struct ItemKey : IEquatable<ItemKey>
-  {
-    public FixedString32Bytes Id;
-    public FixedString32Bytes PackagingId;
-    public NEQuality Quality;
-
-    public static ItemKey Empty => new ItemKey("", "", NEQuality.None); // Added Empty property
-
-    public ItemKey(ItemInstance item)
-    {
-      Id = item.ID ?? throw new ArgumentNullException(nameof(Id));
-      PackagingId = (item as ProductItemInstance)?.AppliedPackaging?.ID ?? "";
-      Quality = (item is ProductItemInstance prodItem) ? Enum.Parse<NEQuality>(prodItem.Quality.ToString()) : NEQuality.None;
+      cacheManager = cache ?? throw new ArgumentNullException(nameof(cache));
+      disabledEntities = new NativeParallelHashMap<Guid, DisabledEntityData>(100, Allocator.Persistent);
+      cacheManager.OnStorageSlotUpdated += HandleStorageSlotUpdated;
+      Log(Level.Info, "Initialized DisabledEntityService", Category.Tasks);
     }
 
-    public ItemKey(string id, string packagingId, NEQuality? quality)
+    public void AddDisabledEntity(Guid entityGuid, int actionId, DisabledEntityData.DisabledReasonType reasonType, NativeList<ItemKey> requiredItems, bool anyItem = true)
     {
-      Id = id ?? "";
-      PackagingId = packagingId ?? "";
-      Quality = quality ?? NEQuality.None;
-    }
-
-    public bool Equals(ItemKey other) =>
-        Id == other.Id && PackagingId == other.PackagingId && Quality == other.Quality;
-
-    public override bool Equals(object obj) => obj is ItemKey other && Equals(other);
-    public override int GetHashCode() => HashCode.Combine(Id, PackagingId, Quality);
-  }
-
-  public struct SlotKey : IEquatable<SlotKey>
-  {
-    public Guid EntityGuid;
-    public int SlotIndex;
-
-    public SlotKey(Guid entityGuid, int slotIndex)
-    {
-      EntityGuid = entityGuid;
-      SlotIndex = slotIndex;
-    }
-
-    public bool Equals(SlotKey other) => EntityGuid.Equals(other.EntityGuid) && SlotIndex == other.SlotIndex;
-    public override bool Equals(object obj) => obj is SlotKey other && Equals(other);
-    public override int GetHashCode() => HashCode.Combine(EntityGuid, SlotIndex);
-  }
-
-  public struct SlotReservation
-  {
-    public Guid TaskId;
-    public float Timestamp;
-  }
-
-  public struct EntityKey
-  {
-    public Guid Guid;
-    public TransitTypes Type;
-
-    public EntityKey(Guid guid, TransitTypes type)
-    {
-      Guid = guid;
-      Type = type;
-    }
-  }
-
-  [BurstCompile]
-  /// <summary>
-  /// Represents a task descriptor for processing within the TaskService.
-  /// </summary>
-  public struct TaskDescriptor : IDisposable
-  {
-    public Guid TaskId;
-    public TaskTypes Type;
-    public ItemKey Item;
-    public TransitTypes PickupType;
-    public Guid PickupGuid;
-    public int PickupSlotIndex1;
-    public int PickupSlotIndex2;
-    public int PickupSlotIndex3;
-    public int PickupSlotCount;
-    public TransitTypes DropoffType;
-    public Guid DropoffGuid;
-    public int DropoffSlotIndex1;
-    public int DropoffSlotIndex2;
-    public int DropoffSlotIndex3;
-    public int DropoffSlotCount;
-    public int Quantity;
-    public EmployeeTypes EmployeeType;
-    public int Priority;
-    public FixedString32Bytes PropertyName;
-    public float CreationTime;
-    public Guid FollowUpEmployeeGUID;
-    public bool IsFollowUp;
-    public FixedString128Bytes UniqueKey;
-    public Guid EntityGuid;
-
-    /// <summary>
-    /// Creates a new task descriptor.
-    /// </summary>
-    public static TaskDescriptor Create(
-    TaskTypes type, EmployeeTypes employeeType, int priority, string propertyName,
-    ItemKey item, int quantity,
-    TransitTypes pickupType, Guid pickupGUID, int[] pickupSlotIndices,
-    TransitTypes dropoffType, Guid dropoffGUID, int[] dropoffSlotIndices,
-    float creationTime,
-    Guid followUpEmployeeGUID = default, bool isFollowUp = false,
-    Guid entityGuid = default)
-    {
-      var descriptor = new TaskDescriptor
+      var data = new DisabledEntityData
       {
-        TaskId = Guid.NewGuid(),
-        Type = type,
-        EmployeeType = employeeType,
-        PropertyName = propertyName,
-        Priority = priority,
-        Item = item,
-        Quantity = quantity,
-        PickupType = pickupType,
-        PickupGuid = pickupGUID,
-        PickupSlotCount = pickupSlotIndices?.Length ?? 0,
-        DropoffType = dropoffType,
-        DropoffGuid = dropoffGUID,
-        DropoffSlotCount = dropoffSlotIndices?.Length ?? 0,
-        CreationTime = creationTime,
-        FollowUpEmployeeGUID = followUpEmployeeGUID,
-        IsFollowUp = isFollowUp,
-        EntityGuid = entityGuid
+        ActionId = actionId,
+        ReasonType = reasonType,
+        RequiredItems = new NativeList<ItemKey>(requiredItems.Length, Allocator.Persistent),
+        AnyItem = anyItem
       };
-
-      // Assign pickup slot indices
-      if (pickupSlotIndices != null)
-      {
-        if (pickupSlotIndices.Length > 0) descriptor.PickupSlotIndex1 = pickupSlotIndices[0];
-        if (pickupSlotIndices.Length > 1) descriptor.PickupSlotIndex2 = pickupSlotIndices[1];
-        if (pickupSlotIndices.Length > 2) descriptor.PickupSlotIndex3 = pickupSlotIndices[2];
-      }
-
-      // Assign dropoff slot indices
-      if (dropoffSlotIndices != null)
-      {
-        if (dropoffSlotIndices.Length > 0) descriptor.DropoffSlotIndex1 = dropoffSlotIndices[0];
-        if (dropoffSlotIndices.Length > 1) descriptor.DropoffSlotIndex2 = dropoffSlotIndices[1];
-        if (dropoffSlotIndices.Length > 2) descriptor.DropoffSlotIndex3 = dropoffSlotIndices[2];
-      }
-
-      // Generate UniqueKey
-      descriptor.UniqueKey = GenerateUniqueKey(type, pickupGUID, dropoffGUID, isFollowUp, entityGuid);
-
-      return descriptor;
+      data.RequiredItems.AddRange(requiredItems);
+      disabledEntities[entityGuid] = data;
+      Log(Level.Verbose, $"Disabled entity {entityGuid} for action {actionId}, reason: {reasonType}, items: {string.Join(", ", requiredItems.Select(i => i.Id))}", Category.Tasks);
     }
 
-    private static FixedString128Bytes GenerateUniqueKey(TaskTypes type, Guid pickupGuid, Guid dropoffGuid, bool isFollowUp, Guid entityGuid)
+    public bool IsEntityDisabled(Guid entityGuid, int actionId)
     {
-      var pickup = pickupGuid == Guid.Empty ? "none" : pickupGuid.ToString();
-      var dropoff = dropoffGuid == Guid.Empty ? "none" : dropoffGuid.ToString();
-      var entity = entityGuid == Guid.Empty ? "none" : entityGuid.ToString();
-      return $"{type}:{pickup}:{dropoff}:{isFollowUp}:{entity}";
+      if (disabledEntities.TryGetValue(entityGuid, out var data))
+        return data.ActionId == actionId;
+      return false;
     }
 
-    /// <summary>
-    /// Checks if the task is valid for an employee.
-    /// </summary>
-    public bool IsValid(Employee employee)
+    private void HandleStorageSlotUpdated(StorageKey storageKey, SlotData slotData)
     {
-      if (PropertyName != employee.AssignedProperty.name) return false;
-      if (IsFollowUp && employee.GUID != FollowUpEmployeeGUID)
-        return false;
-
-      if (employee.AssignedProperty.name != PropertyName ||
-          (EmployeeType != EmployeeTypes.Any && Enum.Parse<EmployeeTypes>(employee.Type.ToString()) != EmployeeType))
-        return false;
-
-      var storages = Storages[employee.AssignedProperty];
-      var stations = Stations.Extensions.IStations[employee.AssignedProperty];
-
-      // Validate pickup entity
-      if (PickupType != TransitTypes.Inventory && PickupGuid != Guid.Empty)
+      var keysToRemove = new NativeList<Guid>(Allocator.TempJob);
+      foreach (var kvp in disabledEntities)
       {
-        var pickupValid = PickupType == TransitTypes.PlaceableStorageEntity ? storages.ContainsKey(PickupGuid) :
-            PickupType == TransitTypes.AnyStation ? (stations.ContainsKey(PickupGuid) || storages.ContainsKey(PickupGuid)) :
-            stations.ContainsKey(PickupGuid) && EntityProvider.IsValidTransitType(stations[PickupGuid], PickupType);
-        if (!pickupValid) return false;
-      }
-
-      // Validate dropoff entity
-      if (DropoffGuid != Guid.Empty)
-      {
-        var dropoffValid = DropoffType == TransitTypes.PlaceableStorageEntity ? storages.ContainsKey(DropoffGuid) :
-            DropoffType == TransitTypes.AnyStation ? (stations.ContainsKey(DropoffGuid) || storages.ContainsKey(DropoffGuid)) :
-            stations.ContainsKey(DropoffGuid) && EntityProvider.IsValidTransitType(stations[DropoffGuid], DropoffType);
-        if (!dropoffValid) return false;
-      }
-
-      if (!storages.TryGetValue(PickupGuid, out var pickup) && PickupGuid != Guid.Empty)
-        return false;
-      if (!storages.TryGetValue(DropoffGuid, out var dropoff) && DropoffGuid != Guid.Empty)
-        return false;
-
-      // Validate pickup slots
-      if (PickupSlotCount > 0 && pickup != null)
-      {
-        var itemInstance = CreateItemInstance(Item);
-        int totalQuantity = 0;
-        for (int i = 0; i < PickupSlotCount; i++)
+        var entityGuid = kvp.Key;
+        var data = kvp.Value;
+        if (data.ReasonType == DisabledEntityData.DisabledReasonType.MissingItem)
         {
-          int slotIndex = i switch { 0 => PickupSlotIndex1, 1 => PickupSlotIndex2, 2 => PickupSlotIndex3, _ => 0 };
-          var pickupSlot = pickup.OutputSlots.FirstOrDefault(s => s.SlotIndex == slotIndex);
-          if (pickupSlot == null || pickupSlot.IsLocked || pickupSlot.ItemInstance == null || !pickupSlot.ItemInstance.AdvCanStackWith(itemInstance))
-            return false;
-          totalQuantity += pickupSlot.Quantity;
-        }
-        if (totalQuantity < Quantity)
-          return false;
-      }
-
-      // Validate dropoff slots
-      if (DropoffSlotCount > 0 && dropoff != null)
-      {
-        var itemInstance = CreateItemInstance(Item);
-        for (int i = 0; i < DropoffSlotCount; i++)
-        {
-          int slotIndex = i switch { 0 => DropoffSlotIndex1, 1 => DropoffSlotIndex2, 2 => DropoffSlotIndex3, _ => 0 };
-          var dropoffSlot = dropoff.InputSlots.FirstOrDefault(s => s.SlotIndex == slotIndex);
-          if (dropoffSlot == null || dropoffSlot.IsLocked || (dropoffSlot.ItemInstance != null && !dropoffSlot.ItemInstance.AdvCanStackWith(itemInstance)))
-            return false;
+          bool allItemsAvailable = true;
+          bool anyItemAvailable = false;
+          for (int i = 0; i < data.RequiredItems.Length; i++)
+          {
+            if (data.RequiredItems[i].Equals(slotData.Item) && slotData.Quantity > 0)
+              anyItemAvailable = true;
+            else
+              allItemsAvailable = false;
+            if (anyItemAvailable && !allItemsAvailable) break;
+          }
+          if ((data.AnyItem && anyItemAvailable) || allItemsAvailable)
+          {
+            keysToRemove.Add(entityGuid);
+            Log(Level.Verbose, $"Re-enabled entity {entityGuid} for action {data.ActionId} due to item availability", Category.Tasks);
+          }
         }
       }
 
-      // Validate employee inventory
-      int requiredSlots = PickupSlotCount > 0 ? PickupSlotCount : 1;
-      int freeSlots = employee.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
-      return freeSlots >= requiredSlots;
+      foreach (var key in keysToRemove)
+      {
+        if (disabledEntities.TryGetValue(key, out var data))
+        {
+          data.RequiredItems.Dispose();
+          disabledEntities.Remove(key);
+        }
+      }
+      keysToRemove.Dispose();
     }
+
     public void Dispose()
     {
+      cacheManager.OnStorageSlotUpdated -= HandleStorageSlotUpdated;
+      foreach (var data in disabledEntities.GetValueArray(Allocator.Temp))
+        if (data.RequiredItems.IsCreated)
+          data.RequiredItems.Dispose();
+      if (disabledEntities.IsCreated)
+        disabledEntities.Dispose();
+      Log(Level.Info, "Disposed DisabledEntityService", Category.Tasks);
     }
   }
 
-  public static class TaskValidationService
+  public class TaskDispatcher
   {
-    public static async Task<bool> ReValidateTaskAsync(Employee employee, EmployeeStateData state, TaskDescriptor task)
+    private readonly Dictionary<EmployeeTypes, NativeList<TaskDescriptor>> _highPriorityTasks;
+    private readonly Dictionary<EmployeeTypes, NativeList<TaskDescriptor>> _normalPriorityTasks;
+    private readonly NativeList<TaskDescriptor> _anyEmployeeTasks;
+    private NativeParallelHashMap<Guid, TaskDescriptor> _activeTasks;
+    public NativeParallelHashMap<TaskTypeEntityKey, bool> activeTasksByType;
+
+    public TaskDispatcher(int capacity)
     {
-      if (employee == null || state == null)
+      _highPriorityTasks = new Dictionary<EmployeeTypes, NativeList<TaskDescriptor>>();
+      _normalPriorityTasks = new Dictionary<EmployeeTypes, NativeList<TaskDescriptor>>();
+      foreach (EmployeeTypes type in Enum.GetValues(typeof(EmployeeTypes)))
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Error, "ReValidateTask: Employee or state is null", DebugLogger.Category.Handler);
-        return false;
+        _highPriorityTasks[type] = new NativeList<TaskDescriptor>(capacity, Allocator.Persistent);
+        _normalPriorityTasks[type] = new NativeList<TaskDescriptor>(capacity, Allocator.Persistent);
+      }
+      _anyEmployeeTasks = new NativeList<TaskDescriptor>(capacity, Allocator.Persistent);
+      _activeTasks = new NativeParallelHashMap<Guid, TaskDescriptor>(capacity, Allocator.Persistent);
+      activeTasksByType = new NativeParallelHashMap<TaskTypeEntityKey, bool>(capacity, Allocator.Persistent);
+    }
+
+    public void Enqueue(TaskDescriptor task)
+    {
+      var key = new TaskTypeEntityKey { Type = task.Type, EntityGuid = task.EntityGuid };
+      if (activeTasksByType.ContainsKey(key))
+      {
+        Log(Level.Verbose, $"Task of type {task.Type} already exists for entity {task.EntityGuid}, skipping", Category.Tasks);
+        return;
       }
 
-      var context = state.EmployeeState.TaskContext;
-      if (context?.Task.Type != task.Type)
+      var taskList = task.EmployeeType == EmployeeTypes.Any
+          ? _anyEmployeeTasks
+          : task.Priority >= 100
+              ? _highPriorityTasks[task.EmployeeType]
+              : _normalPriorityTasks[task.EmployeeType];
+      taskList.Add(task);
+      activeTasksByType[key] = true;
+#if DEBUG
+      Log(Level.Verbose, $"Enqueued task {task.TaskId} for {task.EmployeeType}, priority {task.Priority}", Category.Tasks);
+#endif
+    }
+
+    public bool SelectTask(EmployeeTypes employeeType, Guid employeeGuid, out TaskDescriptor task)
+    {
+      task = default;
+      var highPriorityList = _highPriorityTasks[employeeType];
+      if (highPriorityList.Length > 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Invalid task for {employee.fullName}, expected {task.Type}, got {context?.Task.Type}", DebugLogger.Category.Handler);
-        return false;
+        var candidate = highPriorityList[0];
+        task = candidate;
+        _activeTasks[candidate.TaskId] = task;
+        highPriorityList.RemoveAt(0);
+        Log(Level.Info, $"Selected high-priority task {task.TaskId} for employee {employeeGuid}", Category.Tasks);
+        return true;
       }
 
-      var property = employee.AssignedProperty;
-
-      ITransitEntity pickup = task.PickupType == TransitTypes.Inventory ? null : EntityProvider.ResolveEntity(property, task.PickupGuid, task.PickupType) as ITransitEntity;
-      if (pickup == null && task.PickupType != TransitTypes.Inventory)
+      var normalPriorityList = _normalPriorityTasks[employeeType];
+      if (normalPriorityList.Length > 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Task {task.TaskId} ({task.Type}) has invalid pickup entity {task.PickupGuid}", DebugLogger.Category.Handler);
-        return false;
+        var candidate = normalPriorityList[0];
+        task = candidate;
+        _activeTasks[candidate.TaskId] = task;
+        normalPriorityList.RemoveAt(0);
+        Log(Level.Info, $"Selected normal-priority task {task.TaskId} for employee {employeeGuid}", Category.Tasks);
+        return true;
       }
 
-      var dropoff = EntityProvider.ResolveEntity(property, task.DropoffGuid, task.DropoffType);
-      if (dropoff == null)
+      if (_anyEmployeeTasks.Length > 0)
       {
-        DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Task {task.TaskId} ({task.Type}) has invalid dropoff entity {task.DropoffGuid}", DebugLogger.Category.Handler);
-        return false;
+        var candidate = _anyEmployeeTasks[0];
+        task = candidate;
+        _activeTasks[candidate.TaskId] = task;
+        _anyEmployeeTasks.RemoveAt(0);
+        Log(Level.Info, $"Selected any-employee task {task.TaskId} for employee {employeeGuid}", Category.Tasks);
+        return true;
       }
+      return false;
+    }
 
-      var itemInstance = CreateItemInstance(task.Item);
-      var pickupSlots = new ItemSlot[task.PickupSlotCount];
-      int totalPickupQuantity = 0;
-      if (pickup != null && task.PickupSlotCount > 0)
+    public void CompleteTask(Guid taskId)
+    {
+      if (_activeTasks.TryGetValue(taskId, out var task))
       {
-        var pickupSlotsSource = pickup.OutputSlots;
-        for (int i = 0; i < task.PickupSlotCount; i++)
+        var key = new TaskTypeEntityKey { Type = task.Type, EntityGuid = task.EntityGuid };
+        activeTasksByType.Remove(key);
+        _activeTasks.Remove(taskId);
+        task.Dispose();
+        Log(Level.Info, $"Completed task {taskId}", Category.Tasks);
+      }
+    }
+
+    public void Dispose()
+    {
+      foreach (var list in _highPriorityTasks.Values.Concat(_normalPriorityTasks.Values).Append(_anyEmployeeTasks))
+      {
+        for (int i = 0; i < list.Length; i++)
+          list[i].Dispose();
+        list.Dispose();
+      }
+      if (_activeTasks.IsCreated)
+        _activeTasks.Dispose();
+      if (activeTasksByType.IsCreated)
+        activeTasksByType.Dispose();
+    }
+  }
+
+  public class TaskService
+  {
+    private readonly Property _property;
+    private readonly CacheManager _cacheManager;
+    private readonly TaskRegistry _taskRegistry;
+    private readonly TaskDispatcher _taskDispatcher;
+    private readonly DisabledEntityService _disabledService;
+    private readonly NativeList<Guid> _entityGuids;
+    private NativeArray<ValidationResultData> _validationResults;
+    private bool _isProcessing;
+    private Coroutine _validationCoroutine;
+    private readonly Dictionary<Guid, NativeList<TaskDescriptor>> _employeeSpecificTasks;
+
+    public TaskService(Property prop)
+    {
+      _property = prop ?? throw new ArgumentNullException(nameof(prop));
+      _cacheManager = CacheManager.GetOrCreateCacheManager(_property);
+      _cacheManager.Activate();
+      _taskRegistry = TaskServiceManager.GetRegistry(prop);
+      _taskDispatcher = new TaskDispatcher(100);
+      _disabledService = new DisabledEntityService(_cacheManager);
+      _entityGuids = new NativeList<Guid>(Allocator.Persistent);
+      _validationResults = new NativeArray<ValidationResultData>(0, Allocator.Persistent);
+      _employeeSpecificTasks = new Dictionary<Guid, NativeList<TaskDescriptor>>();
+      Log(Level.Info, $"Initialized TaskService for property {_property.name}", Category.Tasks);
+      _validationCoroutine = CoroutineRunner.Instance.RunCoroutine(ProcessTasksCoroutine());
+    }
+
+    private IEnumerator ProcessTasksCoroutine()
+    {
+      while (true)
+      {
+        if (!_isProcessing)
         {
-          int slotIndex = i switch { 0 => task.PickupSlotIndex1, 1 => task.PickupSlotIndex2, 2 => task.PickupSlotIndex3, _ => 0 };
-          var pickupSlot = pickupSlotsSource.FirstOrDefault(s => s.SlotIndex == slotIndex);
-          if (pickupSlot == null || pickupSlot.IsLocked || pickupSlot.Quantity < 1 || !pickupSlot.ItemInstance.AdvCanStackWith(itemInstance))
+          _isProcessing = true;
+          yield return TrackExecutionCoroutine(nameof(ProcessTasksCoroutine), ValidateAndCreateTasks(), itemCount: _entityGuids.Length);
+          _isProcessing = false;
+        }
+        yield return null;
+      }
+    }
+
+    private IEnumerator ValidateAndCreateTasks()
+    {
+      var logs = new NativeList<LogEntry>(Allocator.TempJob);
+      try
+      {
+        var getPropData = _cacheManager.TryGetPropertyDataAsync().AsCoroutine();
+        yield return getPropData;
+        var (success, stations, _) = getPropData.Result;
+        if (!success)
+        {
+          Log(Level.Warning, $"[{_property.name}] No property data", Category.Tasks);
+          yield break;
+        }
+
+        foreach (var iTask in _taskRegistry.AllTasks)
+        {
+          _entityGuids.Clear();
+          using var selectedEntities = iTask.EntitySelector.SelectEntities(_property, Allocator.TempJob);
+          var filteredEntities = new NativeList<Guid>(selectedEntities.Length, Allocator.TempJob);
+          for (int i = 0; i < selectedEntities.Length; i++)
           {
-            DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Task {task.TaskId} ({task.Type}) has invalid pickup slot {slotIndex}", DebugLogger.Category.Handler);
-            return false;
+            var entityGuid = selectedEntities[i];
+            var key = new TaskTypeEntityKey { Type = iTask.Type, EntityGuid = entityGuid };
+            if (!_taskDispatcher.activeTasksByType.ContainsKey(key))
+              filteredEntities.Add(entityGuid);
           }
-          pickupSlots[i] = pickupSlot;
-          totalPickupQuantity += pickupSlot.Quantity;
+          _entityGuids.AddRange(filteredEntities);
+          filteredEntities.Dispose();
+
+          if (_entityGuids.Length == 0)
+            continue;
+
+          if (_validationResults.Length != _entityGuids.Length)
+          {
+            _validationResults.Dispose();
+            _validationResults = new NativeArray<ValidationResultData>(_entityGuids.Length, Allocator.Persistent);
+          }
+
+          var validationJobHandle = iTask.ScheduleValidationJob(_entityGuids, _validationResults, logs, _property, this, _cacheManager, _disabledService);
+          yield return new WaitUntil(() => validationJobHandle.IsCompleted);
+          validationJobHandle.Complete();
+
+          for (int i = 0; i < _entityGuids.Length; i++)
+          {
+            if (!_validationResults[i].IsValid)
+              continue;
+
+            var entityGuid = _entityGuids[i];
+            var entity = ResolveEntity(entityGuid);
+            if (entity == null)
+              continue;
+
+            yield return iTask.CreateTaskForState(entity, _property, _validationResults[i], _taskDispatcher, _disabledService, logs);
+
+            var metrics = new NativeArray<PerformanceMetric>(1, Allocator.TempJob);
+            var metricsJob = new SingleEntityMetricsJob
+            {
+              TaskType = new FixedString64Bytes(iTask.Type.ToString()),
+              Timestamp = Time.realtimeSinceStartup * 1000f,
+              Metrics = metrics
+            };
+            metricsJob.Schedule();
+          }
+
+          ProcessLogs(logs);
         }
-        if (totalPickupQuantity < task.Quantity)
+      }
+      finally
+      {
+        logs.Dispose();
+      }
+    }
+
+    public async Task<(bool Success, TaskDescriptor Task, ITask ITask)> TryGetTaskAsync(Employee employee)
+    {
+      return await TrackExecutionAsync(nameof(TryGetTaskAsync), async () =>
+      {
+        if (employee.AssignedProperty != _property)
+          return (false, default, null);
+
+        if (_taskDispatcher.SelectTask(Enum.Parse<EmployeeTypes>(employee.Type.ToString()), employee.GUID, out var task))
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Task {task.TaskId} ({task.Type}) has insufficient pickup quantity {totalPickupQuantity}/{task.Quantity}", DebugLogger.Category.Handler);
-          return false;
+          var iTask = _taskRegistry.GetTask(task.Type);
+          return (true, task, iTask);
         }
-      }
+        return (false, default, null);
+      });
+    }
 
-      var dropoffSlotsSource = dropoff is ITransitEntity t ? t.InputSlots : (dropoff as IStationAdapter)?.ProductSlots ?? [];
-      var dropoffSlots = new ItemSlot[task.DropoffSlotCount];
-      for (int i = 0; i < task.DropoffSlotCount; i++)
+    public void CompleteTask(TaskDescriptor task)
+    {
+      _taskDispatcher.CompleteTask(task.TaskId);
+    }
+
+    public IEnumerator CreateEmployeeSpecificTaskAsync(Guid employeeGuid, Guid entityGuid, Property prop, TaskTypes taskType)
+    {
+      var logs = new NativeList<LogEntry>(Allocator.TempJob);
+      try
       {
-        int slotIndex = i switch { 0 => task.DropoffSlotIndex1, 1 => task.DropoffSlotIndex2, 2 => task.DropoffSlotIndex3, _ => 0 };
-        var dropoffSlot = dropoffSlotsSource.FirstOrDefault(s => s.SlotIndex == slotIndex);
-        if (dropoffSlot == null || dropoffSlot.IsLocked || (dropoffSlot.ItemInstance != null && !dropoffSlot.ItemInstance.AdvCanStackWith(itemInstance)))
+        var iTask = _taskRegistry.GetTask(taskType);
+        if (iTask == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Task {task.TaskId} has invalid dropoff slot {slotIndex}", DebugLogger.Category.Handler);
-          return false;
+          Log(Level.Error, $"Task type {taskType} not registered", Category.Tasks);
+          yield break;
         }
-        dropoffSlots[i] = dropoffSlot;
-      }
 
-      int requiredSlots = task.PickupSlotCount > 0 ? task.PickupSlotCount : 1;
-      int freeSlots = employee.Inventory.ItemSlots.Count(s => s.ItemInstance == null);
-      if (freeSlots < requiredSlots)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ReValidateTask: Task {task.TaskId} has insufficient inventory slots ({freeSlots}/{requiredSlots})", DebugLogger.Category.Handler);
-        return false;
-      }
-
-      foreach (var slot in pickupSlots.Where(s => s != null))
-      {
-        var slotKey = new SlotKey(task.PickupGuid, slot.SlotIndex);
-        if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
+        var entity = ResolveEntity(entityGuid);
+        if (entity == null)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Failed to reserve pickup slot {slot.SlotIndex} for task {task.TaskId}", DebugLogger.Category.Handler);
-          return false;
+          Log(Level.Error, $"Entity {entityGuid} not found", Category.Tasks);
+          yield break;
         }
-        slot.ApplyLock(employee.NetworkObject, "pickup");
-        SetReservedSlot(employee, slot);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Locked pickup slot {slot.SlotIndex} for task {task.TaskId}", DebugLogger.Category.Handler);
-      }
-      foreach (var slot in dropoffSlots)
-      {
-        var slotKey = new SlotKey(task.DropoffGuid, slot.SlotIndex);
-        if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
+
+        var entityGuids = new NativeList<Guid>(1, Allocator.TempJob) { entityGuid };
+        var validationResults = new NativeArray<ValidationResultData>(1, Allocator.TempJob);
+
+        var validationJobHandle = iTask.ScheduleValidationJob(entityGuids, validationResults, logs, _property, this, _cacheManager, _disabledService);
+        yield return new WaitUntil(() => validationJobHandle.IsCompleted);
+        validationJobHandle.Complete();
+
+        if (validationResults[0].IsValid)
         {
-          DebugLogger.Log(DebugLogger.LogLevel.Warning, $"ReValidateTask: Failed to reserve dropoff slot {slot.SlotIndex} for task {task.TaskId}", DebugLogger.Category.Handler);
-          return false;
+          yield return iTask.CreateTaskForState(entity, prop, validationResults[0], _taskDispatcher, _disabledService, logs);
         }
-        slot.ApplyLock(employee.NetworkObject, "dropoff");
-        SetReservedSlot(employee, slot);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Locked dropoff slot {slot.SlotIndex} for task {task.TaskId}", DebugLogger.Category.Handler);
+
+        entityGuids.Dispose();
+        validationResults.Dispose();
+
+        if (!_employeeSpecificTasks.ContainsKey(employeeGuid))
+          _employeeSpecificTasks[employeeGuid] = new NativeList<TaskDescriptor>(Allocator.Persistent);
+
+        while (_employeeSpecificTasks.ContainsKey(employeeGuid) && _employeeSpecificTasks[employeeGuid].Length > 0)
+        {
+          yield return null;
+        }
+
+        var metrics = new NativeArray<PerformanceMetric>(1, Allocator.TempJob);
+        var metricsJob = new SingleEntityMetricsJob
+        {
+          TaskType = new FixedString64Bytes(iTask.Type.ToString()),
+          Timestamp = Time.realtimeSinceStartup * 1000f,
+          Metrics = metrics
+        };
+        metricsJob.Schedule();
       }
-
-      context.Pickup = pickup;
-      context.Dropoff = dropoff as ITransitEntity;
-      context.Station = dropoff as IStationAdapter ?? (task.DropoffType is TransitTypes.AnyStation or TransitTypes.PackagingStation ? state.Station : null);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, $"ReValidateTask: Task {task.TaskId} ({task.Type}) validated for {employee.fullName}", DebugLogger.Category.Handler);
-      await InstanceFinder.TimeManager.AwaitNextTickAsync();
-      return true;
-    }
-  }
-
-  public static class SlotManager
-  {
-    public static NativeParallelHashMap<SlotKey, SlotReservation> Reservations { get; private set; }
-
-    public static void Initialize()
-    {
-      Reservations = new NativeParallelHashMap<SlotKey, SlotReservation>(1000, Allocator.Persistent);
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "SlotManager initialized", DebugLogger.Category.TaskManager);
-    }
-
-    public static bool ReserveSlot(SlotKey slotKey, Guid taskId, float timestamp)
-    {
-      if (Reservations.ContainsKey(slotKey))
-        return false;
-      Reservations.Add(slotKey, new SlotReservation { TaskId = taskId, Timestamp = timestamp });
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Reserved slot {slotKey} for task {taskId}", DebugLogger.Category.TaskManager);
-      return true;
-    }
-
-    public static void ReleaseSlot(SlotKey slotKey)
-    {
-      if (Reservations.ContainsKey(slotKey))
+      finally
       {
-        Reservations.Remove(slotKey);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Released slot {slotKey}", DebugLogger.Category.TaskManager);
+        logs.Dispose();
       }
     }
 
-    public static void ReleaseExpiredReservations(float currentTime)
+    public TaskDescriptor GetEmployeeSpecificTask(Guid employeeGuid)
     {
-      var expired = Reservations.Where(kvp => kvp.Value.Timestamp + 30f < currentTime).ToList();
-      foreach (var kvp in expired)
+      if (_employeeSpecificTasks.TryGetValue(employeeGuid, out var tasks) && tasks.Length > 0)
       {
-        Reservations.Remove(kvp.Key);
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"Released expired slot {kvp.Key} for task {kvp.Value.TaskId}", DebugLogger.Category.TaskManager);
+        var task = tasks[0];
+        tasks.RemoveAtSwapBack(0);
+        if (tasks.Length == 0)
+        {
+          tasks.Dispose();
+          _employeeSpecificTasks.Remove(employeeGuid);
+        }
+        return task;
       }
+      return default;
     }
 
-    public static void Cleanup()
+    public void Dispose()
     {
-      if (Reservations.IsCreated)
-        Reservations.Dispose();
-      DebugLogger.Log(DebugLogger.LogLevel.Info, "SlotManager cleaned up", DebugLogger.Category.TaskManager);
+      if (_validationCoroutine != null)
+        CoroutineRunner.Instance.StopCoroutine(_validationCoroutine);
+      _entityGuids.Dispose();
+      _validationResults.Dispose();
+      _taskDispatcher.Dispose();
+      _disabledService.Dispose();
+      foreach (var tasks in _employeeSpecificTasks.Values)
+        tasks.Dispose();
+      _employeeSpecificTasks.Clear();
+      _cacheManager.Deactivate();
+      Log(Level.Info, $"Disposed TaskService for property {_property.name}", Category.Tasks);
     }
-  }
 
-  public static class EntityProvider
-  {
-    public static object ResolveEntity(Property property, Guid guid, TransitTypes expectedType)
+    public object ResolveEntity(Guid guid)
     {
-      if (Storages.TryGetValue(property, out var storages) && storages.TryGetValue(guid, out var storage))
-        return IsValidTransitType(storage, expectedType) ? storage : null;
-
-      if (IStations.TryGetValue(property, out var stations) && stations.TryGetValue(guid, out var station))
-        return IsValidTransitType(station, expectedType) ? station : null;
-
-      var loadingDock = property.LoadingDocks.FirstOrDefault(d => d.GUID == guid);
-      if (loadingDock != null && IsValidTransitType(loadingDock, expectedType))
-        return loadingDock;
-
-      DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"ResolveEntity: No entity found for GUID {guid} with type {expectedType}", DebugLogger.Category.Handler);
+      if (IEmployees[_property].TryGetValue(guid, out var entity))
+        return entity;
       return null;
     }
+  }
 
-    public static NativeList<EntityKey> GetStations(Property property, Allocator allocator)
+  public static class TaskServiceManager
+  {
+    private static readonly Dictionary<Property, TaskService> _services = new();
+    private static readonly Dictionary<Property, TaskRegistry> _registries = new();
+
+    public static TaskService GetOrCreateService(Property property)
     {
-      var stations = IStations.TryGetValue(property, out var list) ? list : null;
-      var result = new NativeList<EntityKey>(allocator);
-      if (stations != null)
-        foreach (var station in stations.Values)
-          result.Add(new EntityKey(station.GUID, TransitTypes.AnyStation));
-      return result;
-    }
-
-    public static NativeList<EntityKey> GetDocks(Property property, Allocator allocator)
-    {
-      var result = new NativeList<EntityKey>(allocator);
-      foreach (var dock in property.LoadingDocks)
-        result.Add(new EntityKey(dock.GUID, TransitTypes.LoadingDock));
-      return result;
-    }
-
-    public static NativeList<EntityKey> GetShelves(Property property, Allocator allocator)
-    {
-      var result = new NativeList<EntityKey>(allocator);
-      if (Storages.TryGetValue(property, out var storages))
-        foreach (var shelf in storages.Keys)
-          result.Add(new EntityKey(shelf, TransitTypes.PlaceableStorageEntity));
-      return result;
-    }
-
-    public static bool IsValidTransitType(object entity, TransitTypes type)
-    {
-      if (entity == null)
-        return false;
-
-      if (entity is IStationAdapter station)
+      if (!_services.TryGetValue(property, out var service))
       {
-        return type switch
-        {
-          TransitTypes.AnyStation => true,
-          TransitTypes.PackagingStation => station.TypeOf == typeof(PackagingStation),
-          TransitTypes.MixingStation => station.TypeOf == typeof(MixingStation) || station.TypeOf == typeof(MixingStationMk2),
-          TransitTypes.BrickPress => station.TypeOf == typeof(BrickPress),
-          TransitTypes.LabOven => station.TypeOf == typeof(LabOven),
-          TransitTypes.Pot => station.TypeOf == typeof(Pot),
-          TransitTypes.DryingRack => station.TypeOf == typeof(DryingRack),
-          TransitTypes.ChemistryStation => station.TypeOf == typeof(ChemistryStation),
-          TransitTypes.Cauldron => station.TypeOf == typeof(Cauldron),
-          _ => false
-        };
+        _registries[property] = new TaskRegistry();
+        _registries[property].Initialize(new List<ITask> { new MixingStationTask() });
+        _registries[property].Initialize(InitializeTasks());
+        service = new TaskService(property);
+        _services[property] = service;
       }
+      return service;
+    }
 
-      var entityType = entity.GetType();
-      return type switch
+    public static TaskRegistry GetRegistry(Property property)
+    {
+      if (!_registries.ContainsKey(property))
+        _registries[property] = new TaskRegistry();
+      return _registries[property];
+    }
+
+    public static void Clear()
+    {
+      foreach (var service in _services.Values)
+        service.Dispose();
+      _services.Clear();
+      foreach (var registry in _registries.Values)
+        registry.Dispose();
+      _registries.Clear();
+      Log(Level.Info, "TaskServiceManager cleaned up", Category.Tasks);
+    }
+  }
+
+  public class TaskRegistry
+  {
+    private readonly List<ITask> tasks = new();
+    public IEnumerable<ITask> AllTasks => tasks;
+
+    public void Initialize(List<ITask> tasks)
+    {
+      foreach (var task in tasks)
+        Register(task);
+    }
+
+    public void Register(ITask task)
+    {
+      if (!tasks.Contains(task))
       {
-        TransitTypes.PlaceableStorageEntity => entityType == typeof(PlaceableStorageEntity),
-        TransitTypes.LoadingDock => entityType == typeof(LoadingDock),
-        _ => false
-      };
+        tasks.Add(task);
+        Log(Level.Info, $"Registered task: {task.Type}", Category.Tasks);
+      }
+    }
+
+    public ITask GetTask(TaskTypes type)
+    {
+      return tasks.FirstOrDefault(t => t.Type == type);
+    }
+
+    public void Dispose()
+    {
+      tasks.Clear();
     }
   }
 }

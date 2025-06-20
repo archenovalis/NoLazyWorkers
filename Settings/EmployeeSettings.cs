@@ -4,6 +4,7 @@ using ScheduleOne.Employees;
 using System.Collections;
 using System.Reflection;
 using UnityEngine;
+using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Settings
 {

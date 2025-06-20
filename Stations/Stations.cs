@@ -5,14 +5,13 @@ using ScheduleOne.Property;
 using ScheduleOne.NPCs;
 using UnityEngine;
 using ScheduleOne.Employees;
+using static NoLazyWorkers.Storage.Extensions;
+using NoLazyWorkers.Storage;
 
 namespace NoLazyWorkers.Stations
 {
   public static class Extensions
   {
-    public static Dictionary<Property, Dictionary<Guid, IStationAdapter>> IStations = [];
-    public static Dictionary<Guid, List<ItemInstance>> StationRefillLists = [];
-
     public interface IStationAdapter
     {
       Guid GUID { get; }
@@ -47,6 +46,46 @@ namespace NoLazyWorkers.Stations
 
     public class StationState<TStates> : IStationState where TStates : Enum
     {
+      public StationState(IStationAdapter adapter)
+      {
+        // Initialize Station in CacheManager
+        var cacheManager = CacheManager.GetOrCreateCacheManager(adapter.ParentProperty);
+        var storageKey = new StorageKey { Guid = adapter.GUID, Type = StorageTypes.Station };
+        foreach (var slot in adapter.InsertSlots)
+          cacheManager.RegisterItemSlot(slot, storageKey);
+        foreach (var slot in adapter.ProductSlots)
+          cacheManager.RegisterItemSlot(slot, storageKey);
+        cacheManager.RegisterItemSlot(adapter.OutputSlot, storageKey);
+        var slotData = new List<SlotData>();
+        for (int i = 0; i < adapter.InsertSlots.Count; i++)
+          slotData.Add(new SlotData
+          {
+            Item = adapter.InsertSlots[i].ItemInstance != null ? new ItemKey(adapter.InsertSlots[i].ItemInstance) : ItemKey.Empty,
+            Quantity = adapter.InsertSlots[i].Quantity,
+            SlotIndex = adapter.InsertSlots[i].SlotIndex,
+            StackLimit = adapter.InsertSlots[i].ItemInstance != null ? adapter.InsertSlots[i].GetCapacityForItem(adapter.InsertSlots[i].ItemInstance) : -1,
+            IsValid = true
+          });
+        for (int i = 0; i < adapter.ProductSlots.Count; i++)
+          slotData.Add(new SlotData
+          {
+            Item = adapter.ProductSlots[i].ItemInstance != null ? new ItemKey(adapter.ProductSlots[i].ItemInstance) : ItemKey.Empty,
+            Quantity = adapter.ProductSlots[i].Quantity,
+            SlotIndex = adapter.ProductSlots[i].SlotIndex,
+            StackLimit = adapter.ProductSlots[i].ItemInstance != null ? adapter.ProductSlots[i].GetCapacityForItem(adapter.ProductSlots[i].ItemInstance) : -1,
+            IsValid = true
+          });
+        slotData.Add(new SlotData
+        {
+          Item = adapter.OutputSlot.ItemInstance != null ? new ItemKey(adapter.OutputSlot.ItemInstance) : ItemKey.Empty,
+          Quantity = adapter.OutputSlot.Quantity,
+          SlotIndex = adapter.OutputSlot.SlotIndex,
+          StackLimit = adapter.OutputSlot.ItemInstance != null ? adapter.OutputSlot.GetCapacityForItem(adapter.OutputSlot.ItemInstance) : -1,
+          IsValid = true
+        });
+        cacheManager.QueueSlotUpdate(storageKey, slotData);
+      }
+
       public TStates State { get; set; } // Type-safe state
       public float LastValidatedTime { get; set; }
       public Dictionary<string, object> StateData { get; } = new();
