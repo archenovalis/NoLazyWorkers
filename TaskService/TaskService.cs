@@ -15,10 +15,10 @@ using static NoLazyWorkers.TaskService.Extensions;
 using static NoLazyWorkers.Storage.Constants;
 using ScheduleOne.Delivery;
 using NoLazyWorkers.Employees;
-using static NoLazyWorkers.TimeManagerExtensions;
-using NoLazyWorkers.Metrics;
+using static NoLazyWorkers.Performance.FishNetExtensions;
+using NoLazyWorkers.Performance;
 using System.Collections;
-using static NoLazyWorkers.Metrics.Performance;
+using static NoLazyWorkers.Performance.Metrics;
 using NoLazyWorkers.JobService;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Debug.Deferred;
@@ -482,7 +482,7 @@ namespace NoLazyWorkers.TaskService
 
             yield return iTask.CreateTaskForState(entity, _property, _validationResults[i], _taskDispatcher, _disabledService, logs);
 
-            var metrics = new NativeArray<PerformanceMetric>(1, Allocator.TempJob);
+            var metrics = new NativeArray<Metric>(1, Allocator.TempJob);
             var metricsJob = new SingleEntityMetricsJob
             {
               TaskType = new FixedString64Bytes(iTask.Type.ToString()),
@@ -564,7 +564,7 @@ namespace NoLazyWorkers.TaskService
           yield return null;
         }
 
-        var metrics = new NativeArray<PerformanceMetric>(1, Allocator.TempJob);
+        var metrics = new NativeArray<Metric>(1, Allocator.TempJob);
         var metricsJob = new SingleEntityMetricsJob
         {
           TaskType = new FixedString64Bytes(iTask.Type.ToString()),

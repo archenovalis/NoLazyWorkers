@@ -151,7 +151,7 @@ namespace NoLazyWorkers.Stations
     {
       foreach (var instance in manager.Refills)
       {
-        if (item.AdvCanStackWith(instance, allowHigherQuality: true))
+        if (item.AdvCanStackWith(instance, allowTargetHigherQuality: true))
           return true;
       }
       return false;

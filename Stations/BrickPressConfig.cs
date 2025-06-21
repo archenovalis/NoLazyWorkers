@@ -73,7 +73,7 @@ namespace NoLazyWorkers.Stations
       public BuildableItem Buildable => _station as BuildableItem;
       public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => GetRefillList(_station);
-      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => item.AdvCanStackWith(i, allowHigherQuality: true));
+      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => item.AdvCanStackWith(i, allowTargetHigherQuality: true));
       public Type TypeOf => _station.GetType();
     }
   }

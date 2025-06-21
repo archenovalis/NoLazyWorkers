@@ -1,5 +1,5 @@
 using System.Collections;
-using NoLazyWorkers.Metrics;
+using NoLazyWorkers.Performance;
 using UnityEngine;
 using static NoLazyWorkers.TimeManagerExtensions;
 using static NoLazyWorkers.Debug;

@@ -306,7 +306,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           }
 
           packager.Avatar.Anim.SetBool("UsePackagingStation", false);
-          if (InstanceFinder.IsServer)
+          if (FishNetExtensions.IsServer)
             station.Unpack();
 
           packager.PackagingBehaviour.PackagingInProgress = false;

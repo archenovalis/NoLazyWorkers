@@ -554,7 +554,7 @@ namespace NoLazyWorkers.Storage
               {
                 item = config.AssignedItem;
               }
-              else if (!item.AdvCanStackWith(config.AssignedItem, allowHigherQuality: true))
+              else if (!item.AdvCanStackWith(config.AssignedItem, allowTargetHigherQuality: true))
               {
                 isConsistent = false;
                 Log(Level.Warning,
@@ -680,7 +680,7 @@ namespace NoLazyWorkers.Storage
         if (primaryConfig.Mode == StorageMode.Specific &&
             primaryField.SelectedItem == product &&
             primaryConfig.AssignedItem is ProductItemInstance prodItem && prodItem.AdvCanStackWith(
-                Registry.GetItem(product.ID).GetDefaultInstance(), allowHigherQuality: true))
+                Registry.GetItem(product.ID).GetDefaultInstance(), allowTargetHigherQuality: true))
         {
           selectedOption = opt;
         }
@@ -895,7 +895,7 @@ namespace NoLazyWorkers.Storage
       if (mode == StorageMode.Specific && item != null && previousItem != null)
       {
         // Validate quality compatibility
-        if (!item.AdvCanStackWith(previousItem, allowHigherQuality: true))
+        if (!item.AdvCanStackWith(previousItem, allowTargetHigherQuality: true))
         {
           Log(Level.Warning,
               $"StorageConfiguration.SetModeAndItem: Quality mismatch for {item.ID}, resetting to default",
@@ -1352,7 +1352,7 @@ namespace NoLazyWorkers.Storage
       else if (config.Mode == StorageMode.Specific && config.AssignedItem != null)
       {
         var defaultItem = Registry.GetItem(config.AssignedItem.ID).GetDefaultInstance();
-        if (config.AssignedItem.AdvCanStackWith(defaultItem, allowHigherQuality: true))
+        if (config.AssignedItem.AdvCanStackWith(defaultItem, allowTargetHigherQuality: true))
           newSprite = GetPackagedSprite(config.AssignedItem.Definition,
               (config.AssignedItem as ProductItemInstance)?.AppliedPackaging);
         iconColor = Color.white;

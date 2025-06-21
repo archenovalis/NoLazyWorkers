@@ -127,7 +127,7 @@ namespace NoLazyWorkers.Stations
           else if (itemDef.GetDefaultInstance() is ProductItemInstance prodItem)
           {
             prodItem.SetQuality(qualities[i].Value);
-            if (slotItem.AdvCanStackWith(prodItem, allowHigherQuality: false))
+            if (slotItem.AdvCanStackWith(prodItem, allowTargetHigherQuality: false))
             {
               items.Add(prodItem);
               Log(Level.Info,

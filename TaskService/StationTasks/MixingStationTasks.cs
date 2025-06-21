@@ -15,7 +15,7 @@ using NoLazyWorkers.Storage;
 using Unity.Burst;
 using static NoLazyWorkers.Movement.Extensions;
 using static NoLazyWorkers.TimeManagerExtensions;
-using NoLazyWorkers.Metrics;
+using NoLazyWorkers.Performance;
 using static NoLazyWorkers.NoLazyUtilities;
 using System.Collections;
 using static NoLazyWorkers.TaskService.Extensions;
@@ -134,7 +134,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
     public async Task ValidateEntityStateAsync(object entity)
     {
-      await Performance.TrackExecutionAsync(nameof(ValidateEntityStateAsync), async () =>
+      await Performance.Metrics.TrackExecutionAsync(nameof(ValidateEntityStateAsync), async () =>
       {
         if (entity is not IStationAdapter station)
         {
@@ -203,7 +203,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
         bool success = false;
         foreach (var itemKey in requiredItems)
         {
-          var routine = Performance.TrackExecutionCoroutine(nameof(CreateTaskForState) + "_NeedsRestock", FindStorageWithItemAsync(property, itemKey, result.Quantity));
+          var routine = Performance.Metrics.TrackExecutionCoroutine(nameof(CreateTaskForState) + "_NeedsRestock", FindStorageWithItemAsync(property, itemKey, result.Quantity));
           yield return routine;
           (success, var kvp, var slotIndices) = routine.result;
           if (success)
@@ -293,7 +293,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
     public async Task ExecuteAsync(Employee employee, TaskDescriptor task)
     {
-      await Performance.TrackExecutionAsync(nameof(ExecuteAsync), async () =>
+      await Performance.Metrics.TrackExecutionAsync(nameof(ExecuteAsync), async () =>
       {
         if (employee.Type != Enum.Parse<EEmployeeType>(EmployeeTypes.Chemist.ToString()))
         {
@@ -355,7 +355,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       }
 
       var taskService = TaskServiceManager.GetOrCreateService(station.Buildable.ParentProperty);
-      Performance.TrackExecutionCoroutine(
+      Performance.Metrics.TrackExecutionCoroutine(
           nameof(FollowUpAsync) + "_" + task.Type + ":" + task.ActionId,
           taskService.CreateEmployeeSpecificTaskAsync(employee.GUID, task.EntityGuid, station.Buildable.ParentProperty, TaskTypes.MixingStation),
           1
@@ -596,7 +596,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
     private async Task OperateAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
     {
-      var movementTask = await Performance.TrackExecutionAsync(nameof(NoLazyWorkers.Movement.Utilities.MoveToAsync),
+      var movementTask = await Performance.Metrics.TrackExecutionAsync(nameof(NoLazyWorkers.Movement.Utilities.MoveToAsync),
           () => NoLazyWorkers.Movement.Utilities.MoveToAsync(employee, station.TransitEntity));
       if (!movementTask)
       {

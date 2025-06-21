@@ -20,7 +20,7 @@ using System.Diagnostics;
 using NoLazyWorkers.Storage;
 using System.Threading.Tasks;
 using static NoLazyWorkers.NoLazyUtilities;
-using NoLazyWorkers.Metrics;
+using NoLazyWorkers.Performance;
 using static NoLazyWorkers.TaskExtensions;
 using static NoLazyWorkers.Debug;
 
@@ -92,7 +92,7 @@ namespace NoLazyWorkers.Movement
     public void Initialize(List<PrioritizedRoute> routes, EmployeeData stateData = null, Action<Employee, EmployeeData, Status> callback = null)
     {
       Log(Level.Verbose, $"AdvMoveItemBeh.Initialize: {Employee.fullName} Initialize", Category.Movement);
-      if (!InstanceFinder.IsServer)
+      if (!FishNetExtensions.IsServer)
       {
         Log(Level.Warning, $"AdvMoveItemBeh.Initialize: Skipping client-side for NPC={Employee?.fullName}", Category.Movement);
         return;
@@ -145,7 +145,7 @@ namespace NoLazyWorkers.Movement
     public void StartTransit()
     {
       Log(Level.Verbose, $"AdvMoveItemBeh.StartTransit: {Employee.fullName}", Category.Movement);
-      if (!InstanceFinder.IsServer)
+      if (!FishNetExtensions.IsServer)
         return;
       currentState = EState.Idle;
       ProcessNextRoute();
@@ -287,7 +287,7 @@ namespace NoLazyWorkers.Movement
     /// </summary>
     private async Task<bool> MoveToPickupGroupAsync(List<PrioritizedRoute> routes)
     {
-      if (!InstanceFinder.IsServer)
+      if (!FishNetExtensions.IsServer)
       {
         Log(Level.Warning, $"MoveToPickupGroupAsync: Skipping client-side for {Employee?.fullName}", Category.Movement);
         ProcessNextRoute();
@@ -305,7 +305,7 @@ namespace NoLazyWorkers.Movement
       {
         currentState = EState.MovingToPickup;
         _currentTask = MoveToAsync(Employee, pickup);
-        bool success = await Performance.TrackExecutionAsync(nameof(MoveToPickupGroupAsync), () => _currentTask, routes.Count);
+        bool success = await Performance.Metrics.TrackExecutionAsync(nameof(MoveToPickupGroupAsync), () => _currentTask, routes.Count);
         if (!success)
         {
           Log(Level.Warning, $"MoveToPickupGroupAsync: Movement failed for {Employee?.fullName} to {pickup.GUID}", Category.Movement);
@@ -314,7 +314,7 @@ namespace NoLazyWorkers.Movement
         }
         Log(Level.Info, $"MoveToPickupGroupAsync: Reached pickup {pickup.GUID} for {Employee?.fullName}", Category.Movement);
         currentState = EState.Grabbing;
-        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(GrabItemGroupCoroutine), GrabItemGroupCoroutine(routes), routes.Sum(r => r.PickupSlots?.Count ?? 0)));
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.Metrics.TrackExecutionCoroutine(nameof(GrabItemGroupCoroutine), GrabItemGroupCoroutine(routes), routes.Sum(r => r.PickupSlots?.Count ?? 0)));
         return true;
       }
       catch (Exception ex)
@@ -339,7 +339,7 @@ namespace NoLazyWorkers.Movement
           $"AdvMoveItemBeh.GrabItemGroupAsync: {Employee.fullName}, routes={routes.Count}",
           Category.Movement);
 
-      if (!InstanceFinder.IsServer)
+      if (!FishNetExtensions.IsServer)
       {
         Log(Level.Warning,
             $"AdvMoveItemBeh.GrabItemGroupAsync: Skipping client-side for NPC={Employee?.fullName}",
@@ -466,7 +466,7 @@ namespace NoLazyWorkers.Movement
     private IEnumerator GrabItemGroupCoroutine(List<PrioritizedRoute> routes)
     {
       Log(Level.Verbose, $"GrabItemGroupCoroutine: {Employee.fullName}, routes={routes.Count}", Category.Movement);
-      if (!InstanceFinder.IsServer) { ProcessNextRoute(); yield break; }
+      if (!FishNetExtensions.IsServer) { ProcessNextRoute(); yield break; }
       var sourceAccessPoint = NavMeshUtility.GetAccessPoint(routes[0].PickUp, Employee);
       if (sourceAccessPoint == null) { ProcessNextRoute(); yield break; }
       bool anyGrabSuccess = false;
@@ -685,7 +685,7 @@ namespace NoLazyWorkers.Movement
         if (NavMeshUtility.IsAtTransitEntity(dropoff, Employee))
         {
           currentState = EState.Placing;
-          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.Metrics.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
           yield return new WaitUntil(() => _currentCoroutine == null);
           processedCount++;
         }
@@ -704,7 +704,7 @@ namespace NoLazyWorkers.Movement
               _travelStopwatch = null;
             }
             currentState = EState.Placing;
-            _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+            _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.Metrics.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
             yield return new WaitUntil(() => _currentCoroutine == null);
             processedCount++;
           }
@@ -755,14 +755,14 @@ namespace NoLazyWorkers.Movement
       if (NavMeshUtility.IsAtTransitEntity(dropoff, Employee))
       {
         currentState = EState.Placing;
-        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+        _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.Metrics.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
         while (_currentCoroutine != null) await Task.Delay(1); // Wait for coroutine
         _processedCount++;
       }
       else
       {
         _currentTask = MoveToAsync(Employee, dropoff);
-        success = await Performance.TrackExecutionAsync(nameof(ProcessRoute), () => _currentTask, 1);
+        success = await Performance.Metrics.TrackExecutionAsync(nameof(ProcessRoute), () => _currentTask, 1);
         if (success)
         {
           if (!skipPickup && _travelStopwatch != null)
@@ -773,7 +773,7 @@ namespace NoLazyWorkers.Movement
             _travelStopwatch = null;
           }
           currentState = EState.Placing;
-          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
+          _currentCoroutine = CoroutineRunner.Instance.RunCoroutine(Performance.Metrics.TrackExecutionCoroutine(nameof(PlaceItemToDropoffCoroutine), PlaceItemToDropoffCoroutine(route, routes, routeIndex), route.DropoffSlots.Count));
           while (_currentCoroutine != null) await Task.Delay(1); // Wait for coroutine
           _processedCount++;
         }

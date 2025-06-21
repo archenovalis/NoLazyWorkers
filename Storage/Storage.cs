@@ -17,15 +17,14 @@ using FishNet;
 using System.Diagnostics;
 using static NoLazyWorkers.Storage.ShelfExtensions;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
-using static NoLazyWorkers.TimeManagerExtensions;
+using static NoLazyWorkers.Performance.FishNetExtensions;
 using UnityEngine.Pool;
-using NoLazyWorkers.Metrics;
+using NoLazyWorkers.Performance;
 using Unity.Burst;
 using Unity.Jobs;
-using static NoLazyWorkers.NoLazyUtilities;
 using System.Collections;
 using static NoLazyWorkers.TaskService.Extensions;
-using static NoLazyWorkers.TaskExtensions;
+using static NoLazyWorkers.Performance.TaskExtensions;
 using ScheduleOne.Delivery;
 using HarmonyLib;
 using ScheduleOne.Vehicles;
@@ -34,7 +33,6 @@ using static NoLazyWorkers.Storage.ShelfConstants;
 using static NoLazyWorkers.Storage.Constants;
 using static NoLazyWorkers.Employees.Extensions;
 using Unity.Collections.LowLevel.Unsafe;
-using NoLazyWorkers.JobService;
 using static NoLazyWorkers.Storage.Jobs;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Debug.Deferred;
@@ -52,7 +50,7 @@ namespace NoLazyWorkers.Storage
       [ReadOnly] public NativeList<StorageKey> StorageKeys;
       [ReadOnly] public ItemKey TargetItem;
       public int Needed;
-      public bool AllowHigherQuality;
+      public bool AllowTargetHigherQuality;
       public NativeList<StorageResult> Results;
       public NativeList<LogEntry> Logs;
       [ReadOnly] public NativeParallelHashMap<StorageKey, NativeList<SlotData>> SpecificShelfSlotsCache;
@@ -82,7 +80,7 @@ namespace NoLazyWorkers.Storage
         for (int j = 0; j < slots.Length; j++)
         {
           var slot = slots[j];
-          if (slot.IsValid && slot.Item.AdvCanStackWithBurst(TargetItem, AllowHigherQuality) && slot.Quantity > 0)
+          if (slot.IsValid && slot.Item.AdvCanStackWithBurst(TargetItem, AllowTargetHigherQuality) && slot.Quantity > 0)
           {
             totalQty += slot.Quantity;
             slotIndices.Add(slot.SlotIndex);
@@ -112,9 +110,9 @@ namespace NoLazyWorkers.Storage
     public struct FindDeliveryDestinationsJob : IJob
     {
       [ReadOnly] public NativeList<StorageKey> StorageKeys;
+      [ReadOnly] public NativeParallelHashSet<Guid> StationData;
       [ReadOnly] public ItemKey Item;
       public int Quantity;
-      public int PropertyId;
       public Guid SourceGuid;
       public NativeList<DeliveryDestination> Destinations;
       public NativeList<LogEntry> Logs;
@@ -125,12 +123,9 @@ namespace NoLazyWorkers.Storage
       public void Execute()
       {
         int remainingQty = Quantity;
-        foreach (var stationKey in StationSlotsCache.GetKeyArray(Allocator.TempJob))
+        foreach (var station in StationData)
         {
-          var station = IStations[CacheManager.GetPropertyById(PropertyId)][stationKey.Guid];
-          if (station.TypeOf != typeof(PackagingStation) || station.IsInUse || !station.CanRefill(Item.CreateItemInstance()))
-            continue;
-          var storageKey = new StorageKey(station.GUID, StorageTypes.Station);
+          var storageKey = new StorageKey(station, StorageTypes.Station);
           if (StationSlotsCache.TryGetValue(storageKey, out var slots))
           {
             ProcessSlots(storageKey, slots, ref remainingQty, ref Destinations, ref Logs);
@@ -192,74 +187,81 @@ namespace NoLazyWorkers.Storage
     /// Burst-compatible job to validate and reserve input slots for an item.
     /// </summary>
     [BurstCompile]
-    public struct ReserveInputSlotsJob : IJobParallelFor
+    public struct ReserveInputSlotsJob : IJob
     {
       [ReadOnly] public NativeArray<SlotData> Slots;
       [ReadOnly] public ItemKey Item;
       public NativeList<int> ReservedIndices;
       public NativeList<LogEntry> Logs;
-      public bool AllowHigherQuality;
+      public bool AllowTargetHigherQuality;
       public int RemainingQuantity;
 
-      public void Execute(int index)
+      public void Execute()
       {
-        var slot = Slots[index];
-        if (!slot.IsValid || slot.IsLocked)
+        for (int index = 0; index < Slots.Length; index++)
         {
+          var slot = Slots[index];
+          if (!slot.IsValid || slot.IsLocked)
+          {
+#if DEBUG
+            Logs.Add(new LogEntry { Message = $"Slot {slot.SlotIndex} invalid or locked", Level = Level.Verbose, Category = Category.Storage });
+#endif
+            continue;
+          }
+          int capacity = 0;
+          if (slot.Item.Id != "" && slot.Item.AdvCanStackWithBurst(Item, AllowTargetHigherQuality))
+          {
+            capacity = slot.StackLimit - slot.Quantity;
+          }
+          else if (slot.Item.Id == "")
+          {
+            capacity = Item.CreateItemInstance().StackLimit;
+          }
+          if (capacity <= 0)
+          {
+#if DEBUG
+            Logs.Add(new LogEntry { Message = $"Slot {slot.SlotIndex} full or incompatible", Level = Level.Verbose, Category = Category.Storage });
+#endif
+            continue;
+          }
+          int amountToReserve = Mathf.Min(capacity, RemainingQuantity);
+          if (amountToReserve <= 0) continue;
+          ReservedIndices.Add(index);
+#if DEBUG
           Logs.Add(new LogEntry
           {
-            Message = $"Slot {slot.SlotIndex} invalid or locked",
+            Message = $"Marked slot {slot.SlotIndex} for reservation (capacity={capacity}, amount={amountToReserve})",
             Level = Level.Verbose,
             Category = Category.Storage
           });
-          return;
+#endif
         }
-
-        int capacity = 0;
-        if (slot.Item.Id != "" && slot.Item.AdvCanStackWithBurst(Item, AllowHigherQuality))
-        {
-          capacity = slot.StackLimit - slot.Quantity;
-        }
-        else if (slot.Item.Id == "")
-        {
-          capacity = Item.CreateItemInstance().StackLimit;
-        }
-
-        if (capacity <= 0)
-        {
-          Logs.Add(new LogEntry
-          {
-            Message = $"Slot {slot.SlotIndex} full or incompatible",
-            Level = Level.Verbose,
-            Category = Category.Storage
-          });
-          return;
-        }
-
-        int amountToReserve = Mathf.Min(capacity, RemainingQuantity);
-        if (amountToReserve <= 0) return;
-
-        ReservedIndices.Add(index);
-        Logs.Add(new LogEntry
-        {
-          Message = $"Marked slot {slot.SlotIndex} for reservation (capacity={capacity}, amount={amountToReserve})",
-          Level = Level.Verbose,
-          Category = Category.Storage
-        });
       }
     }
 
     [BurstCompile]
-    public struct StackCheckJob : IJobParallelFor
+    public struct StackCheckJob : IJob
     {
-      [ReadOnly] public NativeArray<ItemKey> Items;
-      [ReadOnly] public ItemKey Target;
+      [ReadOnly] private NativeArray<ItemKey> _items;
+      [ReadOnly] private ItemKey _target;
+      private readonly bool _allowTargetHigherQuality; // default false
+      private readonly bool _checkQuantities; // default false
       public NativeArray<bool> Results;
-      public bool AllowHigherQuality;
 
-      public void Execute(int index)
+      public StackCheckJob(NativeArray<ItemKey> items, ItemKey target, bool allowTargetHigherQuality = false, bool checkQuantities = false)
       {
-        Results[index] = Items[index].AdvCanStackWithBurst(Target, allowHigherQuality: AllowHigherQuality);
+        _items = items;
+        _target = target;
+        _allowTargetHigherQuality = allowTargetHigherQuality;
+        _checkQuantities = checkQuantities;
+      }
+
+      public void Execute()
+      {
+        for (int index = 0; index < _items.Length; index++)
+        {
+          Results[index] = _items[index].AdvCanStackWithBurst(_target, _allowTargetHigherQuality, _checkQuantities);
+        }
       }
     }
   }
@@ -270,11 +272,11 @@ namespace NoLazyWorkers.Storage
     /// Coroutine to find storage with item, using IJob for processing.
     /// </summary>
     public static IEnumerator FindStorageWithItemCoroutine(
-        Property property,
-        ItemInstance targetItem,
-        int needed,
-        int wanted = 0,
-        bool allowHigherQuality = false)
+            Property property,
+            ItemInstance targetItem,
+            int needed,
+            int wanted = 0,
+            bool allowTargetHigherQuality = false)
     {
       if (targetItem == null || needed <= 0)
       {
@@ -284,18 +286,19 @@ namespace NoLazyWorkers.Storage
 
       var cacheManager = CacheManager.GetOrCreateCacheManager(property);
       var cacheKey = new CacheKey(targetItem, property);
-
       if (cacheManager.IsItemNotFound(cacheKey))
       {
+#if DEBUG
         Log(Level.Verbose, $"Item {targetItem.ID} not found in cache", Category.Storage);
+#endif
         yield return (false, new KeyValuePair<PlaceableStorageEntity, int>(null, 0), (NativeList<int>)default);
       }
 
       var logs = new NativeList<LogEntry>(10, Allocator.TempJob);
       var results = new NativeList<StorageResult>(1, Allocator.TempJob);
+      var storageKeys = new NativeList<StorageKey>(Allocator.TempJob);
       try
       {
-        var storageKeys = new NativeList<StorageKey>(Allocator.TempJob);
         if (cacheManager.SpecificShelvesCache.TryGetValue(new ItemKey(targetItem), out var specificKeys))
           storageKeys.AddRange(specificKeys);
         storageKeys.AddRange(cacheManager.AnyShelfSlotsCache.GetKeyArray(Allocator.Temp));
@@ -312,13 +315,12 @@ namespace NoLazyWorkers.Storage
             StorageKeys = batchKeys,
             TargetItem = new ItemKey(targetItem),
             Needed = needed,
-            AllowHigherQuality = allowHigherQuality,
+            AllowTargetHigherQuality = allowTargetHigherQuality,
             Results = results,
             Logs = logs,
             SpecificShelfSlotsCache = cacheManager.SpecificShelfSlotsCache,
             AnyShelfSlotsCache = cacheManager.AnyShelfSlotsCache
           };
-
           var handle = job.Schedule();
           yield return new WaitUntil(() => handle.IsCompleted);
           handle.Complete();
@@ -327,10 +329,14 @@ namespace NoLazyWorkers.Storage
           if (results.Length > 0)
           {
             var result = results[0];
-            cacheManager.UpdateShelfSearchCache(cacheKey, Storages[property][result.ShelfGuid], result.AvailableQuantity);
-            ProcessLogs(logs);
-            yield return (true, new KeyValuePair<PlaceableStorageEntity, int>(Storages[property][result.ShelfGuid], result.AvailableQuantity), result.SlotIndices);
+            if (Storages[property].TryGetValue(result.ShelfGuid, out var shelf))
+            {
+              cacheManager.UpdateShelfSearchCache(cacheKey, shelf, result.AvailableQuantity);
+              ProcessLogs(logs);
+              yield return (true, new KeyValuePair<PlaceableStorageEntity, int>(shelf, result.AvailableQuantity), result.SlotIndices);
+            }
           }
+          yield return null;
         }
 
         cacheManager.AddItemNotFound(cacheKey);
@@ -342,6 +348,7 @@ namespace NoLazyWorkers.Storage
       {
         results.Dispose();
         logs.Dispose();
+        storageKeys.Dispose();
       }
     }
 
@@ -349,23 +356,33 @@ namespace NoLazyWorkers.Storage
     /// Coroutine to find delivery destinations, using IJob for processing.
     /// </summary>
     public static IEnumerator FindDeliveryDestinationsCoroutine(
-        Property property,
-        ItemKey item,
-        int quantity,
-        Guid sourceGuid)
+            Property property,
+            ItemKey item,
+            int quantity,
+            Guid sourceGuid)
     {
       var destinations = new NativeList<DeliveryDestination>(10, Allocator.TempJob);
       var logs = new NativeList<LogEntry>(10, Allocator.TempJob);
+      NativeArray<Guid> stationKeys = new();
+      stationKeys = IStations.TryGetValue(property, out var stations) && stations.Keys.Any() ? new(stations.Keys.ToArray(), Allocator.Temp) : default;
+      var stationData = new NativeParallelHashSet<Guid>(stationKeys.Length, Allocator.TempJob);
+      var storageKeys = new NativeList<StorageKey>(Allocator.TempJob);
       try
       {
-        var storageKeys = new NativeList<StorageKey>(Allocator.TempJob);
         var cacheManager = CacheManager.GetOrCreateCacheManager(property);
         if (cacheManager.SpecificShelvesCache.TryGetValue(item, out var specificKeys))
           storageKeys.AddRange(specificKeys);
         storageKeys.AddRange(cacheManager.AnyShelfSlotsCache.GetKeyArray(Allocator.Temp));
 
         int batchSize = GetDynamicBatchSize(storageKeys.Length + (IStations.ContainsKey(property) ? IStations[property].Count : 0), 0.1f, nameof(FindDeliveryDestinationsCoroutine));
-        NativeArray<Guid> stationKeys = IStations.TryGetValue(property, out var stations) && stations.Keys.Count() > 0 ? new(stations.Keys.ToArray(), Allocator.Temp) : default;
+
+        for (int i = 0; i < stationKeys.Length; i++)
+        {
+          var station = stations[stationKeys[i]];
+          if (station.TypeOf == typeof(PackagingStation) && !station.IsInUse && station.CanRefill(item.CreateItemInstance()))
+            stationData.Add(stationKeys[i]);
+        }
+
         for (int i = 0; i < storageKeys.Length + stationKeys.Length; i += batchSize)
         {
           var batchKeys = new NativeList<StorageKey>(batchSize, Allocator.TempJob);
@@ -380,6 +397,7 @@ namespace NoLazyWorkers.Storage
           var job = new FindDeliveryDestinationsJob
           {
             StorageKeys = batchKeys,
+            StationData = stationData,
             Item = item,
             Quantity = quantity,
             SourceGuid = sourceGuid,
@@ -387,9 +405,8 @@ namespace NoLazyWorkers.Storage
             Logs = logs,
             StationSlotsCache = cacheManager.StationSlotsCache,
             SpecificShelfSlotsCache = cacheManager.SpecificShelfSlotsCache,
-            AnyShelfSlotsCache = cacheManager.AnyShelfSlotsCache,
+            AnyShelfSlotsCache = cacheManager.AnyShelfSlotsCache
           };
-
           var handle = job.Schedule();
           yield return new WaitUntil(() => handle.IsCompleted);
           handle.Complete();
@@ -400,6 +417,7 @@ namespace NoLazyWorkers.Storage
             ProcessLogs(logs);
             yield return (true, destinations);
           }
+          yield return null;
         }
 
         logs.Add(new LogEntry { Message = $"No delivery destinations found for {item.Id}", Level = Level.Verbose, Category = Category.Storage });
@@ -408,175 +426,244 @@ namespace NoLazyWorkers.Storage
       }
       finally
       {
+        stationKeys.Dispose();
+        stationData.Dispose();
+        storageKeys.Dispose();
         destinations.Dispose();
         logs.Dispose();
       }
     }
 
     /// <summary>
-    /// Reserves input slots for an item using a Burst job.
+    /// Reserves input slots for an item using a Burst job, avoiding try-catch with yields.
     /// </summary>
-    public static async Task<List<ItemSlot>> AdvReserveInputSlotsForItemAsync(this List<ItemSlot> slots, Guid entityGuid, ItemInstance item, NetworkObject locker, bool allowHigherQuality = false)
+    public static IEnumerator AdvReserveInputSlotsForItemCoroutine(
+        List<ItemSlot> slots,
+        Guid entityGuid,
+        ItemInstance item,
+        NetworkObject locker,
+        bool allowTargetHigherQuality = false)
     {
-      return await Performance.TrackExecutionAsync(nameof(AdvReserveInputSlotsForItemAsync), async () =>
+      var reservedSlots = SlotListPool.Get();
+      var slotData = new NativeArray<SlotData>(slots.Count, Allocator.TempJob);
+      var reservedIndices = new NativeList<int>(slots.Count, Allocator.TempJob);
+      var logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
+      List<ItemSlot> result = null;
+
+      try
       {
-        var reservedSlots = SlotListPool.Get();
-        try
+#if DEBUG
+        Log(Level.Verbose,
+            $"AdvReserveInputSlotsForItemCoroutine: item={item?.ID ?? "null"}, slots={slots?.Count ?? 0}, allowTargetHigherQuality={allowTargetHigherQuality}",
+            Category.Storage);
+#endif
+
+        for (int i = 0; i < slots.Count; i++)
+          slotData[i] = new SlotData(slots[i]);
+
+        var job = new ReserveInputSlotsJob
         {
-          Log(Level.Verbose,
-                    $"AdvReserveInputSlotsForItemAsync: item={item?.ID ?? "null"}, slots={slots?.Count ?? 0}, allowHigherQuality={allowHigherQuality}",
-                    Category.Storage);
+          Slots = slotData,
+          Item = new ItemKey(item),
+          ReservedIndices = reservedIndices,
+          Logs = logs,
+          AllowTargetHigherQuality = allowTargetHigherQuality,
+          RemainingQuantity = item?.Quantity ?? 0
+        };
 
-          if (!ValidateReserveInputs(slots, item, locker, out string error))
+        var handle = job.Schedule();
+        yield return new WaitUntil(() => handle.IsCompleted);
+        handle.Complete();
+
+        int remaining = item?.Quantity ?? 0;
+        int batchSize = GetDynamicBatchSize(reservedIndices.Length, 0.1f, nameof(AdvReserveInputSlotsForItemCoroutine));
+
+        for (int i = 0; i < reservedIndices.Length; i += batchSize)
+        {
+          int end = Mathf.Min(i + batchSize, reservedIndices.Length);
+          for (int j = i; j < end; j++)
           {
-            Log(Level.Warning, $"AdvReserveInputSlotsForItemAsync: {error}", Category.Storage);
-            return reservedSlots;
+            int slotDataIndex = reservedIndices[j];
+            var slotDataItem = slotData[slotDataIndex];
+            int slotIndex = slotDataItem.SlotIndex;
+            var slot = slots[slotIndex];
+
+            int capacity = slotDataItem.Item.Id != "" && slotDataItem.Item.AdvCanStackWithBurst(new ItemKey(item), allowTargetHigherQuality)
+                ? slotDataItem.StackLimit - slotDataItem.Quantity
+                : item.StackLimit;
+
+            int amountToReserve = Mathf.Min(capacity, remaining);
+            if (SlotManager.ReserveSlot(entityGuid, slot, locker, "Employee reserving slot for refill", item, amountToReserve))
+            {
+              reservedSlots.Add(slot);
+              remaining -= amountToReserve;
+#if DEBUG
+              Log(Level.Verbose, $"Reserved slot {slot.SlotIndex} (capacity={capacity}, amount={amountToReserve})", Category.Storage);
+#endif
+            }
           }
-
-          var slotData = new NativeArray<SlotData>(slots.Count, Allocator.TempJob);
-          var reservedIndices = new NativeList<int>(slots.Count, Allocator.TempJob);
-          var logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
-
-          for (int i = 0; i < slots.Count; i++)
-          {
-            slotData[i] = new SlotData(slots[i]);
-          }
-
-          var job = new ReserveInputSlotsJob
-          {
-            Slots = slotData,
-            Item = new ItemKey(item),
-            ReservedIndices = reservedIndices,
-            Logs = logs,
-            AllowHigherQuality = allowHigherQuality,
-            RemainingQuantity = item?.Quantity ?? 0
-          };
-
-          var handle = job.Schedule(slots.Count, 64);
-          handle.Complete();
-
-          // Reserve slots post-job using mapper
-          int remaining = item?.Quantity ?? 0;
-          await JobScheduler.ExecuteInBatchesAsync(reservedIndices.Length, i =>
-                {
-                  int slotDataIndex = reservedIndices[i];
-                  var slotDataItem = slotData[slotDataIndex];
-                  int slotIndex = slotDataItem.SlotIndex;
-                  var slot = slots[slotIndex];
-                  int capacity = slotDataItem.Item.Id != "" && slotDataItem.Item.AdvCanStackWithBurst(new ItemKey(item), allowHigherQuality)
-                            ? slotDataItem.StackLimit - slotDataItem.Quantity
-                            : item.StackLimit;
-                  int amountToReserve = Mathf.Min(capacity, remaining);
-
-                  if (SlotManager.ReserveSlot(entityGuid, slot, locker, "Employee reserving slot for refill", item, amountToReserve))
-                  {
-                    reservedSlots.Add(slot);
-                    remaining -= amountToReserve;
-                    Log(Level.Verbose,
-                              $"Reserved slot {slot.SlotIndex} (capacity={capacity}, amount={amountToReserve})",
-                              Category.Storage);
-                  }
-                }, nameof(AdvReserveInputSlotsForItemAsync), 0.1f);
-
-          ProcessLogs(logs);
-
-          Log(reservedSlots.Count > 0 ? Level.Info : Level.Warning,
-                    $"AdvReserveInputSlotsForItemAsync: Reserved {reservedSlots.Count} slots, remaining={remaining}",
-                    Category.Storage);
-
-          if (reservedSlots.Count == 0)
-          {
-            SlotListPool.Release(reservedSlots);
-            return new List<ItemSlot>();
-          }
-
-          return reservedSlots;
+          yield return null;
         }
-        catch (Exception ex)
+
+        ProcessLogs(logs);
+        Log(Level.Info, $"AdvReserveInputSlotsForItemCoroutine: Reserved {reservedSlots.Count} slots, remaining={remaining}", Category.Storage);
+
+        if (reservedSlots.Count == 0)
         {
-          Log(Level.Error, $"AdvReserveInputSlotsForItemAsync: Error - {ex}", Category.Storage);
+          SlotListPool.Release(reservedSlots);
+          result = new List<ItemSlot>();
+        }
+        else
+        {
+          result = reservedSlots;
+        }
+      }
+      finally
+      {
+        slotData.Dispose();
+        reservedIndices.Dispose();
+        logs.Dispose();
+        if (result == null)
+        {
           foreach (var slot in reservedSlots)
             SlotManager.ReleaseSlot(slot);
           SlotListPool.Release(reservedSlots);
-          return new List<ItemSlot>();
         }
-      });
-    }
-
-    public static async Task<(bool success, ItemInstance item)> AdvRemoveItemAsync(this ItemSlot slot, int amount, Guid entityGuid, Employee employee)
-    {
-      ItemInstance item = null;
-      Log(Level.Verbose, $"AdvRemoveItemAsync: Attempting to remove {amount} from slot", Category.EmployeeCore);
-      if (slot == null || amount <= 0)
-      {
-        return (false, item);
       }
 
-      item = slot.ItemInstance;
-      var operations = new List<(Guid entityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)>
-        {
-          (entityGuid, slot, item, amount, false, employee.NetworkObject, "remove")
-        };
-
-      bool success = await SlotManager.ExecuteSlotOperationsAsync(operations);
-      Log(Level.Verbose, $"AdvRemoveItemAsync: {(success ? "Success" : "Failed")}, new quantity={slot.Quantity}", Category.EmployeeCore);
-      return (success, item);
+      yield return result;
     }
 
-    public static async Task<bool> AdvInsertItemAsync(this ItemSlot slot, ItemInstance item, int amount, Guid entityGuid, Employee employee)
+    /// <summary>
+    /// Removes an item from a slot synchronously, using SlotManager.
+    /// </summary>
+    public static bool AdvRemoveItem(
+        ItemSlot slot,
+        int amount,
+        Guid entityGuid,
+        Employee employee)
     {
-      Log(Level.Verbose, $"AdvInsertItemAsync: Attempting to insert {amount} of {item?.ID}", Category.EmployeeCore);
-      if (slot == null || item == null || amount <= 0)
+#if DEBUG
+      Log(Level.Verbose, $"AdvRemoveItem: Attempting to remove {amount} from slot", Category.EmployeeCore);
+#endif
+
+      if (slot == null || amount <= 0)
+      {
+        Log(Level.Warning, $"AdvRemoveItem: Invalid input (slot={slot != null}, amount={amount})", Category.EmployeeCore);
         return false;
+      }
 
-      var operations = new List<(Guid entityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)>
-        {
-          (entityGuid, slot, item, amount, true, employee.NetworkObject, "insert")
-        };
+      var item = slot.ItemInstance;
+      var operations = new List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)>
+            {
+                (entityGuid, slot, item, amount, false, employee.NetworkObject, "remove")
+            };
 
-      bool success = await SlotManager.ExecuteSlotOperationsAsync(operations);
-      Log(Level.Verbose, $"AdvInsertItemAsync: {(success ? "Success" : "Failed")}, new quantity={slot.Quantity}", Category.EmployeeCore);
+      bool success = Performance.Metrics.TrackExecution(
+          nameof(AdvRemoveItem),
+          () => SlotManager.ExecuteSlotOperations(operations),
+          itemCount: 1);
+
+#if DEBUG
+      Log(Level.Verbose, $"AdvRemoveItem: {(success ? "Success" : "Failed")}, new quantity={slot.Quantity}", Category.EmployeeCore);
+#endif
+
       return success;
     }
 
     /// <summary>
-    /// Retrieves output slots containing items matching the template item.
-    /// When allowHigherQuality is true, the slot's item quality can be ≥ the target item's quality.
+    /// Inserts an item into a slot synchronously, using SlotManager.
     /// </summary>
-    public static List<ItemSlot> GetOutputSlotsContainingItem(ITransitEntity entity, ItemInstance item, bool allowHigherQuality = false)
+    public static bool AdvInsertItem(
+        ItemSlot slot,
+        ItemInstance item,
+        int amount,
+        Guid entityGuid,
+        Employee employee)
     {
+#if DEBUG
+      Log(Level.Verbose, $"AdvInsertItem: Attempting to insert {amount} of {item?.ID}", Category.EmployeeCore);
+#endif
+
+      if (slot == null || item == null || amount <= 0)
+      {
+        Log(Level.Warning, $"AdvInsertItem: Invalid input (slot={slot != null}, item={item != null}, amount={amount})", Category.EmployeeCore);
+        return false;
+      }
+
+      var operations = new List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)>
+            {
+                (entityGuid, slot, item, amount, true, employee.NetworkObject, "insert")
+            };
+
+      bool success = Performance.Metrics.TrackExecution(
+          nameof(AdvInsertItem),
+          () => SlotManager.ExecuteSlotOperations(operations),
+          itemCount: 1);
+
+#if DEBUG
+      Log(Level.Verbose, $"AdvInsertItem: {(success ? "Success" : "Failed")}, new quantity={slot.Quantity}", Category.EmployeeCore);
+#endif
+
+      return success;
+    }
+
+    /// <summary>
+    /// Gets output slots containing an item, using AdvCanStackWithMultiple.
+    /// </summary>
+    public static IEnumerator GetOutputSlotsContainingItemCoroutine(
+        ITransitEntity entity,
+        ItemInstance item,
+        bool allowTargetHigherQuality = false)
+    {
+      var result = new List<ItemSlot>();
+
+#if DEBUG
       Log(Level.Verbose,
-          $"GetOutputSlotsContainingItem: Start for item={item?.ID ?? "null"}, entity={entity?.GUID.ToString() ?? "null"}, allowHigherQuality={allowHigherQuality}",
+          $"GetOutputSlotsContainingItemCoroutine: Start for item={item?.ID ?? "null"}, entity={entity?.GUID.ToString() ?? "null"}, allowTargetHigherQuality={allowTargetHigherQuality}",
           Category.Storage);
+#endif
 
       if (entity == null || item == null)
       {
         Log(Level.Warning,
-            $"GetOutputSlotsContainingItem: Invalid input (entity={entity != null}, item={item != null})",
+            $"GetOutputSlotsContainingItemCoroutine: Invalid input (entity={entity != null}, item={item != null})",
             Category.Storage);
-        return new List<ItemSlot>();
+        yield return result;
+        yield break;
       }
 
-      var result = new List<ItemSlot>(entity.OutputSlots.Count);
-      foreach (var slot in entity.OutputSlots)
+      result = new List<ItemSlot>(entity.OutputSlots.Count);
+      var targetItems = entity.OutputSlots.Where(s => s.ItemInstance != null && !s.IsLocked && s.Quantity > 0).Select(slot => slot.ItemInstance).ToList();
+
+      if (item.AdvCanStackWithAny(targetItems, allowTargetHigherQuality))
       {
-        if (slot?.ItemInstance != null && !slot.IsLocked && slot.Quantity > 0 &&
-            slot.ItemInstance.AdvCanStackWith(item, allowHigherQuality: allowHigherQuality))
+        int batchSize = GetDynamicBatchSize(entity.OutputSlots.Count, 0.1f, nameof(GetOutputSlotsContainingItemCoroutine));
+        int processed = 0;
+
+        foreach (var slot in entity.OutputSlots)
         {
-          Log(Level.Verbose,
-              $"GetOutputSlotsContainingItem: Found slot with item={slot.ItemInstance.ID}, quality={(slot.ItemInstance as ProductItemInstance)?.Quality}, qty={slot.Quantity}",
-              Category.Storage);
-          result.Add(slot);
+          if (slot.ItemInstance.AdvCanStackWith(item, allowTargetHigherQuality))
+          {
+#if DEBUG
+            Log(Level.Verbose,
+                $"GetOutputSlotsContainingItemCoroutine: Found slot with item={slot.ItemInstance.ID}, quality={(slot.ItemInstance as ProductItemInstance)?.Quality}, qty={slot.Quantity}",
+                Category.Storage);
+#endif
+            result.Add(slot);
+          }
+
+          processed++;
+          if (processed % batchSize == 0)
+            yield return null;
         }
       }
-
       Log(Level.Info,
-          $"GetOutputSlotsContainingItem: Found {result.Count} slots for item={item.ID}, quality={(item as ProductItemInstance)?.Quality}",
+          $"GetOutputSlotsContainingItemCoroutine: Found {result.Count} slots for item={item.ID}, quality={(item as ProductItemInstance)?.Quality}",
           Category.Storage);
-      return result;
+      yield return result;
     }
 
-    // Finds a packaging station for an item
     public static ITransitEntity FindPackagingStation(Property property, ItemInstance item)
     {
       // Get stations for the assigned property
@@ -595,184 +682,164 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Checks if two items can stack based on ID, packaging, quality, and quantity.
-    /// Supports ItemKey comparisons for Job System compatibility.
+    /// Checks if the item can stack with any of multiple target items.
     /// </summary>
-    public static bool AdvCanStackWith(this ItemInstance item, ItemInstance targetItem, bool allowHigherQuality = false, bool checkQuantities = false)
+    public static bool AdvCanStackWithAny(
+        this ItemInstance item,
+        List<ItemInstance> targetItems,
+        bool allowTargetHigherQuality = false,
+        bool checkQuantities = false)
     {
-      Log(Level.Verbose,
-          $"AdvCanStackWith: item={item?.ID ?? "null"} vs target={targetItem?.ID ?? "null"}",
-          Category.Storage);
-
-      if (!ValidateStackingInputs(item, targetItem, out string error))
-      {
-        Log(Level.Verbose, $"AdvCanStackWith: {error}", Category.Storage);
+      if (targetItems == null || targetItems.Count <= 0)
         return false;
-      }
 
-      // Convert to ItemKey for consistency
-      var itemKey = new ItemKey(item);
-      var targetKey = new ItemKey(targetItem);
-      return itemKey.AdvCanStackWithBurst(targetKey, allowHigherQuality, checkQuantities, item.Quantity, targetItem.Quantity);
+      var itemKeys = new NativeArray<ItemKey>(targetItems.Count, Allocator.TempJob);
+      try
+      {
+        for (int i = 0; i < targetItems.Count; i++)
+          itemKeys[i] = new ItemKey(targetItems[i]);
+
+        return AdvCanStackWithAny(itemKeys, new ItemKey(item), allowTargetHigherQuality, checkQuantities);
+      }
+      finally
+      {
+        itemKeys.Dispose();
+      }
     }
 
     /// <summary>
-    /// Schedules an update to the storage cache for a shelf's parent property using FishNet's TimeManager.
+    /// Checks if the item can stack with any of multiple target items.
     /// </summary>
-    /// <param name="shelf">The shelf to update.</param>
+    public static bool AdvCanStackWithAny(
+        NativeArray<ItemKey> itemKeys,
+        ItemKey targetItem,
+        bool allowTargetHigherQuality = false,
+        bool checkQuantities = false)
+    {
+      if (itemKeys.Length <= 0)
+        return false;
+
+      bool success = false;
+      CoroutineRunner.Instance.RunCoroutineWithResult<bool>(
+          Performance.Metrics.TrackExecutionCoroutine(
+              nameof(AdvCanStackWithAny),
+              AdvCanStackWithAnyCoroutine(itemKeys, targetItem, allowTargetHigherQuality, checkQuantities),
+              itemKeys.Length),
+          result => success = result);
+
+      return success;
+    }
+
+    /// <summary>
+    /// Internal coroutine to check if multiple items can stack with a target item.
+    /// </summary>
+    private static IEnumerator AdvCanStackWithAnyCoroutine(
+        NativeArray<ItemKey> targetItems,
+        ItemKey item,
+        bool allowTargetHigherQuality,
+        bool checkQuantities)
+    {
+      var results = new NativeArray<bool>(targetItems.Length, Allocator.TempJob);
+      try
+      {
+        var job = new StackCheckJob(
+            targetItems,
+            item,
+            allowTargetHigherQuality,
+            checkQuantities)
+        {
+          Results = results
+        };
+
+        var handle = job.Schedule();
+        yield return new WaitUntil(() => handle.IsCompleted);
+
+        for (int i = 0; i < results.Length; i++)
+        {
+          if (results[i])
+          {
+            yield return true;
+            yield break;
+          }
+        }
+
+        yield return false;
+      }
+      finally
+      {
+        results.Dispose();
+      }
+    }
+
+    // method for single checks
+    public static bool AdvCanStackWith(this ItemInstance item, ItemInstance targetItem, bool allowTargetHigherQuality = false, bool checkQuantities = false)
+    {
+#if DEBUG
+      Log(Level.Verbose, $"AdvCanStackWith: item={item?.ID ?? "null"} vs target={targetItem?.ID ?? "null"}", Category.Storage);
+#endif
+      var itemKey = new ItemKey(item);
+      var targetKey = new ItemKey(targetItem);
+      return itemKey.AdvCanStackWithBurst(targetKey, allowTargetHigherQuality, checkQuantities);
+    }
+
     public static void UpdateStorageCache(PlaceableStorageEntity shelf)
     {
       if (shelf == null || shelf.ParentProperty == null)
       {
-        Log(Level.Warning,
-            "UpdateStorageCache: Shelf or ParentProperty is null",
-            Category.Storage);
+        Log(Level.Warning, "UpdateStorageCache: Shelf or ParentProperty is null", Category.Storage);
         return;
       }
-
       CacheManager.GetOrCreateCacheManager(shelf.ParentProperty).QueueStorageUpdate(shelf);
-      Log(Level.Verbose,
-          $"UpdateStorageCache: Queued for shelf={shelf.GUID}",
-          Category.Storage);
+#if DEBUG
+      Log(Level.Verbose, $"UpdateStorageCache: Queued for shelf={shelf.GUID}", Category.Storage);
+#endif
     }
 
-    /// <summary>
-    /// Schedules an update to the station cache for a station's parent property using FishNet's TimeManager.
-    /// </summary>
-    /// <param name="station">The station adapter to update.</param>
     public static void UpdateStationCache(IStationAdapter station)
     {
       if (station == null || station.Buildable?.ParentProperty == null)
       {
-        Log(Level.Warning,
-            "UpdateStationCache: Station or ParentProperty is null",
-            Category.Storage);
+        Log(Level.Warning, "UpdateStationCache: Station or ParentProperty is null", Category.Storage);
         return;
       }
-
       CacheManager.GetOrCreateCacheManager(station.ParentProperty).QueueStationUpdate(station);
-      Log(Level.Verbose,
-          $"UpdateStationCache: Queued for station={station.GUID}",
-          Category.Storage);
+#if DEBUG
+      Log(Level.Verbose, $"UpdateStationCache: Queued for station={station.GUID}", Category.Storage);
+#endif
     }
 
-    /// <summary>
-    /// Gets the total quantity of an item in a shelf's output slots.
-    /// </summary>
-    public static int GetItemQuantityInStorage(this PlaceableStorageEntity shelf, ItemInstance targetItem, bool allowHigherQuality = false)
+    public static int GetItemQuantityInStorage(this PlaceableStorageEntity shelf, ItemInstance targetItem, bool allowTargetHigherQuality = false)
     {
+#if DEBUG
       Log(Level.Verbose,
           $"GetItemQuantityInStorage: Start for shelf={shelf?.GUID.ToString() ?? "null"}, item={targetItem?.ID ?? "null"}",
           Category.Storage);
-
+#endif
       if (shelf == null || targetItem == null)
         return 0;
-
       int qty = 0;
       foreach (var slot in shelf.OutputSlots)
       {
-        if (slot?.ItemInstance != null && slot.ItemInstance.AdvCanStackWith(targetItem, allowHigherQuality: allowHigherQuality))
+        if (slot?.ItemInstance != null && slot.ItemInstance.AdvCanStackWith(targetItem, allowTargetHigherQuality: allowTargetHigherQuality))
           qty += slot.Quantity;
       }
-
       Log(Level.Info, $"GetItemQuantityInStorage: Found {qty} of {targetItem.ID}", Category.Storage);
       return qty;
     }
 
-    /// <summary>
-    /// Updates the storage configuration for a shelf.
-    /// </summary>
     public static void UpdateStorageConfiguration(PlaceableStorageEntity shelf, ItemInstance assignedItem)
     {
+#if DEBUG
       Log(Level.Verbose,
           $"UpdateStorageConfiguration: Start for shelf={shelf?.GUID.ToString() ?? "null"}, item={assignedItem?.ID ?? "null"}",
           Category.Storage);
-
+#endif
       if (!ValidateConfigurationInputs(shelf, out StorageConfiguration config, out string error))
       {
         Log(Level.Warning, $"UpdateStorageConfiguration: {error}", Category.Storage);
         return;
       }
-
       UpdateStorageConfigurationInternal(shelf, assignedItem, config);
-    }
-
-    private static bool ValidateReserveInputs(List<ItemSlot> slots, ItemInstance item, NetworkObject locker, out string error)
-    {
-      if (item == null)
-      {
-        error = "Invalid input: item is null";
-        return false;
-      }
-      if (locker == null)
-      {
-        error = "Invalid input: locker is null";
-        return false;
-      }
-      if (slots == null)
-      {
-        error = "Invalid input: slots is null";
-        return false;
-      }
-      error = string.Empty;
-      return true;
-    }
-
-    private static bool ValidateStackingInputs(ItemInstance item, ItemInstance targetItem, out string error)
-    {
-      if (item == null)
-      {
-        error = "Item is null";
-        return false;
-      }
-      if (targetItem == null)
-      {
-        error = "Target item is null";
-        return false;
-      }
-      error = string.Empty;
-      return true;
-    }
-
-    /// <summary>
-    /// Creates a CacheKey from an ItemInstance and Property.
-    /// </summary>
-    public static CacheKey CreateCacheKey(ItemInstance item, Property property)
-    {
-      return item is ProductItemInstance prodItem
-          ? new CacheKey(item.ID, prodItem.AppliedPackaging?.ID, prodItem.Quality, property)
-          : new CacheKey(item.ID, null, null, property);
-    }
-
-    private static bool TryFindSpecificShelves(Property property, ItemInstance item, int qtyToDeliver, out List<PlaceableStorageEntity> shelves)
-    {
-      shelves = new List<PlaceableStorageEntity>();
-      if (!NoDropOffCache.TryGetValue(property, out var noDropOffCache))
-      {
-        noDropOffCache = new HashSet<ItemInstance>();
-        NoDropOffCache.TryAdd(property, noDropOffCache);
-      }
-      if (noDropOffCache.Contains(item))
-        return false;
-
-      if (SpecificShelves.TryGetValue(property, out var specificShelves) &&
-          specificShelves.TryGetValue(item, out shelves) && shelves.Count > 0)
-      {
-        foreach (var shelf in shelves)
-        {
-          if (shelf.GetItemQuantityInStorage(item) < qtyToDeliver)
-            shelves.Remove(shelf);
-        }
-        if (shelves.Count > 0)
-          return true;
-        else return false;
-      }
-
-      noDropOffCache.Add(item);
-      Log(Level.Verbose,
-          $"TryFindSpecificShelf: Added {item.ID} to NoDropOffCache",
-          Category.Storage);
-      return false;
     }
 
     private static bool ValidateConfigurationInputs(PlaceableStorageEntity shelf, out StorageConfiguration config, out string error)
@@ -799,21 +866,17 @@ namespace NoLazyWorkers.Storage
 
     private static void UpdateStorageConfigurationInternal(PlaceableStorageEntity shelf, ItemInstance assignedItem, StorageConfiguration config)
     {
-      Log(Level.Verbose,
-          $"UpdateStorageConfigurationInternal: Start for shelf={shelf.GUID}, item={assignedItem?.ID ?? "null"}",
-          Category.Storage);
-
+#if DEBUG
+      Log(Level.Verbose, $"UpdateStorageConfigurationInternal: Start for shelf={shelf.GUID}, item={assignedItem?.ID ?? "null"}", Category.Storage);
+#endif
       var property = shelf.ParentProperty;
       var oldAssignedItem = config.AssignedItem;
-
-      // Ensure NoDropOffCache exists
       if (!NoDropOffCache.TryGetValue(property, out var cache))
       {
         cache = new HashSet<ItemInstance>();
         NoDropOffCache.TryAdd(property, cache);
       }
       RemoveStorageFromLists(shelf);
-
       if (config.Mode == StorageMode.Any)
       {
         AddShelfToAnyShelves(shelf, property);
@@ -822,19 +885,15 @@ namespace NoLazyWorkers.Storage
       {
         AddShelfToSpecificShelves(shelf, assignedItem, property, cache);
       }
-
-      // Clean up caches
       var cacheKeysToRemove = new List<CacheKey>();
       if (oldAssignedItem != null)
-        cacheKeysToRemove.Add(CreateCacheKey(oldAssignedItem, property));
+        cacheKeysToRemove.Add(new CacheKey(oldAssignedItem, property));
       if (assignedItem != null)
-        cacheKeysToRemove.Add(CreateCacheKey(assignedItem, property));
+        cacheKeysToRemove.Add(new CacheKey(assignedItem, property));
       foreach (var itemCache in ShelfCache.Where(kvp => kvp.Value.ContainsKey(shelf)))
-        cacheKeysToRemove.Add(CreateCacheKey(itemCache.Key, shelf.ParentProperty));
-
+        cacheKeysToRemove.Add(new CacheKey(itemCache.Key, shelf.ParentProperty));
       CacheManager.GetOrCreateCacheManager(property).RemoveShelfSearchCacheEntries(cacheKeysToRemove);
       UpdateStorageCache(shelf);
-
       Log(Level.Info,
           $"UpdateStorageConfigurationInternal: Completed for shelf={shelf.GUID}",
           Category.Storage);
@@ -844,13 +903,12 @@ namespace NoLazyWorkers.Storage
     {
       if (!AnyShelves.TryGetValue(property, out var anyShelves))
         AnyShelves[property] = new List<PlaceableStorageEntity> { shelf };
-
       else if (!anyShelves.Contains(shelf))
       {
         anyShelves.Add(shelf);
-        Log(Level.Verbose,
-            $"AddShelfToAnyShelves: Added shelf={shelf.GUID}",
-            Category.Storage);
+#if DEBUG
+        Log(Level.Verbose, $"AddShelfToAnyShelves: Added shelf={shelf.GUID}", Category.Storage);
+#endif
       }
     }
 
@@ -861,16 +919,13 @@ namespace NoLazyWorkers.Storage
         shelfDict = new ConcurrentDictionary<PlaceableStorageEntity, ShelfInfo>();
         ShelfCache[assignedItem] = shelfDict;
       }
-
       if (!SpecificShelves.TryGetValue(property, out var specificShelves))
       {
         specificShelves = new Dictionary<ItemInstance, List<PlaceableStorageEntity>>();
         SpecificShelves[property] = specificShelves;
       }
-
       foreach (var itemShelves in specificShelves.Values)
         itemShelves.Remove(shelf);
-
       if (!specificShelves.TryGetValue(assignedItem, out var shelves))
       {
         shelves = new List<PlaceableStorageEntity>();
@@ -879,59 +934,56 @@ namespace NoLazyWorkers.Storage
       if (!shelves.Contains(shelf))
       {
         shelves.Add(shelf);
-        Log(Level.Info,
-            $"AddShelfToSpecificShelves: Added shelf={shelf.GUID} for {assignedItem.ID}",
-            Category.Storage);
+        Log(Level.Info, $"AddShelfToSpecificShelves: Added shelf={shelf.GUID} for {assignedItem.ID}", Category.Storage);
       }
-
       var cacheList = cache.ToList();
       for (int i = cacheList.Count - 1; i >= 0; i--)
       {
         if (cacheList[i].ID == assignedItem.ID)
         {
           cache.Remove(cacheList[i]);
-          Log(Level.Verbose,
-              $"AddShelfToSpecificShelves: Removed {assignedItem.ID} from NoDropOffCache",
-              Category.Storage);
+#if DEBUG
+          Log(Level.Verbose, $"AddShelfToSpecificShelves: Removed {assignedItem.ID} from NoDropOffCache", Category.Storage);
+#endif
         }
       }
-
       int qty = GetItemQuantityInStorage(shelf, assignedItem);
       shelfDict[shelf] = new ShelfInfo(qty, true);
     }
 
     public static void RemoveStorageFromLists(PlaceableStorageEntity shelf)
     {
-      Log(Level.Verbose,
-          $"RemoveStorageFromLists: Start for shelf={shelf?.GUID.ToString() ?? "null"}",
-          Category.Storage);
-
+#if DEBUG
+      Log(Level.Verbose, $"RemoveStorageFromLists: Start for shelf={shelf?.GUID.ToString() ?? "null"}", Category.Storage);
+#endif
       if (shelf == null)
         return;
-
       if (AnyShelves.TryGetValue(shelf.ParentProperty, out var anyShelves))
         anyShelves.Remove(shelf);
-
       foreach (var itemCache in ShelfCache.Values)
         itemCache.TryRemove(shelf, out var _);
-
       if (SpecificShelves.TryGetValue(shelf.ParentProperty, out var specificShelves))
       {
         foreach (var itemShelves in specificShelves.Values)
           itemShelves.Remove(shelf);
-        Log(Level.Verbose,
-            $"RemoveStorageFromLists: Removed shelf={shelf.GUID} from SpecificShelves",
-            Category.Storage);
+#if DEBUG
+        Log(Level.Verbose, $"RemoveStorageFromLists: Removed shelf={shelf.GUID} from SpecificShelves", Category.Storage);
+#endif
       }
-
-      Log(Level.Info,
-          $"RemoveStorageFromLists: Completed for shelf={shelf.GUID}",
-          Category.Storage);
+      Log(Level.Info, $"RemoveStorageFromLists: Completed for shelf={shelf.GUID}", Category.Storage);
     }
   }
 
   public static class Extensions
   {
+    [BurstCompile]
+    public struct StationData
+    {
+      public FixedString32Bytes TypeName;
+      public bool IsInUse;
+      public NativeList<ItemKey> RefillList;
+    }
+
     public readonly struct CacheKey : IEquatable<CacheKey>
     {
       public readonly ItemInstance Item;
@@ -999,18 +1051,24 @@ namespace NoLazyWorkers.Storage
       public FixedString32Bytes Id;
       public FixedString32Bytes PackagingId;
       public EQualityBurst Quality;
-      public static ItemKey Empty => new ItemKey("", "", EQualityBurst.None);
+      public int Quantity;
+      public int StackLimit;
+      public static ItemKey Empty => new ItemKey("", "", EQualityBurst.None, 0, -1);
       public ItemKey(ItemInstance item)
       {
         Id = item.ID ?? throw new ArgumentNullException(nameof(Id));
         PackagingId = (item as ProductItemInstance)?.AppliedPackaging?.ID ?? "";
         Quality = (item is ProductItemInstance prodItem) ? Enum.Parse<EQualityBurst>(prodItem.Quality.ToString()) : EQualityBurst.None;
+        Quantity = item.Quantity;
+        StackLimit = item.StackLimit;
       }
-      public ItemKey(string id, string packagingId, EQualityBurst? quality)
+      public ItemKey(string id, string packagingId, EQualityBurst? quality, int quantity, int stackLimit)
       {
         Id = id ?? "";
         PackagingId = packagingId ?? "";
         Quality = quality ?? EQualityBurst.None;
+        Quantity = quantity;
+        StackLimit = stackLimit;
       }
       public bool Equals(ItemKey other) => Id == other.Id && PackagingId == other.PackagingId && Quality == other.Quality;
       public override bool Equals(object obj) => obj is ItemKey other && Equals(other);
@@ -1043,12 +1101,12 @@ namespace NoLazyWorkers.Storage
       /// <summary>
       /// Checks if two ItemKeys can stack based on ID, packaging, and quality.
       /// </summary>
-      internal readonly bool AdvCanStackWithBurst(ItemKey targetItem, bool allowHigherQuality = false, bool checkQuantities = false, int stackLimit = -1, int itemQuantity = 0, int targetQuantity = 0)
+      internal readonly bool AdvCanStackWithBurst(ItemKey targetItem, bool allowTargetHigherQuality = false, bool checkQuantities = false)
       {
         bool qualityMatch;
         if (targetItem.Id == "Any")
         {
-          qualityMatch = Quality >= targetItem.Quality;
+          qualityMatch = allowTargetHigherQuality ? Quality <= targetItem.Quality : Quality == targetItem.Quality;
           return qualityMatch;
         }
 
@@ -1057,16 +1115,16 @@ namespace NoLazyWorkers.Storage
 
         if (checkQuantities)
         {
-          if (stackLimit == -1)
+          if (StackLimit == -1)
             throw new ArgumentException($"AdvCanStackWith: CheckQuantities requires a stackLimit");
-          if (stackLimit < targetQuantity + itemQuantity)
+          if (StackLimit < targetItem.Quantity + Quantity)
             return false;
         }
 
         if (!ArePackagingsCompatible(targetItem))
           return false;
 
-        qualityMatch = allowHigherQuality ? Quality >= targetItem.Quality : Quality == targetItem.Quality;
+        qualityMatch = allowTargetHigherQuality ? Quality <= targetItem.Quality : Quality == targetItem.Quality;
         return qualityMatch;
       }
 
@@ -1190,7 +1248,7 @@ namespace NoLazyWorkers.Storage
     public void Activate()
     {
       if (_isActive) return;
-      if (InstanceFinder.IsServer)
+      if (IsServer)
       {
         TimeManagerInstance.OnTick += ProcessPendingUpdates;
         TimeManagerInstance.OnTick += ProcessPendingSlotUpdates;
@@ -1217,14 +1275,14 @@ namespace NoLazyWorkers.Storage
     public void Cleanup()
     {
       Log(Level.Info, "CacheManager.Cleanup: Unsubscribing and clearing caches", Category.Storage);
-      if (InstanceFinder.IsServer)
+      if (IsServer)
       {
         InstanceFinder.TimeManager.OnTick -= ProcessPendingUpdates;
         InstanceFinder.TimeManager.OnTick -= ProcessPendingSlotUpdates;
       }
 
       IdToProperty.Clear();
-      Performance.Cleanup();
+      Performance.Metrics.Cleanup();
       CoroutineRunner.Instance.StopAllCoroutines();
       ItemNotFoundCache.Clear();
       _shelfSearchCache.Clear();
@@ -1281,7 +1339,7 @@ namespace NoLazyWorkers.Storage
       const long MAX_TIME_MS = 1;
       if (_pendingSlotUpdates.IsEmpty) return;
       int totalItems = _pendingSlotUpdates.Count;
-      Performance.TrackExecution(nameof(ProcessPendingSlotUpdates), () =>
+      Performance.Metrics.TrackExecution(nameof(ProcessPendingSlotUpdates), () =>
       {
         var stopwatch = Stopwatch.StartNew();
         int maxItems = GetDynamicBatchSize(totalItems, 0.15f, nameof(ProcessPendingSlotUpdates)); int processedCount = 0; try
@@ -1747,41 +1805,20 @@ namespace NoLazyWorkers.Storage
       }
     }
 
-    /// <summary>
-    /// Asynchronously retrieves property data.
-    /// </summary>
-    public async Task<(bool, List<IStationAdapter>, List<PlaceableStorageEntity>)> TryGetPropertyDataAsync()
-    {
-      await AwaitNextFishNetTickAsync();
-      try
-      {
-        return TryGetPropertyData();
-      }
-      catch (Exception ex)
-      {
-        Log(Level.Error, $"TryGetPropertyDataAsync: Failed for {_property.name} - {ex}", Category.Tasks);
-        var stations = new List<IStationAdapter>();
-        var storages = new List<PlaceableStorageEntity>();
-        return (false, stations, storages);
-      }
-    }
-
-    /// <summary>
-    /// Retrieves cached station and storage data for a given property.
-    /// </summary>
-    /// <param name="property">The property to query.</param>
-    /// <param name="stations">The list of station adapters if found; otherwise, null.</param>
-    /// <param name="storages">The list of storage entities if found; otherwise, null.</param>
-    /// <returns>True if the cache exists; otherwise, false.</returns>
-    public (bool, List<IStationAdapter>, List<PlaceableStorageEntity>) TryGetPropertyData()
+    public static (bool, List<IStationAdapter>, List<PlaceableStorageEntity>) TryGetPropertyData(Property property)
     {
       List<IStationAdapter> stations = [];
       List<PlaceableStorageEntity> storages = [];
-      if (IStations.TryGetValue(_property, out var stationData))
+      if (IStations.TryGetValue(property, out var stationData))
         stations = stationData.Values.ToList();
-      if (Storages.TryGetValue(_property, out var storageData))
+      if (Storages.TryGetValue(property, out var storageData))
         storages = storageData.Values.ToList();
       return (stations.Count > 0 || storages.Count > 0, stations, storages);
+    }
+
+    public (bool, List<IStationAdapter>, List<PlaceableStorageEntity>) GetPropertyData()
+    {
+      return TryGetPropertyData(_property);
     }
 
     /// <summary>
@@ -1864,7 +1901,7 @@ namespace NoLazyWorkers.Storage
     /// <param name="property">The property associated with the cache.</param>
     public void ClearItemNotFoundCache(ItemInstance item)
     {
-      var cacheKey = Utilities.CreateCacheKey(item, _property);
+      var cacheKey = new CacheKey(item, _property);
       if (ItemNotFoundCache.TryRemove(cacheKey, out _))
       {
         Log(Level.Verbose,
@@ -1884,7 +1921,7 @@ namespace NoLazyWorkers.Storage
 
       _isProcessingUpdates = true;
       int totalItems = _pendingUpdates.Count + _pendingStationUpdates.Count;
-      Performance.TrackExecution(nameof(ProcessPendingUpdates), () =>
+      Performance.Metrics.TrackExecution(nameof(ProcessPendingUpdates), () =>
       {
         var processedShelves = new HashSet<Guid>();
         var processedProperties = new HashSet<string>();
@@ -1962,7 +1999,7 @@ namespace NoLazyWorkers.Storage
       Log(Level.Verbose, $"PerformStorageCacheUpdate: Start for shelf={shelf.GUID}", Category.Storage);
       try
       {
-        Performance.TrackExecution(nameof(PerformStorageCacheUpdate), () =>
+        Performance.Metrics.TrackExecution(nameof(PerformStorageCacheUpdate), () =>
         {
           CoroutineRunner.Instance.RunCoroutine(PerformStorageCacheUpdateCoroutine(shelf));
         });
@@ -2116,11 +2153,11 @@ namespace NoLazyWorkers.Storage
       if (found && shelfList != null)
       {
         shelves.AddRange(shelfList);
-        Performance.TrackCacheAccess("ShelfSearchCache", true);
+        Performance.Metrics.TrackCacheAccess("ShelfSearchCache", true);
       }
       else
       {
-        Performance.TrackCacheAccess("ShelfSearchCache", false);
+        Performance.Metrics.TrackCacheAccess("ShelfSearchCache", false);
       }
       Log(Level.Verbose,
           $"TryGetCachedShelves: {(found ? "Hit" : "Miss")} for key={key.ID}{(key.Quality.HasValue ? $" Quality={key.Quality}" : "")}, shelves={shelves?.Count ?? 0}",
@@ -2202,7 +2239,7 @@ namespace NoLazyWorkers.Storage
           kvp.Value.TryRemove(shelf, out _);
           if (kvp.Value.IsEmpty)
             _shelfCache.TryRemove(kvp.Key, out _);
-          cacheKeysToRemove.Add(Utilities.CreateCacheKey(kvp.Key, _property));
+          cacheKeysToRemove.Add(new CacheKey(kvp.Key, _property));
         }
       }
 
@@ -2354,7 +2391,7 @@ namespace NoLazyWorkers.Storage
               config.Dispose();
             var cacheKeys = ShelfCache
                 .Where(kvp => kvp.Value.ContainsKey(storage))
-                .Select(kvp => Utilities.CreateCacheKey(kvp.Key, storage.ParentProperty))
+                .Select(kvp => new CacheKey(kvp.Key, storage.ParentProperty))
                 .ToList();
             GetOrCreateCacheManager(__instance.ParentProperty).RemoveShelfSearchCacheEntries(cacheKeys);
           }

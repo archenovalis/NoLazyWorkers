@@ -620,7 +620,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
           }
 
           packager.Avatar.Anim.SetBool("UsePackagingStation", false);
-          if (InstanceFinder.IsServer)
+          if (FishNetExtensions.IsServer)
             station.Unpack();
 
           DebugLogger.Log(DebugLogger.LogLevel.Info,

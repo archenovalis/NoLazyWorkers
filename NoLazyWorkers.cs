@@ -34,7 +34,7 @@ using ScheduleOne.NPCs;
 using NoLazyWorkers.TaskService;
 using FishNet.Managing.Timing;
 using UnityEngine.InputSystem.EnhancedTouch;
-using NoLazyWorkers.Metrics;
+using NoLazyWorkers.Performance;
 using static NoLazyWorkers.NoLazyUtilities;
 using Unity.Collections;
 using Unity.Burst;
@@ -262,9 +262,10 @@ namespace NoLazyWorkers
         Log(Level.Info, "Applied Fixer and Misc settings on main scene load.", Category.Core);
         MixingStationConfigUtilities.InitializeStaticRouteListTemplate();
         ShelfUtilities.InitializeStorageModule();
-        TaskServiceManager.Initialize();
-        Performance.Initialize();
-        TimeManagerExtensions.TimeManagerInstance = InstanceFinder.TimeManager;
+        //TaskServiceManager.Initialize();
+        Performance.Metrics.Initialize();
+        FishNetExtensions.IsServer = InstanceFinder.IsServer;
+        FishNetExtensions.TimeManagerInstance = InstanceFinder.TimeManager;
       }
     }
 
@@ -276,118 +277,6 @@ namespace NoLazyWorkers
       Settings.SettingsExtensions.Configured.Clear();
       TaskServiceManager.Clear();
       Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
-    }
-  }
-
-  public static class TimeManagerExtensions
-  {
-    public static TimeManager TimeManagerInstance;
-    private static readonly ConcurrentDictionary<TimeManager, ConcurrentDictionary<double, TaskCompletionSource<bool>>> _tickAwaiters = new();
-
-    /// <summary>
-    /// Asynchronously waits for the next FishNet TimeManager tick.
-    /// </summary>
-    /// <param name="TimeManagerInstance">The FishNet TimeManager instance.</param>
-    /// <returns>A Task that completes on the next tick.</returns>
-    private static Task AwaitNextTickAsyncInternal()
-    {
-      var tick = TimeManagerInstance.Tick;
-      var awaiters = _tickAwaiters.GetOrAdd(TimeManagerInstance, _ => new ConcurrentDictionary<double, TaskCompletionSource<bool>>());
-      if (awaiters.TryGetValue(tick + 1, out var tcs))
-        return tcs.Task;
-
-      tcs = new TaskCompletionSource<bool>();
-      if (!awaiters.TryAdd(tick + 1, tcs))
-        return awaiters[tick + 1].Task;
-
-      void OnTick()
-      {
-        if (TimeManagerInstance.Tick <= tick) return;
-        TimeManagerInstance.OnTick -= OnTick;
-        awaiters.TryRemove(tick + 1, out _);
-        tcs.TrySetResult(true);
-      }
-      TimeManagerInstance.OnTick += OnTick;
-      return tcs.Task;
-    }
-
-    /// <summary>
-    /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
-    /// </summary>
-    /// <param name="TimeManagerInstance">The FishNet TimeManager instance.</param>
-    /// <param name="seconds">The duration to wait in seconds.</param>
-    /// <returns>A Task that completes after the specified delay.</returns>
-    public static async Task AwaitNextFishNetTickAsync(float seconds = 0)
-    {
-      if (seconds < 0f)
-      {
-        Log(Level.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", Category.Tasks);
-        return;
-      }
-
-      if (seconds > 0f)
-      {
-        int ticksToWait = Mathf.CeilToInt(seconds * TimeManagerInstance.TickRate);
-        Log(Level.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {TimeManagerInstance.TickRate}", Category.Tasks);
-
-        for (int i = 0; i < ticksToWait; i++)
-        {
-          await AwaitNextTickAsyncInternal();
-        }
-      }
-      else
-        await AwaitNextTickAsyncInternal();
-    }
-
-    public static IEnumerator WaitForNextTick()
-    {
-      long currentTick = TimeManagerInstance.Tick;
-      while (TimeManagerInstance.Tick == currentTick)
-        yield return null;
-    }
-
-    public static int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs = 0.15f, string methodName = null)
-    {
-      float TICK_DURATION_MS = 1000f / TimeManagerInstance.TickRate; // Dynamic tick rate
-      const float MAX_TICK_USAGE = 0.5f; // Use up to 50% of tick
-      float avgProcessingTimeMs = methodName != null
-          ? DynamicProfiler.GetDynamicAvgProcessingTimeMs(methodName, defaultAvgProcessingTimeMs)
-          : defaultAvgProcessingTimeMs;
-      int maxItemsPerTick = Mathf.FloorToInt(TICK_DURATION_MS * MAX_TICK_USAGE / avgProcessingTimeMs);
-      return Mathf.Clamp(totalItems / 10, Mathf.Min(5, maxItemsPerTick), Mathf.Min(50, maxItemsPerTick));
-    }
-  }
-
-  public static class TaskExtensions
-  {
-    public static TaskYieldInstruction AsCoroutine(this Task task) => new TaskYieldInstruction(task);
-    public static TaskYieldInstruction<T> AsCoroutine<T>(this Task<T> task) => new TaskYieldInstruction<T>(task);
-
-    /// <summary>
-    /// Custom yield instruction to wait for a Task in a Unity coroutine.
-    /// </summary>
-    public class TaskYieldInstruction : CustomYieldInstruction
-    {
-      private readonly Task _task;
-
-      public TaskYieldInstruction(Task task)
-      {
-        _task = task ?? throw new ArgumentNullException(nameof(task));
-      }
-
-      public override bool keepWaiting => !_task.IsCompleted;
-    }
-    public class TaskYieldInstruction<T> : CustomYieldInstruction
-    {
-      private readonly Task<T> _task;
-
-      public TaskYieldInstruction(Task<T> task)
-      {
-        _task = task ?? throw new ArgumentNullException(nameof(task));
-      }
-
-      public override bool keepWaiting => !_task.IsCompleted;
-      public T Result => _task.IsCompleted ? _task.Result : default;
     }
   }
 
@@ -520,80 +409,6 @@ namespace NoLazyWorkers
       return systemList;
     } 
   } */
-
-    public class CoroutineRunner : MonoBehaviour
-    {
-      private static CoroutineRunner _instance;
-      public static CoroutineRunner Instance
-      {
-        get
-        {
-          if (_instance == null)
-          {
-            var go = new GameObject("CoroutineRunner");
-            _instance = go.AddComponent<CoroutineRunner>();
-            DontDestroyOnLoad(go);
-          }
-          return _instance;
-        }
-      }
-
-      public Coroutine RunCoroutine(IEnumerator coroutine)
-      {
-        return StartCoroutine(RunCoroutineInternal(coroutine));
-      }
-
-      private IEnumerator RunCoroutineInternal(IEnumerator coroutine)
-      {
-        while (true)
-        {
-          object current;
-          try
-          {
-            if (!coroutine.MoveNext())
-              yield break;
-            current = coroutine.Current;
-          }
-          catch (Exception e)
-          {
-            Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
-            yield break;
-          }
-          yield return current;
-        }
-      }
-
-      public Coroutine RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
-      {
-        return StartCoroutine(RunCoroutineInternal(coroutine, callback));
-      }
-
-      private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, Action<T> callback)
-      {
-        while (true)
-        {
-          object current;
-          try
-          {
-            if (!coroutine.MoveNext())
-              yield break;
-            current = coroutine.Current;
-          }
-          catch (Exception e)
-          {
-            Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
-            callback?.Invoke(default);
-            yield break;
-          }
-          if (current is T result)
-          {
-            callback?.Invoke(result);
-            yield break;
-          }
-          yield return current;
-        }
-      }
-    }
 
     public static Transform GetTransformTemplateFromConfigPanel(EConfigurableType configType, string componentStr)
     {
@@ -1323,7 +1138,7 @@ namespace NoLazyWorkers
             : "null";
         if (npcName == "Christopher Anderson" || npcName == "Karen Green")
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"MoveItemBehaviour.StartTransit: NPC={npcName}, Route={routeInfo}, Item={itemInfo}, State={__instance.currentState}, IsServer={InstanceFinder.IsServer}",
+            $"MoveItemBehaviour.StartTransit: NPC={npcName}, Route={routeInfo}, Item={itemInfo}, State={__instance.currentState}, IsServer={FishNetExtensions.IsServer}",
             DebugLogger.Category.AllEmployees);
       }
 
@@ -1340,7 +1155,7 @@ namespace NoLazyWorkers
             : "null";
         if (npcName == "Christopher Anderson" || npcName == "Karen Green")
           DebugLogger.Log(DebugLogger.LogLevel.Verbose,
-            $"MoveItemBehaviour.ActiveMinPass: NPC={npcName}, State={__instance.currentState}, Route={routeInfo}, Item={itemInfo}, IsMoving={__instance.Npc?.Movement.IsMoving}, IsServer={InstanceFinder.IsServer}",
+            $"MoveItemBehaviour.ActiveMinPass: NPC={npcName}, State={__instance.currentState}, Route={routeInfo}, Item={itemInfo}, IsMoving={__instance.Npc?.Movement.IsMoving}, IsServer={FishNetExtensions.IsServer}",
             DebugLogger.Category.AllEmployees);
       }
 

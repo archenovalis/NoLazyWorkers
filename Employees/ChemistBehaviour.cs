@@ -135,14 +135,14 @@ namespace NoLazyWorkers.Employees
             return false;
           }
 
-          if (InstanceFinder.IsServer && needsPay && __instance.IsPayAvailable())
+          if (FishNetExtensions.IsServer && needsPay && __instance.IsPayAvailable())
           {
             Log(Level.Verbose, $"UpdateBehaviourPrefix: Processing payment for NPC={__instance.fullName}", Category.Chemist);
             __instance.RemoveDailyWage();
             __instance.SetIsPaid();
           }
 
-          if (!InstanceFinder.IsServer)
+          if (!FishNetExtensions.IsServer)
           {
             Log(Level.Verbose, $"UpdateBehaviourPrefix: Client-side, skipping for NPC={__instance.fullName}", Category.Chemist);
             return false;

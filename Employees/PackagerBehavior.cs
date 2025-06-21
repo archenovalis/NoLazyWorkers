@@ -113,13 +113,13 @@ namespace NoLazyWorkers.Employees
             return false;
           }
 
-          if (InstanceFinder.IsServer && needsPay && __instance.IsPayAvailable())
+          if (FishNetExtensions.IsServer && needsPay && __instance.IsPayAvailable())
           {
             __instance.RemoveDailyWage();
             __instance.SetIsPaid();
           }
 
-          if (!InstanceFinder.IsServer)
+          if (!FishNetExtensions.IsServer)
             return false;
 
           if (!__instance.CanWork())

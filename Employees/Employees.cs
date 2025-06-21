@@ -281,7 +281,7 @@ namespace NoLazyWorkers.Employees
       var networkObject = employee.gameObject.GetComponent<NetworkObject>();
       ManagedObjects.InitializePrefab(networkObject, -1);
       // Initialize based on server/client context
-      if (InstanceFinder.IsServer)
+      if (FishNetExtensions.IsServer)
       {
         advMove.Preinitialize_Internal(networkObject, true);
         Log(Level.Verbose, $"CreateAdvMoveItemBehaviour: Preinitialized as server for {employee.fullName}", Category.EmployeeCore);

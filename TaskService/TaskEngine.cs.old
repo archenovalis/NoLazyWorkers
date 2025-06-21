@@ -972,7 +972,7 @@ namespace NoLazyWorkers.TaskEngine
 
     private static void ProcessPendingCompletions()
     {
-      if (_isProcessingCompletions || !InstanceFinder.IsServer) return;
+      if (_isProcessingCompletions || !FishNetExtensions.IsServer) return;
       _isProcessingCompletions = true;
       try
       {
@@ -1047,7 +1047,7 @@ namespace NoLazyWorkers.TaskEngine
 
     private static void ProcessPendingValidations()
     {
-      if (_isProcessing || !InstanceFinder.IsServer) return;
+      if (_isProcessing || !FishNetExtensions.IsServer) return;
       _isProcessing = true;
       try
       {
@@ -1270,7 +1270,7 @@ namespace NoLazyWorkers.TaskEngine
 
     private static void ProcessPendingRevalidations()
     {
-      if (!InstanceFinder.IsServer) return;
+      if (!FishNetExtensions.IsServer) return;
       try
       {
         var stopwatch = Stopwatch.StartNew();
@@ -1737,7 +1737,7 @@ namespace NoLazyWorkers.TaskEngine
 
     private static void QueuePeriodicUpdates()
     {
-      if (!InstanceFinder.IsServer || Time.time < _lastUpdateTime + UPDATE_INTERVAL)
+      if (!FishNetExtensions.IsServer || Time.time < _lastUpdateTime + UPDATE_INTERVAL)
         return;
 
       foreach (var property in ActiveProperties)
@@ -1841,7 +1841,7 @@ namespace NoLazyWorkers.TaskEngine
 
     private static void ProcessPendingUpdates()
     {
-      if (_isProcessingUpdates || !InstanceFinder.IsServer) return;
+      if (_isProcessingUpdates || !FishNetExtensions.IsServer) return;
       _isProcessingUpdates = true;
       try
       {
