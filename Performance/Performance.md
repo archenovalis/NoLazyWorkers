@@ -1,230 +1,667 @@
-# Performance Metrics API Documentation
+# NoLazyWorkers.Performance API Documentation
 
-**Date**: June 20, 2025
+**Date**: June 24, 2025
 
-This API provides tools for tracking performance metrics, managing coroutines, and optimizing execution in a Unity environment with FishNet integration. It includes classes and methods for profiling execution times, main thread impact, cache access, and dynamic task execution.
+## Overview
 
-## Namespace: NoLazyWorkers.Performance
+The `NoLazyWorkers.Performance` namespace provides a robust system for managing and optimizing task execution in Unity using the Job System, coroutines, or main thread execution. It includes job wrappers, performance metrics tracking, dynamic profiling, and intelligent task scheduling with support for Burst compilation and FishNet integration.
 
-### Class: Metrics
+---
 
-Tracks performance metrics for execution times, main thread impact, and cache access.
+## Enums
 
-#### Struct: SingleEntityMetricsJob
+### JobType
 
-A Burst-compiled job for tracking metrics of a single entity.
+Defines the types of jobs supported by the job wrapper system.
 
-- **Fields**:
-  - `TaskType` (FixedString64Bytes): The type of task being tracked.
-  - `Timestamp` (float): The timestamp of the job execution.
-  - `Metrics` (NativeArray<Metric>): The array to store metric data.
+- **IJob**: Non-parallel job.
+- **IJobParallelFor**: Parallel job processing items in batches.
+- **IJobFor**: Parallel job processing single items.
+- **IJobParallelForTransform**: Parallel job for transform operations.
+
+---
+
+## Interfaces
+
+### IJobWrapper
+
+Interface for wrapping Unity Job System jobs.
+
+- **Properties**:
+  - `IsParallel`: Indicates if the job is parallel.
+  - `JobType`: The type of job (see `JobType`).
 
 - **Methods**:
-  - `Execute()`: Executes the job, storing metrics in the `Metrics` array.
 
-```csharp
-// Example: Scheduling a SingleEntityMetricsJob
-var metricsArray = new NativeArray<Metric>(1, Allocator.TempJob);
-var job = new SingleEntityMetricsJob
-{
-    TaskType = "ProcessEntity",
-    Timestamp = Time.time,
-    Metrics = metricsArray
-};
-```
+  ```csharp
+    JobHandle Schedule(int count = 0, int batchSize = 64)
+    ```
 
-#### Struct: Metric
+  Schedules the job.
+  - **count**: Number of items to process (default: 0).
+  - **batchSize**: Batch size for parallel processing (default: 64).
+  - **Returns**: `JobHandle` for the scheduled job.
 
-Represents a performance metric for a method.
+  ```csharp
+    void Complete()
+    ```
 
-- **Fields**:
-  - `MethodName` (FixedString64Bytes): The name of the method.
-  - `ExecutionTimeMs` (float): Total execution time in milliseconds.
-  - `MainThreadImpactMs` (float): Main thread impact time in milliseconds.
-  - `ItemCount` (int): Number of items processed.
+    Completes the job and cleans up resources.
 
-#### Struct: Data
+---
 
-Aggregated performance data for a method.
+## Structs
+
+### JobWrapper<T> where T : struct, IJob
+
+Wraps a non-parallel `IJob`.
 
 - **Fields**:
-  - `CallCount` (long): Total number of calls.
-  - `TotalTimeMs` (double): Total execution time in milliseconds.
-  - `MaxTimeMs` (double): Maximum execution time in milliseconds.
-  - `TotalMainThreadImpactMs` (double): Total main thread impact time in milliseconds.
-  - `MaxMainThreadImpactMs` (double): Maximum main thread impact time in milliseconds.
-  - `CacheHits` (long): Number of cache hits.
-  - `CacheMisses` (long): Number of cache misses.
-  - `ItemCount` (long): Total number of items processed.
-  - `AvgItemTimeMs` (double): Average execution time per item in milliseconds.
-  - `AvgMainThreadImpactMs` (double): Average main thread impact per item in milliseconds.
+  - `Job`: The job to be executed.
 
-#### Methods
+- **Properties**:
+  - `IsParallel`: Always `false`.
+  - `JobType`: Always `JobType.IJob`.
 
-- `Initialize()`: Initializes the metrics system (server-side only).
-- `LogExecutionTime(string taskId, long milliseconds)`: Logs execution time for a task.
-- `GetAverageTaskExecutionTime()`: Returns the average execution time across all tasks.
-  - **Returns**: float (average time in milliseconds, default 100f if empty).
-- `TrackExecution(string methodName, Action action, int itemCount = 1)`: Tracks execution time and main thread impact of an action.
-- `TrackExecution<T>(string methodName, Func<T> action, int itemCount = 1)`: Tracks execution time and main thread impact of a function with a return value.
-  - **Returns**: T (result of the function).
-- `TrackExecutionAsync(string methodName, Func<Task> action, int itemCount = 1)`: Tracks execution time and main thread impact of an asynchronous action.
-  - **Returns**: Task.
-- `TrackExecutionAsync<T>(string methodName, Func<Task<T>> action, int itemCount = 1)`: Tracks execution time and main thread impact of an asynchronous function.
-  - **Returns**: Task<T> (result of the function).
-- `TrackExecutionCoroutine(string methodName, IEnumerator coroutine, int itemCount = 1)`: Tracks execution time and main thread impact of a coroutine.
-  - **Returns**: IEnumerator.
-- `TrackExecutionBurst(FixedString64Bytes methodName, float executionTimeMs, int itemCount, NativeArray<Metric> metrics, int index)`: Tracks execution metrics in a Burst-compiled job.
-- `TrackCacheAccess(string cacheName, bool isHit)`: Tracks cache hit or miss for a given cache.
-- `ProcessMetricsAsync(NativeArray<Metric> metrics)`: Processes an array of metrics asynchronously.
-  - **Returns**: Task.
-- `GetAvgItemTimeMs(string methodName)`: Returns the average execution time per item for a method.
-  - **Returns**: double (average time in milliseconds, or 0 if not found).
-- `GetAvgMainThreadImpactMs(string methodName)`: Returns the average main thread impact per item for a method.
-  - **Returns**: double (average impact in milliseconds, or 0 if not found).
-- `Cleanup()`: Clears all metrics data and unsubscribes from events.
+- **Methods**:
 
-```csharp
-// Example: Tracking an action
-Metrics.TrackExecution("ProcessData", () => ProcessDataMethod(), itemCount: 10);
+  ```csharp
+    JobWrapper(T job)
+    ```
 
-// Example: Tracking an async function
-var result = await Metrics.TrackExecutionAsync("FetchData", async () => await FetchDataAsync(), itemCount: 5)
-```
+    Constructor initializing the job.
 
-### Class: DynamicProfiler
+  ```csharp
+    JobHandle Schedule(int count = 0, int batchSize = 64)
+    ```
 
-Manages dynamic profiling using rolling averages.
+    Schedules the job using `Job.Schedule()`.
 
-#### Methods
+  ```csharp
+    void Complete()
+    ```
 
-- `AddSample(string methodName, double avgItemTimeMs)`: Adds a sample to the rolling average for a method.
-- `GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f)`: Gets the dynamic average processing time for a method.
-  - **Returns**: float (average time in milliseconds, or defaultTimeMs if not found).
-- `Cleanup()`: Clears all rolling average data.
+    Empty implementation (no cleanup required).
 
-```csharp
-// Example: Adding a sample and retrieving average
-DynamicProfiler.AddSample("ProcessData", 0.2);
-float avgTime = DynamicProfiler.GetDynamicAvgProcessingTimeMs("ProcessData")
-```
+### JobParallelForWrapper<T> where T : struct, IJobParallelFor
 
-### Class: MainThreadImpactTracker
+Wraps a parallel `IJobParallelFor`.
 
-Tracks main thread impact of method executions.
+- **Fields**:
+  - `Job`: The job to be executed in parallel.
 
-#### Methods
+- **Properties**:
+  - `IsParallel`: Always `true`.
+  - `JobType`: Always `JobType.IJobParallelFor`.
 
-- `Initialize()`: Initializes the tracker.
-- `BeginSample(string methodName)`: Begins a new main thread impact sample.
-  - **Returns**: int (sample ID).
-- `EndSample(int sampleId)`: Ends a sample and records the impact time.
-  - **Returns**: float (impact time in milliseconds).
-- `GetAverageItemImpact(string methodName)`: Gets the average main thread impact for a method.
-  - **Returns**: float (average impact in milliseconds, or 0 if not found).
-- `Cleanup()`: Clears all impact data and unsubscribes from events.
+- **Methods**:
 
-```csharp
-// Example: Tracking main thread impact
-int sampleId = MainThreadImpactTracker.BeginSample("ProcessData");
-ProcessDataMethod();
-float impactMs = MainThreadImpactTracker.EndSample(sampleId)
-```
+  ```csharp
+    JobParallelForWrapper(T job, int count, int batchSize)
+    ```
 
-### Class: SmartExecution
+    Constructor initializing the job, count, and batch size.
 
-Manages smart execution of tasks using jobs, coroutines, or main thread.
+  ```csharp
+    JobHandle Schedule(int count = 0, int batchSize = 64)
+    ```
 
-#### Fields
+    Schedules the job using `Job.Schedule(_count, _batchSize)`.
 
-- `MetricsThresholds` (ConcurrentDictionary<string, int>): Stores execution thresholds.
-- `DEFAULT_THRESHOLD` (const int): Default threshold for job execution (100).
+  ```csharp
+    void Complete()
+    ```
 
-#### Methods
+    Empty implementation (no cleanup required).
 
-- `Execute(string uniqueId, int itemCount, Action jobCallback = null, Func<IEnumerator> coroutineCallback = null, Action mainThreadCallback = null)`: Executes a task using the most efficient method based on performance metrics.
-  - **Returns**: IEnumerator.
+### DelegateJob<TInput, TOutput> where TInput : unmanaged, TOutput : unmanaged
 
-```csharp
-// Example: Smart execution with coroutine
-yield return SmartExecution.Execute("ProcessItems", 50, coroutineCallback: () => ProcessItemsCoroutine())
-```
+Executes a delegate-based `IJob` with Burst compilation.
 
-### Class: FishNetExtensions
+- **Fields**:
+  - `Delegate`: Function pointer to the job delegate.
+  - `Inputs`: Input data array.
+  - `Outputs`: Output data list.
+  - `StartIndex`: Starting index for processing.
+  - `Count`: Number of items to process.
+
+- **Methods**:
+
+  ```csharp
+    void Execute()
+    ```
+
+    Invokes the delegate and logs performance if exceeding frame time in debug mode.
+
+### DelegateParallelJob<TInput, TOutput> where TInput : unmanaged, TOutput : unmanaged
+
+Executes a delegate-based `IJobParallelFor` with Burst compilation.
+
+- **Fields**:
+  - `Delegate`: Function pointer to the parallel job delegate.
+  - `Inputs`: Input data array.
+  - `Outputs`: Output data list.
+  - `StartIndex`: Starting index for processing.
+  - `BatchSize`: Size of each batch.
+
+- **Methods**:
+
+  ```csharp
+    void Execute(int index)
+    ```
+
+    Processes a batch of items using the delegate.
+
+### DelegateForJob<TInput, TOutput> where TInput : unmanaged, TOutput : unmanaged
+
+Executes a delegate-based `IJobParallelFor` for single-item processing.
+
+- **Fields**:
+  - `Delegate`: Function pointer to the single-item delegate.
+  - `Inputs`: Input data array.
+  - `Outputs`: Output data list.
+  - `StartIndex`: Starting index for processing.
+
+- **Methods**:
+
+  ```csharp
+    void Execute(int index)
+    ```
+
+    Processes a single item using the delegate.
+
+### DelegateParallelForTransformJob
+
+Executes a delegate-based `IJobParallelForTransform` with Burst compilation.
+
+- **Fields**:
+  - `Delegate`: Function pointer to the transform delegate.
+  - `StartIndex`: Starting index for processing.
+  - `BatchSize`: Size of each batch.
+
+- **Methods**:
+
+  ```csharp
+    void Execute(int index, TransformAccess transform)
+    ```
+
+    Processes a transform using the delegate.
+
+### DelegateJobWrapper<TInput, TOutput> where TInput : unmanaged, TOutput : unmanaged
+
+Wraps delegate-based jobs for various job types.
+
+- **Fields**:
+  - `_inputs`: Input data for the job.
+  - `_outputs`: Output data for the job.
+
+- **Properties**:
+  - `IsParallel`: True for `IJobParallelFor` or `IJobParallelForTransform`.
+  - `JobType`: The type of job.
+
+- **Methods**:
+
+  ```csharp
+    DelegateJobWrapper(
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateIJob,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateFor,
+        Action<int, TransformAccess> transformDelegate,
+        NativeArray<TInput> inputs,
+        NativeList<TOutput> outputs,
+        TransformAccessArray transforms,
+        int startIndex,
+        int count,
+        int batchSize,
+        JobType jobType)
+    ```
+
+    Constructor initializing delegates, data, and job type.
+
+  ```csharp
+    JobHandle Schedule(int count = 0, int batchSize = 64)
+    ```
+
+    Schedules the appropriate job based on `JobType`.
+
+  ```csharp
+    void Complete()
+    ```
+
+    Disposes `TransformAccessArray` for transform jobs in debug mode.
+
+### SingleEntityMetricsJob
+
+Tracks metrics for a single entity job.
+
+- **Fields**:
+  - `TaskType`: Type of the task.
+  - `Timestamp`: Execution timestamp.
+  - `Metrics`: Array to store metrics.
+  - `CacheMetrics`: Array to store cache metrics.
+  - `CacheIndex`: Index in the cache metrics array.
+
+- **Methods**:
+
+  ```csharp
+    void Execute()
+    ```
+
+    Tracks execution and cache metrics.
+
+### Metric
+
+Stores performance metrics for a method.
+
+- **Fields**:
+  - `MethodName`: Name of the method.
+  - `ExecutionTimeMs`: Execution time in milliseconds.
+  - `MainThreadImpactMs`: Main thread impact in milliseconds.
+  - `ItemCount`: Number of items processed.
+
+### CacheMetric
+
+Stores cache access metrics.
+
+- **Fields**:
+  - `CacheName`: Name of the cache.
+  - `IsHit`: Whether the cache access was a hit.
+
+### SmartExecutionOptions
+
+Options for configuring `SmartExecution` behavior.
+
+- **Fields**:
+  - `SpreadSingleItem`: Spread single-item jobs across frames.
+  - `SingleItemThresholdMs`: Threshold for single-item processing.
+  - `IsNetworked`: Whether execution is networked.
+  - `BatchSizeOverride`: Overrides default batch size.
+  - `PreferredJobType`: Preferred job type (optional).
+
+- **Static Properties**:
+  - `Default`: Default configuration.
+
+---
+
+## Classes
+
+### Metrics
+
+Tracks performance metrics for execution methods and cache access.
+
+- **Static Methods**:
+
+  ```csharp
+    float GetAvgItemTimeMs(string methodName)
+    ```
+
+    Returns the average item processing time in milliseconds.
+
+  ```csharp
+    void Initialize()
+    ```
+
+    Initializes the metrics system and subscribes to tick events.
+
+  ```csharp
+    void TrackExecution(string methodName, Action action, int itemCount = 1)
+    ```
+
+    Tracks execution time and main thread impact of an action.
+
+  ```csharp
+    T TrackExecution<T>(string methodName, Func<T> action, int itemCount = 1)
+    ```
+
+    Tracks execution time and main thread impact of a function.
+
+  ```csharp
+    Task TrackExecutionAsync(string methodName, Func<Task> action, int itemCount = 1)
+    ```
+
+    Tracks execution time and main thread impact of an async action.
+
+  ```csharp
+    Task<T> TrackExecutionAsync<T>(string methodName, Func<Task<T>> action, int itemCount = 1)
+    ```
+
+    Tracks execution time and main thread impact of an async function.
+
+  ```csharp
+    IEnumerator TrackExecutionCoroutine(string methodName, IEnumerator coroutine, int itemCount = 1)
+    ```
+
+    Tracks execution time and main thread impact of a coroutine.
+
+  ```csharp
+    void TrackJobCacheAccess(string cacheName, bool isHit)
+    ```
+
+    Tracks cache access for a job.
+
+  ```csharp
+    void TrackCacheAccess(string cacheName, bool isHit)
+    ```
+
+    Tracks cache access for non-job operations.
+
+  ```csharp
+    void Cleanup()
+    ```
+
+    Cleans up metrics and unsubscribes from tick events.
+
+### DynamicProfiler
+
+Manages dynamic profiling data with rolling averages and batch size history.
+
+- **Static Methods**:
+
+  ```csharp
+    void AddSample(string methodName, double avgItemTimeMs)
+    ```
+
+    Adds a performance sample for a method.
+
+  ```csharp
+    void AddBatchSize(string uniqueId, int batchSize)
+    ```
+
+    Adds a batch size sample for a method.
+
+  ```csharp
+    float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f)
+    ```
+
+    Returns the dynamic average processing time.
+
+  ```csharp
+    int GetAverageBatchSize(string uniqueId)
+    ```
+
+    Returns the average batch size.
+
+  ```csharp
+    void Cleanup()
+    ```
+
+    Cleans up profiling data.
+
+### MainThreadImpactTracker
+
+Tracks main thread impact for performance optimization.
+
+- **Static Methods**:
+
+  ```csharp
+    void Initialize()
+    ```
+
+    Initializes the tracker with overhead calibration.
+
+  ```csharp
+    void AddImpactSample(string methodName, double impactTimeMs)
+    ```
+
+    Adds a main thread impact sample.
+
+  ```csharp
+    float GetAverageItemImpact(string methodName)
+    ```
+
+    Returns the average item impact.
+
+  ```csharp
+    float GetCoroutineCost(string coroutineKey)
+    ```
+
+    Returns the cost of a coroutine.
+
+  ```csharp
+    float GetJobOverhead(string jobKey)
+    ```
+
+    Returns the overhead of a job.
+
+  ```csharp
+    IEnumerator TrackJobWithStopwatch(string methodName, Func<JobHandle> scheduleJob, int itemCount = 1)
+    ```
+
+    Tracks a job's execution with stopwatch timing.
+
+  ```csharp
+    int BeginSample(string methodName)
+    ```
+
+    Begins tracking a main thread sample.
+
+  ```csharp
+    float EndSample(int sampleId)
+    ```
+
+    Ends tracking a main thread sample.
+
+  ```csharp
+    void Cleanup()
+    ```
+
+    Cleans up tracking data.
+
+### MetricsCache
+
+Caches performance and impact metrics.
+
+- **Static Methods**:
+
+  ```csharp
+    void AddPerformanceSample(string methodName, double avgItemTimeMs)
+    ```
+
+    Adds a performance sample to the cache.
+
+  ```csharp
+    void AddImpactSample(string methodName, double impactTimeMs)
+    ```
+
+    Adds an impact sample to the cache.
+
+  ```csharp
+    bool TryGetAverage(string methodName, out double avg)
+    ```
+
+    Tries to get the average performance metric.
+
+  ```csharp
+    bool TryGetImpact(string methodName, out double impact)
+    ```
+
+    Tries to get the impact metric.
+
+  ```csharp
+    void Cleanup()
+    ```
+
+    Clears all cached metrics.
+
+### SmartExecution
+
+Manages intelligent execution of tasks.
+
+- **Static Methods**:
+
+  ```csharp
+    void Initialize()
+    ```
+
+    Initializes the SmartExecution system.
+
+  ```csharp
+    IEnumerator Execute(
+        string uniqueId,
+        int itemCount,
+        Action jobCallback = null,
+        Func<IEnumerator> coroutineCallback = null,
+        Action mainThreadCallback = null,
+        Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = null,
+        Action<int, NativeArray<int>, NativeList<int>> burstForDelegate = null,
+        NativeArray<int> inputs = default,
+        List<int> outputs = null,
+        SmartExecutionOptions options = default)
+    ```
+
+    Executes a task with dynamic execution method selection.
+
+  ```csharp
+    void ExecuteTransforms<TInput, TOutput>(
+        string uniqueId,
+        TransformAccessArray transforms,
+        Action<int, Transform, NativeArray<TInput>, List<TOutput>> transformDelegate,
+        NativeArray<TInput> inputs = default,
+        List<TOutput> outputs = null,
+        SmartExecutionOptions options = default)
+        where TInput : unmanaged
+        where TOutput : unmanaged
+    ```
+
+    Executes a transform-based task.
+
+  ```csharp
+    void SaveBaselineData()
+    ```
+
+    Saves performance baseline data to a JSON file.
+
+  ```csharp
+    void LoadBaselineData()
+    ```
+
+    Loads performance baseline data from a JSON file.
+
+### FishNetExtensions
 
 Provides extensions for FishNet integration.
 
-#### Fields
+- **Static Methods**:
 
-- `IsServer` (bool): Indicates if the application is running as a server.
-- `TimeManagerInstance` (TimeManager): FishNet TimeManager instance.
+  ```csharp
+    int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs, string uniqueId, bool isParallel)
+    ```
 
-#### Methods
+    Calculates dynamic batch size for FishNet tasks.
 
-- `GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs = 0.15f, string methodName = null)`: Calculates dynamic batch size based on performance metrics.
-  - **Returns**: int (batch size).
-- `WaitForNextTick()`: Waits for the next FishNet tick.
-  - **Returns**: IEnumerator.
+  ```csharp
+    Task AwaitNextFishNetTickAsync(float seconds = 0)
+    ```
 
-```csharp
-// Example: Calculating batch size
-int batchSize = FishNetExtensions.GetDynamicBatchSize(100, methodName: "ProcessData");
+    Asynchronously waits for the next FishNet tick.
 
-// Example: Waiting for next tick
-yield return FishNetExtensions.WaitForNextTick()
-```
+  ```csharp
+    IEnumerator WaitForNextTick()
+    ```
 
-### Class: TaskExtensions
+    Waits for the next FishNet tick.
+
+### TaskExtensions
 
 Provides extensions for converting Tasks to Unity coroutines.
 
-#### Methods
+- **Static Methods**:
 
-- `AsCoroutine(this Task task)`: Converts a Task to a coroutine.
-  - **Returns**: TaskYieldInstruction.
-- `AsCoroutine<T>(this Task<T> task)`: Converts a Task with a result to a coroutine.
-  - **Returns**: TaskYieldInstruction<T>.
+  ```csharp
+    TaskYieldInstruction AsCoroutine(this Task task)
+    ```
 
-#### Class: TaskYieldInstruction
+    Converts a Task to a coroutine.
 
-A custom yield instruction for awaiting a Task in a coroutine.
+  ```csharp
+    TaskYieldInstruction<T> AsCoroutine<T>(this Task<T> task)
+    ```
 
-- **Fields**:
-  - `keepWaiting` (bool): Indicates if the coroutine should continue waiting.
+    Converts a Task with a result to a coroutine.
 
-#### Class: TaskYieldInstruction<T>
+### CoroutineRunner
 
-A custom yield instruction for awaiting a Task with a result in a coroutine.
+Manages coroutine execution in Unity with singleton behavior.
 
-- **Fields**:
-  - `keepWaiting` (bool): Indicates if the coroutine should continue waiting.
-  - `Result` (T): The result of the task if completed, otherwise default(T).
+- **Static Properties**:
+  - `Instance`: Singleton instance of the CoroutineRunner.
+
+- **Methods**:
+
+  ```csharp
+    Coroutine RunCoroutine(IEnumerator coroutine)
+    ```
+
+    Runs a coroutine.
+
+  ```csharp
+    Coroutine RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
+    ```
+
+    Runs a coroutine with a result callback.
+
+### PerformanceHarmonyPatches
+
+Applies Harmony patches for performance-related functionality.
+
+- **Static Methods**:
+
+  ```csharp
+    void SetupScreen_ClearFolderContents(string folderPath)
+    ```
+
+    Postfix patch to reset baseline data.
+
+  ```csharp
+    void ImportScreen_Confirm()
+    ```
+
+    Postfix patch to reset baseline data on confirm.
+
+---
+
+## Example Usage
+
+### Scheduling a Job
 
 ```csharp
-// Example: Converting a Task to a coroutine
-Task task = SomeAsyncMethod();
-yield return task.AsCoroutine()
+var inputs = new NativeArray<int>(100, Allocator.TempJob);
+var outputs = new NativeList<int>(100, Allocator.TempJob);
+Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = (start, end, inputs, outputs) =>
+{
+    for (int i = start; i < end; i++)
+        outputs.Add(inputs[i] * 2);
+};
+var wrapper = new DelegateJobWrapper<int, int>(burstDelegate, null, null, inputs, outputs, default, 0, 100, 10, JobType.IJobParallelFor);
+var handle = wrapper.Schedule();
+handle.Complete();
+wrapper.Complete();
+inputs.Dispose();
+outputs.Dispose()
 ```
 
-### Class: CoroutineRunner
-
-Manages coroutine execution with singleton behavior.
-
-#### Properties
-
-- `Instance` (CoroutineRunner): Singleton instance of the CoroutineRunner.
-
-#### Methods
-
-- `RunCoroutine(IEnumerator coroutine)`: Runs a coroutine.
-  - **Returns**: Coroutine.
-- `RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)`: Runs a coroutine with a result callback.
-  - **Returns**: Coroutine.
+### Executing a Task with SmartExecution
 
 ```csharp
-// Example: Running a coroutine
-CoroutineRunner.Instance.RunCoroutine(MyCoroutine());
+string uniqueId = "MyTask";
+int itemCount = 50;
+Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = (start, end, inputs, outputs) =>
+{
+    for (int i = start; i < end; i++)
+        outputs.Add(inputs[i] + 1);
+};
+var inputs = new NativeArray<int>(itemCount, Allocator.TempJob);
+var outputs = new List<int>();
+var coroutine = SmartExecution.Execute(uniqueId, itemCount, burstDelegate: burstDelegate, inputs: inputs, outputs: outputs);
+CoroutineRunner.Instance.RunCoroutine(coroutine);
+inputs.Dispose()
+```
 
-// Example: Running a coroutine with result
-CoroutineRunner.Instance.RunCoroutineWithResult<string>(MyCoroutineWithResult(), result => Debug.Log(result))
+### Tracking Performance Metrics
+
+```csharp
+Metrics.Initialize();
+string methodName = "MyMethod";
+Metrics.TrackExecution(methodName, () => { /*Some work*/ }, itemCount: 10);
+float avgTime = Metrics.GetAvgItemTimeMs(methodName);
+Metrics.Cleanup()
 ```
