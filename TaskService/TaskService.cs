@@ -12,7 +12,7 @@ using ScheduleOne.ObjectScripts;
 using NoLazyWorkers.Storage;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.TaskService.Extensions;
-using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
 using ScheduleOne.Delivery;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Performance.FishNetExtensions;
@@ -65,7 +65,7 @@ namespace NoLazyWorkers.TaskService
       public int ActionId;
       public EmployeeTypes EmployeeType;
       public int Priority;
-      public ItemKey Item;
+      public ItemData Item;
       public int Quantity;
       public Guid PickupGuid;
       public NativeArray<int> PickupSlotIndices;
@@ -76,7 +76,7 @@ namespace NoLazyWorkers.TaskService
 
       public static TaskDescriptor Create(
           Guid entityGuid, TaskTypes type, int actionId, EmployeeTypes employeeType, int priority,
-          string propertyName, ItemKey item, int quantity,
+          string propertyName, ItemData item, int quantity,
           Guid pickupGuid, int[] pickupSlotIndices,
           Guid dropoffGuid, int[] dropoffSlotIndices,
           float creationTime)
@@ -137,7 +137,7 @@ namespace NoLazyWorkers.TaskService
         NativeList<LogEntry> logs,
         Property property,
         TaskService taskService,
-        CacheManager cacheManager,
+        CacheService cacheManager,
         DisabledEntityService disabledService
       );
       Task ValidateEntityStateAsync(object entity);
@@ -164,7 +164,7 @@ namespace NoLazyWorkers.TaskService
     {
       public bool IsValid;
       public int State;
-      public ItemKey Item;
+      public ItemData Item;
       public int Quantity;
       public int DestinationCapacity;
     }
@@ -174,7 +174,7 @@ namespace NoLazyWorkers.TaskService
     {
       public int ActionId;
       public DisabledReasonType ReasonType;
-      public NativeList<ItemKey> RequiredItems;
+      public NativeList<ItemData> RequiredItems;
       public bool AnyItem;
 
       public enum DisabledReasonType
@@ -198,9 +198,9 @@ namespace NoLazyWorkers.TaskService
   public class DisabledEntityService
   {
     public NativeParallelHashMap<Guid, DisabledEntityData> disabledEntities;
-    private readonly CacheManager cacheManager;
+    private readonly CacheService cacheManager;
 
-    public DisabledEntityService(CacheManager cache)
+    public DisabledEntityService(CacheService cache)
     {
       cacheManager = cache ?? throw new ArgumentNullException(nameof(cache));
       disabledEntities = new NativeParallelHashMap<Guid, DisabledEntityData>(100, Allocator.Persistent);
@@ -208,13 +208,13 @@ namespace NoLazyWorkers.TaskService
       Log(Level.Info, "Initialized DisabledEntityService", Category.Tasks);
     }
 
-    public void AddDisabledEntity(Guid entityGuid, int actionId, DisabledEntityData.DisabledReasonType reasonType, NativeList<ItemKey> requiredItems, bool anyItem = true)
+    public void AddDisabledEntity(Guid entityGuid, int actionId, DisabledEntityData.DisabledReasonType reasonType, NativeList<ItemData> requiredItems, bool anyItem = true)
     {
       var data = new DisabledEntityData
       {
         ActionId = actionId,
         ReasonType = reasonType,
-        RequiredItems = new NativeList<ItemKey>(requiredItems.Length, Allocator.Persistent),
+        RequiredItems = new NativeList<ItemData>(requiredItems.Length, Allocator.Persistent),
         AnyItem = anyItem
       };
       data.RequiredItems.AddRange(requiredItems);
@@ -389,7 +389,7 @@ namespace NoLazyWorkers.TaskService
   public class TaskService
   {
     private readonly Property _property;
-    private readonly CacheManager _cacheManager;
+    private readonly CacheService _cacheManager;
     private readonly TaskRegistry _taskRegistry;
     private readonly TaskDispatcher _taskDispatcher;
     private readonly DisabledEntityService _disabledService;
@@ -402,7 +402,7 @@ namespace NoLazyWorkers.TaskService
     public TaskService(Property prop)
     {
       _property = prop ?? throw new ArgumentNullException(nameof(prop));
-      _cacheManager = CacheManager.GetOrCreateCacheManager(_property);
+      _cacheManager = CacheService.GetOrCreateCacheManager(_property);
       _cacheManager.Activate();
       _taskRegistry = TaskServiceManager.GetRegistry(prop);
       _taskDispatcher = new TaskDispatcher(100);
@@ -643,7 +643,7 @@ namespace NoLazyWorkers.TaskService
       return _registries[property];
     }
 
-    public static void Clear()
+    public static void Cleanup()
     {
       foreach (var service in _services.Values)
         service.Dispose();

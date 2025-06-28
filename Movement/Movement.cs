@@ -177,10 +177,10 @@ namespace NoLazyWorkers.Movement
 
         // Reserve slots using SlotManager
         foreach (var slot in request.PickupSlots.Where(s => s != null))
-          SlotManager.ReserveSlot(request.PickUp.GUID, slot, employee.NetworkObject, "pickup", item, quantity);
+          SlotService.ReserveSlot(request.PickUp.GUID, slot, employee.NetworkObject, "pickup", item, quantity);
         foreach (var slot in request.DropOffSlots.Where(s => s != null))
-          SlotManager.ReserveSlot(request.DropOff.GUID, slot, employee.NetworkObject, "dropoff", item, quantity);
-        SlotManager.ReserveSlot(employee.GUID, request.InventorySlot, employee.NetworkObject, "inventory", request.Item, request.Quantity);
+          SlotService.ReserveSlot(request.DropOff.GUID, slot, employee.NetworkObject, "dropoff", item, quantity);
+        SlotService.ReserveSlot(employee.GUID, request.InventorySlot, employee.NetworkObject, "inventory", request.Item, request.Quantity);
         return request;
       }
 

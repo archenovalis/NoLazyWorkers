@@ -39,6 +39,8 @@ using static NoLazyWorkers.NoLazyUtilities;
 using Unity.Collections;
 using Unity.Burst;
 using static NoLazyWorkers.Debug;
+using ScheduleOne.UI.MainMenu;
+using NoLazyWorkers.Extensions;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -263,7 +265,8 @@ namespace NoLazyWorkers
         MixingStationConfigUtilities.InitializeStaticRouteListTemplate();
         ShelfUtilities.InitializeStorageModule();
         //TaskServiceManager.Initialize();
-        Performance.Metrics.Initialize();
+        SmartExecution.Initialize();
+        StorageManager.Initialize();
         FishNetExtensions.IsServer = InstanceFinder.IsServer;
         FishNetExtensions.TimeManagerInstance = InstanceFinder.TimeManager;
       }
@@ -271,11 +274,12 @@ namespace NoLazyWorkers
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
+      SmartExecution.SaveBaselineData();
       ClearPrefabs();
-      Employees.Utilities.Clear();
-      NoLazyWorkersExtensions.NPCSupply.Clear();
+      Employees.Utilities.Cleanup();
       Settings.SettingsExtensions.Configured.Clear();
-      TaskServiceManager.Clear();
+      StorageManager.Cleanup();
+      TaskServiceManager.Cleanup();
       Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
     }
   }
@@ -286,70 +290,6 @@ namespace NoLazyWorkers
     {
       return unityEvent.GetPersistentEventCount() + unityEvent.m_Calls.Count;
     }
-  }
-
-  public static class DictionaryExtensions
-  {
-    /// <summary>
-    /// Gets the value associated with the specified key, or adds a new value using the provided factory if the key doesn't exist.
-    /// </summary>
-    /// <typeparam name="TKey">The type of the keys in the dictionary.</typeparam>
-    /// <typeparam name="TValue">The type of the values in the dictionary.</typeparam>
-    /// <param name="dictionary">The dictionary to operate on.</param>
-    /// <param name="key">The key to look up or add.</param>
-    /// <param name="valueFactory">The function to create a new value if the key is not found.</param>
-    /// <returns>The existing or newly added value.</returns>
-    public static TValue GetOrAdd<TKey, TValue>(this Dictionary<TKey, TValue> dictionary, TKey key, Func<TKey, TValue> valueFactory)
-    {
-      if (dictionary == null)
-        throw new ArgumentNullException(nameof(dictionary));
-      if (key == null)
-        throw new ArgumentNullException(nameof(key));
-      if (valueFactory == null)
-        throw new ArgumentNullException(nameof(valueFactory));
-
-      if (dictionary.TryGetValue(key, out var value))
-        return value;
-
-      value = valueFactory(key);
-      dictionary[key] = value;
-      return value;
-    }
-  }
-
-  public static class NoLazyWorkersExtensions
-  {
-    public static Dictionary<Guid, ObjectField> NPCSupply = [];
-    private static readonly Dictionary<EntityConfiguration, float> lastInvokeTimes = [];
-    private static readonly float debounceTime = 0.2f;
-
-    /* public static void InvokeChanged(EntityConfiguration config)
-    {
-      try
-      {
-        if (config == null)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Error, "InvokeChanged: EntityConfiguration is null", DebugLogger.Category.Core);
-          return;
-        }
-
-        float currentTime = Time.time;
-        if (lastInvokeTimes.TryGetValue(config, out float lastTime) && currentTime - lastTime < debounceTime)
-        {
-          DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InvokeChanged debounced for config: {config}", DebugLogger.Category.Core);
-          return;
-        }
-
-        lastInvokeTimes[config] = currentTime;
-        DebugLogger.Log(DebugLogger.LogLevel.Verbose, $"InvokeChanged called for config: {config}", DebugLogger.Category.Core);
-        config.InvokeChanged();
-      }
-      catch (Exception e)
-      {
-        DebugLogger.Log(DebugLogger.LogLevel.Stacktrace, $"InvokeChanged failed: {e}", DebugLogger.Category.Core);
-      }
-    } */
-
   }
 
   public static class NoLazyUtilities
@@ -898,6 +838,18 @@ namespace NoLazyWorkers
       {
         RecentUpdates.Remove(key);
       }
+    }
+  }
+
+  [HarmonyPatch(typeof(Disclaimer))]
+  public class DisclaimerPatch
+  {
+    [HarmonyPrefix]
+    [HarmonyPatch("Awake")]
+    public static bool AwakePrefix(Disclaimer __instance)
+    {
+      Disclaimer.Shown = true;
+      return true;
     }
   }
 

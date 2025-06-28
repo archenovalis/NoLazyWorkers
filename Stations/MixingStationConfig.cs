@@ -21,7 +21,7 @@ using static NoLazyWorkers.Stations.MixingStationConfigUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Storage.Utilities;
-using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Property;
 using ScheduleOne.Persistence.Datas;

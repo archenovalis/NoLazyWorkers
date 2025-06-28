@@ -82,11 +82,11 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
           return;
         }
 
-        ItemKey targetItemKey = productSlot.Item;
+        ItemData targetItemKey = productSlot.Item;
         int neededQuantity = 10 - productSlot.Quantity;
         var cacheKey = new CacheKey(targetItemKey.Id.ToString(), targetItemKey.PackagingId.ToString(), targetItemKey.Quality != EQualityBurst.None ? Enum.Parse<EQuality>(targetItemKey.Quality.ToString()) : null, property);
 
-        if (!CacheManager.TryGetCachedShelves(cacheKey, out var shelves))
+        if (!CacheService.TryGetCachedShelves(cacheKey, out var shelves))
         {
           Log(Level.Verbose, $"RefillStationValidator: No shelves found for item {targetItemKey.Id}", Category.Handler);
           return;
@@ -99,7 +99,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
           var slotIndex = shelf.Value;
           var slotKey = new SlotKey(shelfGuid, slotIndex);
 
-          if (context.ReservedSlots.ContainsKey(slotKey) || !SlotManager.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
+          if (context.ReservedSlots.ContainsKey(slotKey) || !SlotService.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
           {
             Log(Level.Verbose, $"RefillStationValidator: Slot {slotKey} already reserved", Category.Handler);
             continue;
@@ -220,8 +220,8 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
         finally
         {
           state.State.TaskContext?.Cleanup(packager);
-          SlotManager.ReleaseSlot(pickupSlotKey);
-          SlotManager.ReleaseSlot(dropoffSlotKey);
+          SlotService.ReleaseSlot(pickupSlotKey);
+          SlotService.ReleaseSlot(dropoffSlotKey);
           await state.AdvBehaviour.Disable();
           TaskUtilities.LogExecutionTime(task.TaskId.ToString(), stopwatch.ElapsedMilliseconds);
           Log(Level.Info, $"RefillStationExecutor: Completed task {task.TaskId} in {stopwatch.ElapsedMilliseconds}ms", Category.Handler);
@@ -284,7 +284,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
           }
 
           var cacheKey = new CacheKey(slot.Item.Id.ToString(), slot.Item.PackagingId.ToString(), slot.Item.Quality != EQualityBurst.None ? Enum.Parse<EQuality>(slot.Item.Quality.ToString()) : null, property);
-          if (!CacheManager.TryGetCachedShelves(cacheKey, out var shelves))
+          if (!CacheService.TryGetCachedShelves(cacheKey, out var shelves))
           {
             Log(Level.Verbose, $"EmptyLoadingDockValidator: No shelves for item {slot.Item.Id}", Category.Handler);
             continue;
@@ -295,7 +295,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
             var shelfGuid = shelf.Key.GUID;
             var dropoffIndex = shelf.Value;
             var slotKey = new SlotKey(shelfGuid, dropoffIndex);
-            if (context.ReservedSlots.ContainsKey(slotKey) || !SlotManager.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
+            if (context.ReservedSlots.ContainsKey(slotKey) || !SlotService.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
             {
               Log(Level.Verbose, $"EmptyLoadingDockValidator: Slot {slotKey} already reserved", Category.Handler);
               continue;
@@ -417,8 +417,8 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
         finally
         {
           state.State.TaskContext?.Cleanup(packager);
-          SlotManager.ReleaseSlot(pickupSlotKey);
-          SlotManager.ReleaseSlot(dropoffSlotKey);
+          SlotService.ReleaseSlot(pickupSlotKey);
+          SlotService.ReleaseSlot(dropoffSlotKey);
           await state.AdvBehaviour.Disable();
           TaskUtilities.LogExecutionTime(task.TaskId.ToString(), stopwatch.ElapsedMilliseconds);
           Log(Level.Info, $"EmptyLoadingDockExecutor: Completed task {task.TaskId} in {stopwatch.ElapsedMilliseconds}ms", Category.Handler);
@@ -483,7 +483,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
           }
 
           var cacheKey = new CacheKey(slot.Item.Id.ToString(), slot.Item.PackagingId.ToString(), slot.Item.Quality != EQualityBurst.None ? Enum.Parse<EQuality>(slot.Item.Quality.ToString()) : null, property);
-          if (!CacheManager.TryGetCachedShelves(cacheKey, out var shelves))
+          if (!CacheService.TryGetCachedShelves(cacheKey, out var shelves))
           {
             Log(Level.Verbose, $"RestockSpecificShelfValidator: No destination shelves for item {slot.Item.Id}", Category.Handler);
             continue;
@@ -497,7 +497,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
 
             var dropoffIndex = shelf.Value;
             var slotKey = new SlotKey(shelfGuid, dropoffIndex);
-            if (context.ReservedSlots.ContainsKey(slotKey) || !SlotManager.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
+            if (context.ReservedSlots.ContainsKey(slotKey) || !SlotService.ReserveSlot(slotKey, Guid.NewGuid(), context.CurrentTime))
             {
               Log(Level.Verbose, $"RestockSpecificShelfValidator: Slot {slotKey} already reserved", Category.Handler);
               continue;
@@ -619,8 +619,8 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
         finally
         {
           state.State.TaskContext?.Cleanup(packager);
-          SlotManager.ReleaseSlot(pickupSlotKey);
-          SlotManager.ReleaseSlot(dropoffSlotKey);
+          SlotService.ReleaseSlot(pickupSlotKey);
+          SlotService.ReleaseSlot(dropoffSlotKey);
           await state.AdvBehaviour.Disable();
           TaskUtilities.LogExecutionTime(task.TaskId.ToString(), stopwatch.ElapsedMilliseconds);
           Log(Level.Info, $"RestockSpecificShelfExecutor: Completed task {task.TaskId} in {stopwatch.ElapsedMilliseconds}ms", Category.Handler);

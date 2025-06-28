@@ -8,8 +8,8 @@ using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Movement.Utilities;
 using static NoLazyWorkers.Storage.Utilities;
-using static NoLazyWorkers.Storage.Constants;
-using static NoLazyWorkers.Storage.CacheManager;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
+using static NoLazyWorkers.Storage.CacheService;
 using System.Collections;
 using UnityEngine;
 using ScheduleOne.DevUtilities;
@@ -68,7 +68,7 @@ namespace NoLazyWorkers.Movement
     public EState currentState;
     public bool skipPickup;
 
-    private CacheManager _cacheManager;
+    private CacheService _cacheManager;
     private readonly Queue<PrioritizedRoute> _routeQueue = new();
     private PrioritizedRoute? _currentRoute;
     private Action<Employee, EmployeeData, Status> _callback;

@@ -15,7 +15,7 @@ using NoLazyWorkers.Storage;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Stations.MixingStationExtensions;
 using static NoLazyWorkers.Employees.Constants;
-using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
 using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.Extensions;
 using NoLazyWorkers.Stations;

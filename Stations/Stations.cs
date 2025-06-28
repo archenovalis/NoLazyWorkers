@@ -49,8 +49,8 @@ namespace NoLazyWorkers.Stations
       public StationState(IStationAdapter adapter)
       {
         // Initialize Station in CacheManager
-        var cacheManager = CacheManager.GetOrCreateCacheManager(adapter.ParentProperty);
-        var storageKey = new StorageKey { Guid = adapter.GUID, Type = StorageTypes.Station };
+        var cacheManager = CacheService.GetOrCreateCacheManager(adapter.ParentProperty);
+        var storageKey = new StorageKey { Guid = adapter.GUID, Type = StorageType.Station };
         foreach (var slot in adapter.InsertSlots)
           cacheManager.RegisterItemSlot(slot, storageKey);
         foreach (var slot in adapter.ProductSlots)
@@ -60,7 +60,7 @@ namespace NoLazyWorkers.Stations
         for (int i = 0; i < adapter.InsertSlots.Count; i++)
           slotData.Add(new SlotData
           {
-            Item = adapter.InsertSlots[i].ItemInstance != null ? new ItemKey(adapter.InsertSlots[i].ItemInstance) : ItemKey.Empty,
+            Item = adapter.InsertSlots[i].ItemInstance != null ? new ItemData(adapter.InsertSlots[i].ItemInstance) : ItemData.Empty,
             Quantity = adapter.InsertSlots[i].Quantity,
             SlotIndex = adapter.InsertSlots[i].SlotIndex,
             StackLimit = adapter.InsertSlots[i].ItemInstance != null ? adapter.InsertSlots[i].GetCapacityForItem(adapter.InsertSlots[i].ItemInstance) : -1,
@@ -69,7 +69,7 @@ namespace NoLazyWorkers.Stations
         for (int i = 0; i < adapter.ProductSlots.Count; i++)
           slotData.Add(new SlotData
           {
-            Item = adapter.ProductSlots[i].ItemInstance != null ? new ItemKey(adapter.ProductSlots[i].ItemInstance) : ItemKey.Empty,
+            Item = adapter.ProductSlots[i].ItemInstance != null ? new ItemData(adapter.ProductSlots[i].ItemInstance) : ItemData.Empty,
             Quantity = adapter.ProductSlots[i].Quantity,
             SlotIndex = adapter.ProductSlots[i].SlotIndex,
             StackLimit = adapter.ProductSlots[i].ItemInstance != null ? adapter.ProductSlots[i].GetCapacityForItem(adapter.ProductSlots[i].ItemInstance) : -1,
@@ -77,7 +77,7 @@ namespace NoLazyWorkers.Stations
           });
         slotData.Add(new SlotData
         {
-          Item = adapter.OutputSlot.ItemInstance != null ? new ItemKey(adapter.OutputSlot.ItemInstance) : ItemKey.Empty,
+          Item = adapter.OutputSlot.ItemInstance != null ? new ItemData(adapter.OutputSlot.ItemInstance) : ItemData.Empty,
           Quantity = adapter.OutputSlot.Quantity,
           SlotIndex = adapter.OutputSlot.SlotIndex,
           StackLimit = adapter.OutputSlot.ItemInstance != null ? adapter.OutputSlot.GetCapacityForItem(adapter.OutputSlot.ItemInstance) : -1,

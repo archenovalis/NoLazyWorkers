@@ -15,7 +15,6 @@ using ScheduleOne.Product.Packaging;
 using ScheduleOne.Property;
 using UnityEngine;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Utilities;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
@@ -28,6 +27,7 @@ using FishNet.Object;
 using FishNet.Managing.Object;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Debug;
+using Steamworks;
 
 namespace NoLazyWorkers.Employees
 {
@@ -35,9 +35,11 @@ namespace NoLazyWorkers.Employees
   {
     private readonly Chemist _chemist;
     private readonly EmployeeBehaviour _employeeBehaviour;
+    public Guid Guid => _chemist.GUID;
     public EmployeeBehaviour AdvBehaviour => _employeeBehaviour;
     public Property AssignedProperty => _chemist.AssignedProperty;
     public NpcSubType SubType => NpcSubType.Chemist;
+    public List<ItemSlot> InventorySlots => _chemist.Inventory.ItemSlots;
 
     public ChemistAdapter(Chemist chemist)
     {

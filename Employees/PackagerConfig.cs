@@ -34,6 +34,8 @@ namespace NoLazyWorkers.Employees
     {
       private readonly Packager _packager;
       private readonly EmployeeBehaviour _employeeBehaviour;
+      public Guid Guid => _packager.GUID;
+      public List<ItemSlot> InventorySlots => _packager.Inventory.ItemSlots;
 
       public PackagerAdapter(Packager packager)
       {

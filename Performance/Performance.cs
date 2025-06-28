@@ -3,34 +3,35 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Unity.Burst;
 using Unity.Collections;
-using static NoLazyWorkers.Performance.FishNetExtensions;
+using NoLazyWorkers.Extensions;
+using static NoLazyWorkers.Extensions.FishNetExtensions;
 using static NoLazyWorkers.Debug;
 using Unity.Jobs;
 using UnityEngine;
-using FishNet.Managing.Timing;
 using ScheduleOne.Persistence;
 using MelonLoader.Utils;
 using Newtonsoft.Json;
-using UnityEngine.Pool;
 using HarmonyLib;
 using ScheduleOne.UI.MainMenu;
 using UnityEngine.Jobs;
+using Object = UnityEngine.Object;
 
 namespace NoLazyWorkers.Performance
 {
   /// <summary>
-  /// Defines types of jobs supported by the job wrapper system.
+  /// Defines types of jobs for scheduling in the performance system.
   /// </summary>
   internal enum JobType
   {
-    IJob,
-    IJobParallelFor,
-    IJobFor,
-    IJobParallelForTransform
+    Baseline,
+    IJob, // single item
+    IJobFor, // multiple items
+    IJobParallelFor, // multiple items processed in parallel
+    IJobParallelForTransform // multiple transforms processed in parallel
   }
 
   /// <summary>
-  /// Interface for wrapping Unity Job System jobs.
+  /// Interface for wrapping job scheduling and completion.
   /// </summary>
   internal interface IJobWrapper
   {
@@ -38,17 +39,17 @@ namespace NoLazyWorkers.Performance
     /// Schedules the job with optional count and batch size.
     /// </summary>
     /// <param name="count">Number of items to process.</param>
-    /// <param name="batchSize">Batch size for parallel processing.</param>
-    /// <returns>JobHandle for the scheduled job.</returns>
+    /// <param name="batchSize">Size of each batch for parallel processing.</param>
+    /// <returns>A JobHandle representing the scheduled job.</returns>
     JobHandle Schedule(int count = 0, int batchSize = 64);
 
     /// <summary>
-    /// Completes the job and cleans up resources.
+    /// Completes the job, disposing of resources if necessary.
     /// </summary>
     void Complete();
 
     /// <summary>
-    /// Gets whether the job is parallel.
+    /// Gets whether the job is processed in parallel.
     /// </summary>
     bool IsParallel { get; }
 
@@ -59,9 +60,9 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Wraps a non-parallel IJob.
+  /// Wraps a single item job for scheduling.
   /// </summary>
-  /// <typeparam name="T">Job type implementing IJob.</typeparam>
+  /// <typeparam name="T">The type of job, implementing IJob.</typeparam>
   internal struct JobWrapper<T> : IJobWrapper where T : struct, IJob
   {
     public T Job;
@@ -70,15 +71,24 @@ namespace NoLazyWorkers.Performance
 
     public JobWrapper(T job) => Job = job;
 
+    /// <summary>
+    /// Schedules a single item job.
+    /// </summary>
+    /// <param name="count">Ignored for single item jobs.</param>
+    /// <param name="batchSize">Ignored for single item jobs.</param>
+    /// <returns>A JobHandle representing the scheduled job.</returns>
     public JobHandle Schedule(int count = 0, int batchSize = 64) => Job.Schedule();
 
+    /// <summary>
+    /// Completes the job. No-op for single item jobs.
+    /// </summary>
     public void Complete() { }
   }
 
   /// <summary>
-  /// Wraps a parallel IJobParallelFor.
+  /// Wraps a parallel job for multiple items.
   /// </summary>
-  /// <typeparam name="T">Job type implementing IJobParallelFor.</typeparam>
+  /// <typeparam name="T">The type of job, implementing IJobParallelFor.</typeparam>
   internal struct JobParallelForWrapper<T> : IJobWrapper where T : struct, IJobParallelFor
   {
     public T Job;
@@ -94,16 +104,25 @@ namespace NoLazyWorkers.Performance
       _batchSize = batchSize;
     }
 
+    /// <summary>
+    /// Schedules a parallel job for multiple items.
+    /// </summary>
+    /// <param name="count">Number of items to process.</param>
+    /// <param name="batchSize">Size of each batch for parallel processing.</param>
+    /// <returns>A JobHandle representing the scheduled job.</returns>
     public JobHandle Schedule(int count = 0, int batchSize = 64) => Job.Schedule(_count, _batchSize);
 
+    /// <summary>
+    /// Completes the job. No-op for parallel jobs.
+    /// </summary>
     public void Complete() { }
   }
 
   /// <summary>
-  /// Executes a delegate-based IJob with Burst compilation.
+  /// Executes a delegate-based job for processing input to output.
   /// </summary>
-  /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
+  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
   [BurstCompile]
   internal struct DelegateJob<TInput, TOutput> : IJob
       where TInput : unmanaged
@@ -115,6 +134,9 @@ namespace NoLazyWorkers.Performance
     public int StartIndex;
     public int Count;
 
+    /// <summary>
+    /// Executes the job, invoking the delegate with input and output arrays.
+    /// </summary>
     public void Execute()
     {
       var stopwatch = Stopwatch.StartNew();
@@ -129,10 +151,10 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Executes a delegate-based IJobParallelFor with Burst compilation.
+  /// Executes a delegate-based parallel job for processing input to output.
   /// </summary>
-  /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
+  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
   [BurstCompile]
   internal struct DelegateParallelJob<TInput, TOutput> : IJobParallelFor
       where TInput : unmanaged
@@ -144,6 +166,10 @@ namespace NoLazyWorkers.Performance
     public int StartIndex;
     public int BatchSize;
 
+    /// <summary>
+    /// Executes the parallel job for a specific index range.
+    /// </summary>
+    /// <param name="index">The index of the batch to process.</param>
     public void Execute(int index)
     {
       int batchStart = StartIndex + index * BatchSize;
@@ -153,10 +179,10 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Executes a delegate-based IJobParallelFor with single-item processing.
+  /// Executes a delegate-based job for processing individual items in parallel.
   /// </summary>
-  /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
+  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
   [BurstCompile]
   internal struct DelegateForJob<TInput, TOutput> : IJobParallelFor
       where TInput : unmanaged
@@ -167,6 +193,10 @@ namespace NoLazyWorkers.Performance
     public NativeList<TOutput> Outputs;
     public int StartIndex;
 
+    /// <summary>
+    /// Executes the job for a specific index.
+    /// </summary>
+    /// <param name="index">The index of the item to process.</param>
     public void Execute(int index)
     {
       Delegate.Invoke(index + StartIndex, Inputs, Outputs);
@@ -174,7 +204,7 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Executes a delegate-based IJobParallelForTransform with Burst compilation.
+  /// Executes a delegate-based parallel job for transform processing.
   /// </summary>
   [BurstCompile]
   internal struct DelegateParallelForTransformJob : IJobParallelForTransform
@@ -183,6 +213,11 @@ namespace NoLazyWorkers.Performance
     public int StartIndex;
     public int BatchSize;
 
+    /// <summary>
+    /// Executes the transform job for a specific index.
+    /// </summary>
+    /// <param name="index">The index of the transform to process.</param>
+    /// <param name="transform">The transform to process.</param>
     public void Execute(int index, TransformAccess transform)
     {
       Delegate.Invoke(index + StartIndex, transform);
@@ -190,10 +225,10 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Wraps delegate-based jobs for various job types.
+  /// Wraps delegate-based jobs for flexible scheduling across job types.
   /// </summary>
-  /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
+  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
   [BurstCompile]
   internal struct DelegateJobWrapper<TInput, TOutput> : IJobWrapper
       where TInput : unmanaged
@@ -232,7 +267,6 @@ namespace NoLazyWorkers.Performance
       _count = count;
       _batchSize = batchSize;
       _jobType = jobType;
-
 #if DEBUG
       Log(Level.Verbose, $"Created DelegateJobWrapper for jobType={jobType}, count={count}, batchSize={batchSize}", Category.Performance);
 #endif
@@ -241,17 +275,22 @@ namespace NoLazyWorkers.Performance
     public bool IsParallel => _jobType == JobType.IJobParallelFor || _jobType == JobType.IJobParallelForTransform;
     public JobType JobType => _jobType;
 
+    /// <summary>
+    /// Schedules the job based on the specified job type.
+    /// </summary>
+    /// <param name="count">Number of items to process.</param>
+    /// <param name="batchSize">Size of each batch for parallel processing.</param>
+    /// <returns>A JobHandle representing the scheduled job.</returns>
     public JobHandle Schedule(int count = 0, int batchSize = 64)
     {
       int effectiveCount = count > 0 ? count : _count;
       int effectiveBatchSize = batchSize > 0 ? batchSize : _batchSize;
-
 #if DEBUG
       Log(Level.Verbose, $"Scheduling job for jobType={_jobType}, count={effectiveCount}, batchSize={effectiveBatchSize}", Category.Performance);
 #endif
-
       switch (_jobType)
       {
+        case JobType.Baseline:
         case JobType.IJob:
           var job = new DelegateJob<TInput, TOutput>
           {
@@ -262,6 +301,15 @@ namespace NoLazyWorkers.Performance
             Count = effectiveCount
           };
           return job.Schedule();
+        case JobType.IJobFor:
+          var jobFor = new DelegateForJob<TInput, TOutput>
+          {
+            Delegate = _delegateFor,
+            Inputs = _inputs,
+            Outputs = _outputs,
+            StartIndex = _startIndex
+          };
+          return jobFor.Schedule(effectiveCount, 1);
         case JobType.IJobParallelFor:
           var jobParallelFor = new DelegateForJob<TInput, TOutput>
           {
@@ -284,6 +332,9 @@ namespace NoLazyWorkers.Performance
       }
     }
 
+    /// <summary>
+    /// Completes the job, disposing of transform resources if applicable.
+    /// </summary>
     public void Complete()
     {
       if (_jobType == JobType.IJobParallelForTransform && _transforms.isCreated)
@@ -297,7 +348,7 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Tracks performance metrics for execution methods and cache access.
+  /// Tracks performance metrics for job execution and cache access.
   /// </summary>
   internal static class Metrics
   {
@@ -305,19 +356,15 @@ namespace NoLazyWorkers.Performance
     private static readonly Stopwatch _stopwatch = new();
     private static bool _isInitialized;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static readonly ConcurrentDictionary<string, ProfilerMarker> _profilerMarkers = new();
-#endif
-
     /// <summary>
-    /// Gets the average item processing time in milliseconds.
+    /// Gets the average processing time per item for a method.
     /// </summary>
-    /// <param name="methodName">Name of the method to query.</param>
-    /// <returns>Average time per item in milliseconds.</returns>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The average time per item in milliseconds.</returns>
     public static float GetAvgItemTimeMs(string methodName) => MainThreadImpactTracker.GetAverageItemImpact(methodName);
 
     /// <summary>
-    /// Initializes the metrics system and subscribes to tick events.
+    /// Initializes the metrics system and subscribes to tick updates.
     /// </summary>
     public static void Initialize()
     {
@@ -325,14 +372,10 @@ namespace NoLazyWorkers.Performance
       _isInitialized = true;
       TimeManagerInstance.OnTick += UpdateMetrics;
       Log(Level.Info, "PerformanceMetrics initialized", Category.Performance);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Log(Level.Info, "Profiler API integration enabled for development build", Category.Performance);
-#endif
     }
 
     /// <summary>
-    /// Tracks metrics for a single entity job.
+    /// Job for tracking metrics of a single entity.
     /// </summary>
     [BurstCompile]
     public struct SingleEntityMetricsJob : IJob
@@ -343,6 +386,9 @@ namespace NoLazyWorkers.Performance
       public NativeArray<CacheMetric> CacheMetrics;
       public int CacheIndex;
 
+      /// <summary>
+      /// Executes the metrics tracking job.
+      /// </summary>
       public void Execute()
       {
         TrackExecutionBurst(TaskType, Timestamp, 1, Metrics, 0);
@@ -392,130 +438,99 @@ namespace NoLazyWorkers.Performance
       public double AvgMainThreadImpactMs;
     }
 
+    internal static void TrackNonBurstIteration(string methodName, Action action, int itemCount = 1)
+    {
+      var impact = MainThreadImpactTracker.BeginSample(methodName);
+      _stopwatch.Restart();
+      action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
+      double timeMs = _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency;
+      DynamicProfiler.AddSample(methodName, timeMs / itemCount, isNonBurst: true);
+      UpdateMetric(methodName, timeMs, mainThreadImpactMs, itemCount);
+    }
+
     /// <summary>
-    /// Tracks execution time and main thread impact of an action.
+    /// Tracks execution time of an action and updates metrics.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="action">Action to execute.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The action to execute.</param>
     /// <param name="itemCount">Number of items processed.</param>
     [BurstCompile]
     internal static void TrackExecution(string methodName, Action action, int itemCount = 1)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd(methodName, new ProfilerMarker(methodName));
-            marker.Begin();
-#endif
-
       var impact = MainThreadImpactTracker.BeginSample(methodName);
       _stopwatch.Restart();
       action();
       _stopwatch.Stop();
       float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
     }
 
     /// <summary>
-    /// Tracks execution time and main thread impact of a function with return value.
+    /// Tracks execution time of a function and updates metrics.
     /// </summary>
-    /// <typeparam name="T">Return type of the function.</typeparam>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="action">Function to execute.</param>
+    /// <typeparam name="T">The return type of the function.</typeparam>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The function to execute.</param>
     /// <param name="itemCount">Number of items processed.</param>
-    /// <returns>Result of the function.</returns>
+    /// <returns>The result of the function.</returns>
     [BurstCompile]
     internal static T TrackExecution<T>(string methodName, Func<T> action, int itemCount = 1)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd(methodName, new ProfilerMarker(methodName));
-            marker.Begin();
-#endif
-
       var impact = MainThreadImpactTracker.BeginSample(methodName);
       _stopwatch.Restart();
       T result = action();
       _stopwatch.Stop();
       float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
-
       return result;
     }
 
     /// <summary>
-    /// Tracks execution time and main thread impact of an async action.
+    /// Tracks execution time of an async action and updates metrics.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="action">Async action to execute.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The async action to execute.</param>
     /// <param name="itemCount">Number of items processed.</param>
     internal static async Task TrackExecutionAsync(string methodName, Func<Task> action, int itemCount = 1)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd(methodName, new ProfilerMarker(methodName));
-            marker.Begin();
-#endif
-
       var impact = MainThreadImpactTracker.BeginSample(methodName);
       _stopwatch.Restart();
       await action();
       _stopwatch.Stop();
       float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
     }
 
     /// <summary>
-    /// Tracks execution time and main thread impact of an async function with return value.
+    /// Tracks execution time of an async function and updates metrics.
     /// </summary>
-    /// <typeparam name="T">Return type of the function.</typeparam>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="action">Async function to execute.</param>
+    /// <typeparam name="T">The return type of the function.</typeparam>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The async function to execute.</param>
     /// <param name="itemCount">Number of items processed.</param>
-    /// <returns>Result of the function.</returns>
+    /// <returns>The result of the function.</returns>
     internal static async Task<T> TrackExecutionAsync<T>(string methodName, Func<Task<T>> action, int itemCount = 1)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd(methodName, new ProfilerMarker(methodName));
-            marker.Begin();
-#endif
-
       var impact = MainThreadImpactTracker.BeginSample(methodName);
       _stopwatch.Restart();
       T result = await action();
       _stopwatch.Stop();
       float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
-
       return result;
     }
 
     /// <summary>
-    /// Tracks execution time and main thread impact of a coroutine.
+    /// Tracks execution time of a coroutine and updates metrics.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="coroutine">Coroutine to execute.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="coroutine">The coroutine to execute.</param>
     /// <param name="itemCount">Number of items processed.</param>
-    /// <returns>Coroutine enumerator.</returns>
+    /// <returns>An enumerator for the coroutine.</returns>
     internal static IEnumerator TrackExecutionCoroutine(string methodName, IEnumerator coroutine, int itemCount = 1)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd(methodName, new ProfilerMarker(methodName));
-            marker.Begin();
-#endif
-
       var impact = MainThreadImpactTracker.BeginSample(methodName);
       _stopwatch.Restart();
       while (coroutine.MoveNext())
@@ -523,16 +538,12 @@ namespace NoLazyWorkers.Performance
       _stopwatch.Stop();
       float mainThreadImpactMs = MainThreadImpactTracker.EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
     }
 
     /// <summary>
-    /// Tracks execution metrics for a Burst-compiled job.
+    /// Tracks execution time of a burst-compiled job.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
+    /// <param name="methodName">The name of the method.</param>
     /// <param name="executionTimeMs">Execution time in milliseconds.</param>
     /// <param name="itemCount">Number of items processed.</param>
     /// <param name="metrics">Array to store metrics.</param>
@@ -552,25 +563,19 @@ namespace NoLazyWorkers.Performance
         MainThreadImpactMs = 0, // Jobs have no main-thread impact
         ItemCount = itemCount
       };
-
 #if DEBUG
       Log(Level.Verbose, $"Burst job tracked for {methodName}: time={executionTimeMs:F3}ms, items={itemCount}", Category.Performance);
 #endif
     }
 
     /// <summary>
-    /// Tracks cache access for a job.
+    /// Tracks cache access for a job and updates metrics.
     /// </summary>
-    /// <param name="cacheName">Name of the cache.</param>
+    /// <param name="cacheName">The name of the cache.</param>
     /// <param name="isHit">Whether the cache access was a hit.</param>
     [BurstCompile]
     public static void TrackJobCacheAccess(string cacheName, bool isHit)
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            var marker = _profilerMarkers.GetOrAdd($"Cache_{cacheName}", new ProfilerMarker($"Cache_{cacheName}"));
-            marker.Begin();
-#endif
-
       _metrics.AddOrUpdate(cacheName, _ => new Data { CacheHits = isHit ? 1 : 0, CacheMisses = isHit ? 0 : 1 },
           (_, m) => new Data
           {
@@ -585,20 +590,15 @@ namespace NoLazyWorkers.Performance
             AvgItemTimeMs = m.AvgItemTimeMs,
             AvgMainThreadImpactMs = m.AvgMainThreadImpactMs
           });
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            marker.End();
-#endif
-
 #if DEBUG
       Log(Level.Verbose, $"Cache access tracked for {cacheName}: isHit={isHit}", Category.Performance);
 #endif
     }
 
     /// <summary>
-    /// Tracks cache access for non-job operations.
+    /// Tracks cache access and updates metrics.
     /// </summary>
-    /// <param name="cacheName">Name of the cache.</param>
+    /// <param name="cacheName">The name of the cache.</param>
     /// <param name="isHit">Whether the cache access was a hit.</param>
     public static void TrackCacheAccess(string cacheName, bool isHit)
     {
@@ -608,7 +608,7 @@ namespace NoLazyWorkers.Performance
     /// <summary>
     /// Updates performance metrics for a method.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
+    /// <param name="methodName">The name of the method.</param>
     /// <param name="timeMs">Execution time in milliseconds.</param>
     /// <param name="mainThreadImpactMs">Main thread impact in milliseconds.</param>
     /// <param name="itemCount">Number of items processed.</param>
@@ -639,14 +639,13 @@ namespace NoLazyWorkers.Performance
         AvgItemTimeMs = m.ItemCount + itemCount > 0 ? (m.TotalTimeMs + timeMs) / (m.ItemCount + itemCount) : m.AvgItemTimeMs,
         AvgMainThreadImpactMs = m.ItemCount + itemCount > 0 ? (m.TotalMainThreadImpactMs + mainThreadImpactMs) / (m.ItemCount + itemCount) : m.AvgMainThreadImpactMs
       });
-
 #if DEBUG
       Log(Level.Verbose, $"Updated metric for {methodName}: time={timeMs:F3}ms, mainThreadImpact={mainThreadImpactMs:F3}ms, items={itemCount}", Category.Performance);
 #endif
     }
 
     /// <summary>
-    /// Logs aggregated metrics periodically.
+    /// Updates and logs metrics for all tracked methods.
     /// </summary>
     private static void UpdateMetrics()
     {
@@ -665,24 +664,19 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Cleans up metrics and unsubscribes from tick events.
+    /// Cleans up metrics data and unsubscribes from tick updates.
     /// </summary>
     public static void Cleanup()
     {
       TimeManagerInstance.OnTick -= UpdateMetrics;
       _metrics.Clear();
       _isInitialized = false;
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            _profilerMarkers.Clear();
-#endif
-
       Log(Level.Info, "PerformanceMetrics cleaned up", Category.Performance);
     }
   }
 
   /// <summary>
-  /// Manages dynamic profiling data with rolling averages and batch size history.
+  /// Tracks rolling averages for performance profiling.
   /// </summary>
   internal static class DynamicProfiler
   {
@@ -702,7 +696,6 @@ namespace NoLazyWorkers.Performance
       private int _count;
       internal double _sum;
       private readonly int _maxCount;
-
       public int Count => _count;
 
       public RollingAverage(int maxCount)
@@ -716,7 +709,7 @@ namespace NoLazyWorkers.Performance
       /// <summary>
       /// Adds a performance sample to the rolling average.
       /// </summary>
-      /// <param name="value">Sample value in milliseconds.</param>
+      /// <param name="value">The sample value in milliseconds.</param>
       public void AddSample(double value)
       {
         if (_count < _maxCount)
@@ -735,9 +728,9 @@ namespace NoLazyWorkers.Performance
       }
 
       /// <summary>
-      /// Gets the current average of samples.
+      /// Gets the current rolling average.
       /// </summary>
-      /// <returns>Average time in milliseconds, clamped between MIN_AVG_TIME_MS and MAX_AVG_TIME_MS.</returns>
+      /// <returns>The average time in milliseconds.</returns>
       public double GetAverage()
       {
         return _count == 0 ? 0 : Math.Clamp(_sum / _count, MIN_AVG_TIME_MS, MAX_AVG_TIME_MS);
@@ -747,21 +740,46 @@ namespace NoLazyWorkers.Performance
     /// <summary>
     /// Adds a performance sample for a method.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
+    /// <param name="methodName">The name of the method.</param>
     /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
-    internal static void AddSample(string methodName, double avgItemTimeMs)
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    internal static void AddSample(string methodName, double avgItemTimeMs, bool isNonBurst = false)
     {
       if (avgItemTimeMs <= 0) return;
       var avg = _rollingAverages.GetOrAdd(methodName, _ => new RollingAverage(WINDOW_SIZE));
       MetricsCache.AddPerformanceSample(methodName, avgItemTimeMs);
       avg.AddSample(avgItemTimeMs);
+#if DEBUG
+      Log(Level.Verbose, $"DynamicProfiler: {methodName} avgProcessingTimeMs={avgItemTimeMs:F3}ms (samples={avg.Count}, isNonBurst={isNonBurst})", Category.Performance);
+#endif
     }
 
     /// <summary>
-    /// Adds a batch size sample for a method.
+    /// Gets the dynamic average processing time for a method.
     /// </summary>
-    /// <param name="uniqueId">Unique identifier for the method.</param>
-    /// <param name="batchSize">Batch size used.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="defaultTimeMs">Default time if no data exists.</param>
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    /// <returns>The average processing time in milliseconds.</returns>
+    internal static float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f, bool isNonBurst = false)
+    {
+      RollingAverage rollingAvg = null;
+      if (MetricsCache.TryGetAverage(methodName, out var avg) || _rollingAverages.TryGetValue(methodName, out rollingAvg))
+      {
+        float result = (float)(rollingAvg?.GetAverage() ?? avg);
+#if DEBUG
+        Log(Level.Verbose, $"DynamicProfiler: {methodName} avgProcessingTimeMs={result:F3}ms (samples={(rollingAvg?.Count ?? 0)}, isNonBurst={isNonBurst})", Category.Performance);
+#endif
+        return result;
+      }
+      return defaultTimeMs;
+    }
+
+    /// <summary>
+    /// Adds a batch size to the history for a method.
+    /// </summary>
+    /// <param name="uniqueId">The unique identifier for the method.</param>
+    /// <param name="batchSize">The batch size used.</param>
     internal static void AddBatchSize(string uniqueId, int batchSize)
     {
       var history = _batchSizeHistory.GetOrAdd(uniqueId, _ => new List<int>(BATCH_HISTORY_SIZE));
@@ -771,30 +789,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Gets the dynamic average processing time for a method.
-    /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="defaultTimeMs">Default time if no data exists.</param>
-    /// <returns>Average processing time in milliseconds.</returns>
-    internal static float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f)
-    {
-      RollingAverage rollingAvg = null;
-      if (MetricsCache.TryGetAverage(methodName, out var avg) || _rollingAverages.TryGetValue(methodName, out rollingAvg))
-      {
-        float result = (float)(rollingAvg?.GetAverage() ?? avg);
-#if DEBUG
-        Log(Level.Verbose, $"DynamicProfiler: {methodName} avgProcessingTimeMs={result:F3}ms (samples={(rollingAvg?.Count ?? 0)})", Category.Performance);
-#endif
-        return result;
-      }
-      return defaultTimeMs;
-    }
-
-    /// <summary>
     /// Gets the average batch size for a method.
     /// </summary>
-    /// <param name="uniqueId">Unique identifier for the method.</param>
-    /// <returns>Average batch size.</returns>
+    /// <param name="uniqueId">The unique identifier for the method.</param>
+    /// <returns>The average batch size.</returns>
     internal static int GetAverageBatchSize(string uniqueId)
     {
       var history = _batchSizeHistory.GetOrAdd(uniqueId, _ => new List<int>(BATCH_HISTORY_SIZE));
@@ -805,7 +803,7 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Cleans up profiling data.
+    /// Cleans up profiler data.
     /// </summary>
     internal static void Cleanup()
     {
@@ -826,6 +824,7 @@ namespace NoLazyWorkers.Performance
       public string MethodName;
       public long StartTicks;
     }
+
     internal static readonly ConcurrentDictionary<string, DynamicProfiler.RollingAverage> _impactAverages = new();
     private static double _stopwatchOverheadMs;
     private const int WINDOW_SIZE = 100;
@@ -837,7 +836,7 @@ namespace NoLazyWorkers.Performance
     private static int _sampleId;
 
     /// <summary>
-    /// Initializes the tracker with overhead calibration and test job.
+    /// Initializes the main thread impact tracker.
     /// </summary>
     public static void Initialize()
     {
@@ -868,10 +867,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Adds a main thread impact sample.
+    /// Adds an impact sample for a method.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="impactTimeMs">Impact time in milliseconds.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="impactTimeMs">The impact time in milliseconds.</param>
     public static void AddImpactSample(string methodName, double impactTimeMs)
     {
       if (impactTimeMs <= 0) return;
@@ -890,10 +889,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Gets the average item impact for a method.
+    /// Gets the average main thread impact per item for a method.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <returns>Average impact per item in milliseconds.</returns>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The average impact time in milliseconds.</returns>
     public static float GetAverageItemImpact(string methodName)
     {
       DynamicProfiler.RollingAverage avg = null;
@@ -909,10 +908,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Gets the cost of a coroutine.
+    /// Gets the coroutine execution cost for a method.
     /// </summary>
-    /// <param name="coroutineKey">Coroutine identifier.</param>
-    /// <returns>Coroutine cost in milliseconds.</returns>
+    /// <param name="coroutineKey">The coroutine identifier.</param>
+    /// <returns>The coroutine cost in milliseconds.</returns>
     public static float GetCoroutineCost(string coroutineKey)
     {
       float cost = GetAverageItemImpact(coroutineKey);
@@ -920,10 +919,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Gets the overhead of a job.
+    /// Gets the job scheduling overhead for a job.
     /// </summary>
-    /// <param name="jobKey">Job identifier.</param>
-    /// <returns>Job overhead in milliseconds.</returns>
+    /// <param name="jobKey">The job identifier.</param>
+    /// <returns>The job overhead in milliseconds.</returns>
     public static float GetJobOverhead(string jobKey)
     {
       float overhead = GetAverageItemImpact(jobKey);
@@ -931,12 +930,12 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Tracks a job's execution with stopwatch timing.
+    /// Tracks a job's execution time using a stopwatch.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="scheduleJob">Function to schedule the job.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="scheduleJob">The function to schedule the job.</param>
     /// <param name="itemCount">Number of items processed.</param>
-    /// <returns>Coroutine enumerator.</returns>
+    /// <returns>An enumerator for the coroutine.</returns>
     public static IEnumerator TrackJobWithStopwatch(string methodName, Func<JobHandle> scheduleJob, int itemCount = 1)
     {
       var stopwatch = Stopwatch.StartNew();
@@ -953,8 +952,8 @@ namespace NoLazyWorkers.Performance
     /// <summary>
     /// Begins tracking a main thread sample.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <returns>Sample ID.</returns>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The sample ID.</returns>
     public static int BeginSample(string methodName)
     {
       int id = Interlocked.Increment(ref _sampleId);
@@ -963,10 +962,10 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Ends tracking a main thread sample and returns impact time.
+    /// Ends tracking a main thread sample and returns the impact time.
     /// </summary>
-    /// <param name="sampleId">Sample ID.</param>
-    /// <returns>Main thread impact in milliseconds.</returns>
+    /// <param name="sampleId">The sample ID.</param>
+    /// <returns>The impact time in milliseconds.</returns>
     public static float EndSample(int sampleId)
     {
       if (!_samples.TryRemove(sampleId, out var sample)) return 0;
@@ -977,7 +976,7 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Updates performance thresholds periodically.
+    /// Updates performance thresholds based on metrics.
     /// </summary>
     private static void UpdateThresholds()
     {
@@ -997,7 +996,7 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Cleans up tracking data.
+    /// Cleans up main thread impact tracking data.
     /// </summary>
     public static void Cleanup()
     {
@@ -1021,8 +1020,8 @@ namespace NoLazyWorkers.Performance
     /// <summary>
     /// Adds a performance sample to the cache.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="avgItemTimeMs">Average item time in milliseconds.</param>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
     public static void AddPerformanceSample(string methodName, double avgItemTimeMs)
     {
       if (avgItemTimeMs <= 0) return;
@@ -1038,7 +1037,7 @@ namespace NoLazyWorkers.Performance
     /// <summary>
     /// Adds an impact sample to the cache.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
+    /// <param name="methodName">The name of the method.</param>
     /// <param name="impactTimeMs">Impact time in milliseconds.</param>
     public static void AddImpactSample(string methodName, double impactTimeMs)
     {
@@ -1053,29 +1052,29 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Tries to get the average performance metric.
+    /// Tries to get the average performance time from the cache.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="avg">Output average time in milliseconds.</param>
-    /// <returns>True if found, false otherwise.</returns>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="avg">The average time in milliseconds.</param>
+    /// <returns>True if the average was found, false otherwise.</returns>
     public static bool TryGetAverage(string methodName, out double avg)
     {
       return _averageCache.TryGetValue(methodName, out avg);
     }
 
     /// <summary>
-    /// Tries to get the impact metric.
+    /// Tries to get the impact time from the cache.
     /// </summary>
-    /// <param name="methodName">Name of the method.</param>
-    /// <param name="impact">Output impact time in milliseconds.</param>
-    /// <returns>True if found, false otherwise.</returns>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="impact">The impact time in milliseconds.</param>
+    /// <returns>True if the impact was found, false otherwise.</returns>
     public static bool TryGetImpact(string methodName, out double impact)
     {
       return _impactCache.TryGetValue(methodName, out impact);
     }
 
     /// <summary>
-    /// Clears all cached metrics.
+    /// Clears the performance and impact caches.
     /// </summary>
     public static void Cleanup()
     {
@@ -1086,28 +1085,23 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Options for configuring SmartExecution behavior.
+  /// Configuration options for smart execution.
   /// </summary>
   public struct SmartExecutionOptions
   {
-    public bool SpreadSingleItem;
-    public float SingleItemThresholdMs;
-    public bool IsNetworked;
-    public int? BatchSizeOverride;
-    internal JobType? PreferredJobType;
+    public bool IsPlayerVisible;
 
+    /// <summary>
+    /// Gets the default smart execution options.
+    /// </summary>
     public static SmartExecutionOptions Default => new SmartExecutionOptions
     {
-      SpreadSingleItem = false,
-      SingleItemThresholdMs = 0.1f,
-      IsNetworked = false,
-      BatchSizeOverride = null,
-      PreferredJobType = null
+      IsPlayerVisible = false
     };
   }
 
   /// <summary>
-  /// Manages intelligent execution of tasks using jobs, coroutines, or main thread.
+  /// Manages optimized execution of jobs, coroutines, or main thread tasks.
   /// </summary>
   public static partial class SmartExecution
   {
@@ -1121,23 +1115,13 @@ namespace NoLazyWorkers.Performance
     private static float FPS_CHANGE_THRESHOLD = 0.2f;
     private static int MIN_TEST_EXECUTIONS = 3;
     private static int PARALLEL_MIN_ITEMS = 100;
-    private const int REVALIDATION_INTERVAL = 50;
     private static readonly ConcurrentDictionary<string, bool> _baselineEstablished = new();
     private static readonly ConcurrentDictionary<string, int> _executionCount = new();
-    private static float _lastFps = 60f;
     private const float METRIC_STABILITY_THRESHOLD = 0.05f;
     private const int STABILITY_WINDOW = 100;
     private const float STABILITY_VARIANCE_THRESHOLD = 0.001f;
     private const string fileName = "NoLazyWorkers_OptimizationData_";
     private static string _lastSavedDataHash;
-    private static readonly ObjectPool<List<int>> _intOutputPool = new ObjectPool<List<int>>(
-        createFunc: () => new List<int>(10),
-        actionOnGet: null,
-        actionOnRelease: list => list.Clear(),
-        actionOnDestroy: null,
-        collectionCheck: false,
-        defaultCapacity: 10,
-        maxSize: 100);
 
     static SmartExecution()
     {
@@ -1147,7 +1131,7 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Initializes the SmartExecution system.
+    /// Initializes the smart execution system.
     /// </summary>
     public static void Initialize()
     {
@@ -1158,188 +1142,727 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Executes a task with dynamic selection of execution method (job, coroutine, or main thread).
+    /// Executes a non-Burst loop with dynamic batch sizing and metrics-driven results processing.
     /// </summary>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
-    /// <param name="itemCount">Number of items to process.</param>
-    /// <param name="jobCallback">Job callback for non-Burst execution.</param>
-    /// <param name="coroutineCallback">Coroutine callback.</param>
-    /// <param name="mainThreadCallback">Main thread callback.</param>
-    /// <param name="burstDelegate">Burst-compiled job delegate.</param>
-    /// <param name="burstForDelegate">Burst-compiled parallel-for delegate.</param>
-    /// <param name="inputs">Input data array.</param>
-    /// <param name="outputs">Output data list.</param>
+    /// <typeparam name="TInput">Input data type (can be managed or unmanaged).</typeparam>
+    /// <typeparam name="TOutput">Output data type (unmanaged for jobs).</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="nonBurstDelegate">Delegate for processing a batch of items.</param>
+    /// <param name="burstResultsDelegate">Optional Burst-compatible delegate for results processing.</param>
+    /// <param name="nonBurstResultsDelegate">Optional non-Burst delegate for results processing.</param>
+    /// <param name="inputs">Input data collection.</param>
+    /// <param name="outputs">Output data collection.</param>
     /// <param name="options">Execution options.</param>
-    /// <returns>Coroutine enumerator.</returns>
-    public static IEnumerator Execute(
+    /// <returns>Coroutine that yields during execution to spread load.</returns>
+    public static IEnumerator Execute<TInput, TOutput>(
         string uniqueId,
         int itemCount,
-        Action jobCallback = null,
-        Func<IEnumerator> coroutineCallback = null,
-        Action mainThreadCallback = null,
-        Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = null,
-        Action<int, NativeArray<int>, NativeList<int>> burstForDelegate = null,
-        NativeArray<int> inputs = default,
-        List<int> outputs = null,
+        Action<int, int, TInput[], List<TOutput>> nonBurstDelegate,
+        Action<List<TOutput>> nonBurstResultsDelegate,
+        TInput[] inputs,
+        List<TOutput> outputs,
+        Action<List<TOutput>> burstResultsDelegate = null,
         SmartExecutionOptions options = default)
+        where TOutput : unmanaged
     {
-      if (itemCount == 0 || (jobCallback == null && coroutineCallback == null && mainThreadCallback == null && burstDelegate == null && burstForDelegate == null))
+      if (itemCount <= 0 || nonBurstDelegate == null || inputs == null || inputs.Length < itemCount)
       {
-        Log(Level.Warning, $"SmartExecution.Execute: Invalid input for {uniqueId}, itemCount={itemCount}", Category.Performance);
+        Log(Level.Warning, $"ExecuteNonBurst: Invalid input for {uniqueId}, itemCount={itemCount}, inputs={(inputs?.Length ?? 0)}", Category.Performance);
         yield break;
       }
 
-      string jobKey = $"{uniqueId}_Job";
-      string coroutineKey = $"{uniqueId}_Coroutine";
+      string jobKey = $"{uniqueId}_ResultsJob";
+      string coroutineKey = $"{uniqueId}_NonBurstCoroutine";
       string mainThreadKey = $"{uniqueId}_MainThread";
+      var stopwatch = Stopwatch.StartNew();
+      var tempOutputs = new List<TOutput>(itemCount);
+      int batchSize = GetDynamicBatchSize(itemCount, 0.15f, uniqueId, false);
+      DynamicProfiler.AddBatchSize(uniqueId, batchSize);
 
-      if (!MetricsThresholds.TryGetValue(uniqueId, out int jobThreshold))
+      bool isFirstRun = _firstRuns.Add(uniqueId);
+      if (!_baselineEstablished.ContainsKey(uniqueId) || isFirstRun)
       {
-        jobThreshold = DEFAULT_THRESHOLD;
-        MetricsThresholds.TryAdd(uniqueId, jobThreshold);
+        yield return EstablishBaseline(uniqueId, nonBurstDelegate, inputs, tempOutputs, batchSize, options.IsPlayerVisible);
       }
 
-      float mainThreadImpact = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
-      float coroutineImpact = MainThreadImpactTracker.GetAverageItemImpact(coroutineKey);
-      float jobOverhead = MainThreadImpactTracker.GetJobOverhead(jobKey);
+      float mainThreadCost = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
+      float coroutineCost = MainThreadImpactTracker.GetCoroutineCost(coroutineKey);
       bool isHighFps = Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD;
-      int batchSize = options.BatchSizeOverride ?? GetDynamicBatchSize(itemCount, 0.15f, uniqueId, options.PreferredJobType == JobType.IJobParallelFor);
-      JobType jobType = options.PreferredJobType ?? DetermineJobType(uniqueId, itemCount, false, mainThreadImpact);
 
-      bool useJob = itemCount == 1 ? jobType == JobType.IJob : (jobType == JobType.IJobFor || jobType == JobType.IJobParallelFor);
+      for (int i = 0; i < itemCount; i += batchSize)
+      {
+        int currentBatchSize = Math.Min(batchSize, itemCount - i);
+        float batchCost = mainThreadCost * currentBatchSize;
 
-      NativeList<int> nativeOutputs = default;
-      if (outputs != null)
-      {
-        nativeOutputs = new NativeList<int>(Allocator.TempJob);
-        for (int i = 0; i < outputs.Count; i++) nativeOutputs.Add(outputs[i]);
-      }
-      if (itemCount == 1 && useJob && burstDelegate != null)
-      {
+        if (batchCost <= MAX_FRAME_TIME_MS && isHighFps)
+        {
 #if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via IJob (single item)", Category.Performance);
+          Log(Level.Verbose, $"Executing {uniqueId} batch {i / batchSize + 1} on main thread (batchSize={currentBatchSize}, cost={batchCost:F3}ms)", Category.Performance);
 #endif
-        var jobWrapper = new DelegateJobWrapper<int, int>(burstDelegate, null, null, inputs, nativeOutputs, default, 0, 1, 1, JobType.IJob);
-        yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), 1);
-      }
-      else if (itemCount > 1 && useJob && (burstDelegate != null || burstForDelegate != null))
-      {
+          Metrics.TrackExecution(mainThreadKey, () => nonBurstDelegate(i, currentBatchSize, inputs, tempOutputs), currentBatchSize);
+        }
+        else
+        {
 #if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via {jobType} ({itemCount} items, batchSize={batchSize})", Category.Performance);
+          Log(Level.Verbose, $"Executing {uniqueId} batch {i / batchSize + 1} via coroutine (batchSize={currentBatchSize}, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
 #endif
-        var jobWrapper = new DelegateJobWrapper<int, int>(burstDelegate, burstForDelegate, null, inputs, nativeOutputs, default, 0, itemCount, batchSize, jobType);
-        yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(itemCount, batchSize), itemCount);
+          yield return Metrics.TrackExecutionCoroutine(coroutineKey, RunCoroutine(nonBurstDelegate, inputs, tempOutputs, i, currentBatchSize, options.IsPlayerVisible), currentBatchSize);
+        }
+
+        if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
+        {
+          yield return options.IsPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+          stopwatch.Restart();
+        }
+
+        _executionCount.AddOrUpdate(uniqueId, 1, (_, count) => count + 1);
       }
-      else if (coroutineCallback != null && (mainThreadCallback == null || coroutineImpact <= mainThreadImpact))
+
+      // Process results based on metrics
+      if (burstResultsDelegate != null || nonBurstResultsDelegate != null)
       {
+        float jobOverhead = MainThreadImpactTracker.GetJobOverhead(jobKey);
+        float resultsCost = Metrics.GetAvgItemTimeMs($"{uniqueId}_Results") * tempOutputs.Count;
+        if (burstResultsDelegate != null && jobOverhead <= Math.Min(mainThreadCost, coroutineCost) && resultsCost > 0.05f)
+        {
 #if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via Coroutine ({itemCount} items)", Category.Performance);
+          Log(Level.Verbose, $"Processing {uniqueId} results via IJob (jobOverhead={jobOverhead:F3}ms, resultsCost={resultsCost:F3}ms)", Category.Performance);
 #endif
-        yield return Metrics.TrackExecutionCoroutine(coroutineKey, coroutineCallback(), itemCount);
-      }
-      else if (mainThreadCallback != null && isHighFps)
-      {
+          NativeList<TOutput> nativeOutputs = new NativeList<TOutput>(tempOutputs.Count, Allocator.TempJob);
+          try
+          {
+            for (int i = 0; i < tempOutputs.Count; i++) nativeOutputs.Add(tempOutputs[i]);
+            var jobWrapper = new DelegateJobWrapper<TOutput, int>(
+                (start, end, inArray, outList) => burstResultsDelegate(tempOutputs),
+                null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), tempOutputs.Count);
+          }
+          finally
+          {
+            if (nativeOutputs.IsCreated) nativeOutputs.Dispose();
 #if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via MainThread ({itemCount} items, highFps={isHighFps})", Category.Performance);
+            Log(Level.Verbose, $"Cleaned up nativeOutputs for {uniqueId} results", Category.Performance);
 #endif
-        Metrics.TrackExecution(mainThreadKey, mainThreadCallback, itemCount);
+          }
+        }
+        else
+        {
+          yield return ProcessResultsNonJob(uniqueId, burstResultsDelegate, nonBurstResultsDelegate, tempOutputs, options, mainThreadCost, coroutineCost, isHighFps);
+        }
       }
-      else
+
+      outputs?.AddRange(tempOutputs);
+      Log(Level.Info, $"ExecuteNonBurst completed for {uniqueId}: items={itemCount}, batches={Mathf.CeilToInt((float)itemCount / batchSize)}", Category.Performance);
+    }
+
+    /// <summary>
+    /// Runs a non-Burst coroutine with fine-grained yielding for load spreading.
+    /// </summary>
+    /// <typeparam name="TInput">Input data type.</typeparam>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="nonBurstDelegate">Delegate for processing a batch of items.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="startIndex">Starting index for processing.</param>
+    /// <param name="count">Number of items to process.</param>
+    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements.</param>
+    /// <returns>An enumerator for the coroutine.</returns>
+    private static IEnumerator RunCoroutine<TInput, TOutput>(
+        Action<int, int, TInput[], List<TOutput>> nonBurstDelegate,
+        TInput[] inputs,
+        List<TOutput> outputs,
+        int startIndex,
+        int count,
+        bool isPlayerVisible)
+    {
+      var stopwatch = Stopwatch.StartNew();
+      int endIndex = startIndex + count;
+      int subBatchSize = Math.Min(10, count);
+
+      for (int i = startIndex; i < endIndex; i += subBatchSize)
       {
-        Log(Level.Warning, $"No valid execution path for {uniqueId}, yielding", Category.Performance);
-        yield return null;
+        int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
+        nonBurstDelegate(i, currentSubBatchSize, inputs, outputs);
+
+        if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
+        {
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+          stopwatch.Restart();
+        }
       }
     }
 
     /// <summary>
-    /// Executes a transform-based task with dynamic execution method selection.
+    /// Establishes baseline metrics for execution and results processing.
     /// </summary>
-    /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-    /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
-    /// <param name="transforms">Transform access array.</param>
-    /// <param name="transformDelegate">Delegate for transform processing.</param>
+    /// <typeparam name="TInput">Input data type.</typeparam>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="nonBurstDelegate">Delegate for processing a batch of items.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements.</param>
+    /// <returns>An enumerator for the baseline coroutine.</returns>
+    private static IEnumerator EstablishBaseline<TInput, TOutput>(
+        string uniqueId,
+        Action<int, int, TInput[], List<TOutput>> nonBurstDelegate,
+        TInput[] inputs,
+        List<TOutput> outputs,
+        int batchSize,
+        bool isPlayerVisible)
+    {
+      string mainThreadKey = $"{uniqueId}_MainThread";
+      string coroutineKey = $"{uniqueId}_Coroutine";
+      string resultsKey = $"{uniqueId}_Results";
+
+      // Measure main-thread execution
+      Metrics.TrackExecution(mainThreadKey, () => nonBurstDelegate(0, Math.Max(1, inputs.Length), inputs, outputs), 1);
+
+      // Measure coroutine execution
+      yield return Metrics.TrackExecutionCoroutine(coroutineKey, RunCoroutine(nonBurstDelegate, inputs, outputs, 0, Math.Max(1, inputs.Length), isPlayerVisible), 1);
+
+      // Measure results processing (if applicable)
+      if (outputs.Count > 0)
+      {
+        Action<List<TOutput>> dummyResultsDelegate = (_) => { };
+        Metrics.TrackExecution(resultsKey, () => dummyResultsDelegate(outputs), outputs.Count);
+      }
+
+      _baselineEstablished.AddOrUpdate(uniqueId, true, (_, _) => true);
+#if DEBUG
+      Log(Level.Verbose, $"Established baseline for {uniqueId}: mainThread={MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey):F3}ms, coroutine={MainThreadImpactTracker.GetCoroutineCost(coroutineKey):F3}ms, results={Metrics.GetAvgItemTimeMs(resultsKey):F3}ms", Category.Performance);
+#endif
+    }
+
+    /// <summary>
+    /// Processes results using coroutine or main thread based on metrics, supporting both Burst and non-Burst delegates.
+    /// </summary>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="burstResultsDelegate">Burst-compatible delegate for results processing.</param>
+    /// <param name="nonBurstResultsDelegate">Non-Burst delegate for results processing.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="options">Execution options.</param>
+    /// <param name="mainThreadCost">Main thread execution cost.</param>
+    /// <param name="coroutineCost">Coroutine execution cost.</param>
+    /// <param name="isHighFps">Whether the frame rate is high.</param>
+    /// <returns>An enumerator for the results processing coroutine.</returns>
+    private static IEnumerator ProcessResultsNonJob<TOutput>(
+        string uniqueId,
+        Action<List<TOutput>> burstResultsDelegate,
+        Action<List<TOutput>> nonBurstResultsDelegate,
+        List<TOutput> outputs,
+        SmartExecutionOptions options,
+        float mainThreadCost,
+        float coroutineCost,
+        bool isHighFps)
+    {
+      string resultsKey = $"{uniqueId}_Results";
+      float resultsCost = Metrics.GetAvgItemTimeMs(resultsKey) * outputs.Count;
+      var resultsDelegate = nonBurstResultsDelegate ?? burstResultsDelegate;
+
+      if (resultsDelegate == null)
+      {
+        Log(Level.Warning, $"No results delegate provided for {uniqueId}", Category.Performance);
+        yield break;
+      }
+
+      if (resultsCost <= MAX_FRAME_TIME_MS && isHighFps)
+      {
+#if DEBUG
+        Log(Level.Verbose, $"Processing {uniqueId} results on main thread (cost={resultsCost:F3}ms, highFps={isHighFps}, using={(nonBurstResultsDelegate != null ? "non-Burst" : "Burst")} delegate)", Category.Performance);
+#endif
+        Metrics.TrackExecution(resultsKey, () => resultsDelegate(outputs), outputs.Count);
+      }
+      else
+      {
+#if DEBUG
+        Log(Level.Verbose, $"Processing {uniqueId} results via coroutine (cost={resultsCost:F3}ms, coroutineCost={coroutineCost:F3}ms, using={(nonBurstResultsDelegate != null ? "non-Burst" : "Burst")} delegate)", Category.Performance);
+#endif
+        yield return Metrics.TrackExecutionCoroutine(resultsKey, RunResultsCoroutine(resultsDelegate, outputs, options.IsPlayerVisible), outputs.Count);
+      }
+    }
+
+    /// <summary>
+    /// Runs a coroutine for processing results with fine-grained yielding across sub-batches.
+    /// </summary>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="resultsDelegate">Delegate to process the results.</param>
+    /// <param name="outputs">List of output items to process.</param>
+    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements.</param>
+    /// <returns>An enumerator for the coroutine.</returns>
+    private static IEnumerator RunResultsCoroutine<TOutput>(
+        Action<List<TOutput>> resultsDelegate,
+        List<TOutput> outputs,
+        bool isPlayerVisible)
+    {
+      if (resultsDelegate == null || outputs == null || outputs.Count == 0)
+      {
+        Log(Level.Warning, $"RunResultsCoroutine: Invalid input, delegate={resultsDelegate != null}, outputs={(outputs?.Count ?? 0)}", Category.Performance);
+        yield break;
+      }
+
+      string resultsKey = $"{typeof(TOutput).Name}_Results";
+      float resultsCost = Metrics.GetAvgItemTimeMs(resultsKey) * outputs.Count;
+      var stopwatch = Stopwatch.StartNew();
+      int batchSize = GetDynamicBatchSize(outputs.Count, 0.15f, resultsKey, false);
+      DynamicProfiler.AddBatchSize(resultsKey, batchSize);
+
+      // Execute in a single frame if cost is low
+      if (resultsCost <= MAX_FRAME_TIME_MS && Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD)
+      {
+#if DEBUG
+        Log(Level.Verbose, $"Processing results for {resultsKey} in single frame (cost={resultsCost:F3}ms, highFps={Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD})", Category.Performance);
+#endif
+        Metrics.TrackExecution(resultsKey, () => resultsDelegate(outputs), outputs.Count);
+        yield break;
+      }
+
+      // Process in sub-batches to spread load
+      for (int i = 0; i < outputs.Count; i += batchSize)
+      {
+        int currentBatchSize = Math.Min(batchSize, outputs.Count - i);
+        List<TOutput> subBatch = outputs.GetRange(i, currentBatchSize);
+#if DEBUG
+        Log(Level.Verbose, $"Processing results batch {i / batchSize + 1} for {resultsKey} (batchSize={currentBatchSize})", Category.Performance);
+#endif
+        Metrics.TrackExecution(resultsKey, () => resultsDelegate(subBatch), currentBatchSize);
+
+        if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
+        {
+#if DEBUG
+          Log(Level.Verbose, $"Yielding for {resultsKey} after batch {i / batchSize + 1} (elapsed={stopwatch.ElapsedMilliseconds:F3}ms, isPlayerVisible={isPlayerVisible})", Category.Performance);
+#endif
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+          stopwatch.Restart();
+        }
+      }
+    }
+
+    /// <summary>
+    /// Executes a Burst-compiled job for a single item with metrics-driven results processing.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="burstDelegate">Delegate for Burst-compiled job execution.</param>
+    /// <param name="burstResultsDelegate">Delegate for Burst-compiled results processing.</param>
+    /// <param name="nonBurstResultsDelegate">Delegate for non-Burst results processing.</param>
     /// <param name="inputs">Input data array.</param>
     /// <param name="outputs">Output data list.</param>
     /// <param name="options">Execution options.</param>
-    public static void ExecuteTransforms<TInput, TOutput>(
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    public static IEnumerator ExecuteBurst<TInput, TOutput>(
         string uniqueId,
-        TransformAccessArray transforms,
-        Action<int, Transform, NativeArray<TInput>, List<TOutput>> transformDelegate,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
+        Action<NativeList<TOutput>> burstResultsDelegate,
         NativeArray<TInput> inputs = default,
-        List<TOutput> outputs = null,
+        NativeList<TOutput> outputs = default,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TInput : unmanaged
         where TOutput : unmanaged
     {
-      if (!transforms.isCreated || transforms.length == 0 || transformDelegate == null)
+      if (burstDelegate == null)
       {
-        Log(Level.Warning, $"SmartExecution.ExecuteTransforms: Invalid input for {uniqueId}, transformCount={transforms.length}", Category.Performance);
-        return;
+        Log(Level.Warning, $"SmartExecution.Execute: No valid delegate for {uniqueId}", Category.Performance);
+        yield break;
       }
 
-      var jobOutputs = outputs != null ? new NativeList<TOutput>(transforms.length, Allocator.TempJob) : default;
-      Action<int, TransformAccess> burstTransformDelegate = (index, transform) =>
+      string jobKey = $"{uniqueId}_IJob";
+      string resultsJobKey = $"{uniqueId}_ResultsJob";
+      string coroutineKey = $"{uniqueId}_Coroutine";
+      string mainThreadKey = $"{uniqueId}_MainThread";
+      NativeList<TOutput> nativeOutputs = new NativeList<TOutput>(1, Allocator.TempJob);
+
+      try
       {
-        var tempList = outputs != null ? new List<TOutput>() : null;
-        transformDelegate(index, null, inputs, tempList);
-        if (tempList != null)
-          for (int i = 0; i < tempList.Count; i++)
-            jobOutputs.Add(tempList[i]);
-      };
-      Action<int, int, NativeArray<TInput>, List<TOutput>> nonBurstDelegate = (start, end, inArray, outList) =>
-      {
-        for (int i = start; i < end; i++)
+        if (outputs.IsCreated && outputs.Length > 0)
         {
-          Transform transform = transforms[i];
-          transformDelegate(i, transform, inArray, outList);
+          for (int i = 0; i < outputs.Length; i++) nativeOutputs.Add(outputs[i]);
         }
-      };
 
-      var coroutine = ExecuteCore(uniqueId, null, nonBurstDelegate, inputs, jobOutputs, outputs, options, transforms, burstTransformDelegate);
-      CoroutineRunner.Instance.RunCoroutine(coroutine);
-
+        yield return RunExecutionLoop(
+            uniqueId,
+            itemCount: 1,
+            batchSize: 1,
+            burstDelegateIJob: burstDelegate,
+            inputs: inputs,
+            outputs: nativeOutputs,
+            options: options,
+            executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
+            {
+              if (jobOverhead <= Math.Min(mainThreadCost, coroutineCost))
+              {
 #if DEBUG
-      Log(Level.Verbose, $"Started ExecuteTransforms for {uniqueId}, transformCount={transforms.length}", Category.Performance);
+                Log(Level.Verbose, $"Executing {uniqueId} via IJob (single item, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
 #endif
+                var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(burstDelegate, null, null, inputs, nativeOutputs, default, batchStart, batchSize, batchSize, JobType.IJob);
+                return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), batchSize);
+              }
+              else if (coroutineCost <= mainThreadCost)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (single item, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
+#endif
+                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+              }
+              else if (isHighFps)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via MainThread (single item, highFps={isHighFps})", Category.Performance);
+#endif
+                Metrics.TrackExecution(mainThreadKey, () => burstDelegate(0, 1, inputs, nativeOutputs), batchSize);
+                return null;
+              }
+              else
+              {
+                Log(Level.Warning, $"No optimal execution path for {uniqueId}, yielding", Category.Performance);
+                return options.IsPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+              }
+            });
+
+        if (burstResultsDelegate != null || nonBurstResultsDelegate != null)
+        {
+          float jobOverhead = MainThreadImpactTracker.GetJobOverhead(resultsJobKey);
+          float mainThreadCost = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
+          float coroutineCost = MainThreadImpactTracker.GetCoroutineCost(coroutineKey);
+          float resultsCost = Metrics.GetAvgItemTimeMs($"{uniqueId}_Results") * nativeOutputs.Length;
+          bool isHighFps = Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD;
+
+          List<TOutput> managedOutputs = new List<TOutput>(nativeOutputs.Length);
+          for (int i = 0; i < nativeOutputs.Length; i++) managedOutputs.Add(nativeOutputs[i]);
+
+          if (burstResultsDelegate != null && jobOverhead <= Math.Min(mainThreadCost, coroutineCost) && resultsCost > 0.05f)
+          {
+#if DEBUG
+            Log(Level.Verbose, $"Processing {uniqueId} results via IJob (jobOverhead={jobOverhead:F3}ms, resultsCost={resultsCost:F3}ms)", Category.Performance);
+#endif
+            var jobWrapper = new DelegateJobWrapper<TOutput, int>(
+                (start, end, inArray, outList) => burstResultsDelegate(nativeOutputs),
+                null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch(resultsJobKey, () => jobWrapper.Schedule(), nativeOutputs.Length);
+          }
+          else
+          {
+            Action<List<TOutput>> resultsDelegate;
+            if (nonBurstResultsDelegate != null)
+            {
+              resultsDelegate = nonBurstResultsDelegate;
+            }
+            else
+            {
+              NativeList<TOutput> tempNativeOutputs = new NativeList<TOutput>(managedOutputs.Count, Allocator.Temp);
+              try
+              {
+                for (int i = 0; i < managedOutputs.Count; i++) tempNativeOutputs.Add(managedOutputs[i]);
+#if DEBUG
+                Log(Level.Verbose, $"Converted List<TOutput> to NativeList<TOutput> for {uniqueId} results (count={managedOutputs.Count})", Category.Performance);
+#endif
+                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs);
+              }
+              finally
+              {
+                if (tempNativeOutputs.IsCreated) tempNativeOutputs.Dispose();
+#if DEBUG
+                Log(Level.Verbose, $"Cleaned up tempNativeOutputs for {uniqueId} results in non-job path", Category.Performance);
+#endif
+              }
+            }
+            yield return ProcessResultsNonJob(uniqueId, null, resultsDelegate, managedOutputs, options, mainThreadCost, coroutineCost, isHighFps);
+          }
+        }
+      }
+      finally
+      {
+        if (nativeOutputs.IsCreated) nativeOutputs.Dispose();
+#if DEBUG
+        Log(Level.Verbose, $"Cleaned up nativeOutputs for {uniqueId}", Category.Performance);
+#endif
+      }
     }
 
     /// <summary>
-    /// Core execution logic for tasks with generic input/output types.
+    /// Executes a Burst-compiled job for multiple items with metrics-driven results processing.
     /// </summary>
-    /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-    /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
-    /// <param name="burstDelegate">Burst-compiled job delegate.</param>
-    /// <param name="nonBurstDelegate">Non-Burst delegate.</param>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="burstForDelegate">Delegate for Burst-compiled job execution per item.</param>
+    /// <param name="burstResultsDelegate">Delegate for Burst-compiled results processing.</param>
+    /// <param name="nonBurstResultsDelegate">Delegate for non-Burst results processing.</param>
     /// <param name="inputs">Input data array.</param>
-    /// <param name="jobOutputs">Job output list.</param>
-    /// <param name="coroutineOutputs">Coroutine output list.</param>
+    /// <param name="outputs">Output data list.</param>
     /// <param name="options">Execution options.</param>
-    /// <param name="transforms">Transform access array.</param>
-    /// <param name="transformDelegate">Transform delegate.</param>
-    /// <returns>Coroutine enumerator.</returns>
-    private static IEnumerator ExecuteCore<TInput, TOutput>(
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    public static IEnumerator ExecuteBurstFor<TInput, TOutput>(
         string uniqueId,
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
-        Action<int, int, NativeArray<TInput>, List<TOutput>> nonBurstDelegate,
-        NativeArray<TInput> inputs,
-        NativeList<TOutput> jobOutputs,
-        List<TOutput> coroutineOutputs,
-        SmartExecutionOptions options,
-        TransformAccessArray transforms = default,
-        Action<int, TransformAccess> transformDelegate = null)
+        int itemCount,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate,
+        Action<NativeList<TOutput>> burstResultsDelegate,
+        NativeArray<TInput> inputs = default,
+        NativeList<TOutput> outputs = default,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
+        SmartExecutionOptions options = default)
         where TInput : unmanaged
         where TOutput : unmanaged
     {
-      string jobKey = $"{uniqueId}_IJob";
+      if (itemCount <= 0 || burstForDelegate == null)
+      {
+        Log(Level.Warning, $"SmartExecution.ExecuteMultiple: Invalid input for {uniqueId}, itemCount={itemCount}", Category.Performance);
+        yield break;
+      }
+
+      NativeList<TOutput> nativeOutputs = new NativeList<TOutput>(itemCount, Allocator.TempJob);
+
+      try
+      {
+        if (outputs.IsCreated && outputs.Length > 0)
+        {
+          for (int i = 0; i < outputs.Length; i++) nativeOutputs.Add(outputs[i]);
+        }
+
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate = (start, end, inArray, outList) =>
+        {
+          for (int i = start; i < end; i++) burstForDelegate(i, inArray, outList);
+        };
+
+        string jobKey = $"{uniqueId}_IJob";
+        string coroutineKey = $"{uniqueId}_Coroutine";
+        string mainThreadKey = $"{uniqueId}_MainThread";
+
+        yield return RunExecutionLoop(
+            uniqueId,
+            itemCount,
+            GetDynamicBatchSize(itemCount, 0.15f, uniqueId),
+            burstDelegateIJob: burstDelegate,
+            burstDelegateFor: burstForDelegate,
+            inputs: inputs,
+            outputs: nativeOutputs,
+            options: options,
+            executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
+            {
+              float mainThreadBatchCost = mainThreadCost * batchSize;
+              if (jobType == JobType.IJobParallelFor && ShouldUseParallel(uniqueId, batchSize) && jobOverhead <= mainThreadBatchCost)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via IJobParallelFor (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
+#endif
+                var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(null, burstForDelegate, null, inputs, nativeOutputs, default, batchStart, batchSize, batchSize, JobType.IJobParallelFor);
+                return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(batchSize, batchSize), batchSize);
+              }
+              else if (jobType == JobType.IJobFor && jobOverhead <= mainThreadBatchCost)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via IJobFor (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
+#endif
+                var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(null, burstForDelegate, null, inputs, nativeOutputs, default, batchStart, batchSize, batchSize, JobType.IJobFor);
+                return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(batchSize, batchSize), batchSize);
+              }
+              else if (coroutineCost <= mainThreadBatchCost)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (batchSize={batchSize}, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
+#endif
+                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+              }
+              else if (mainThreadBatchCost <= MAX_FRAME_TIME_MS && isHighFps)
+              {
+#if DEBUG
+                Log(Level.Verbose, $"Executing {uniqueId} via MainThread (batchSize={batchSize}, cost={mainThreadBatchCost:F3}ms, highFps={isHighFps})", Category.Performance);
+#endif
+                Metrics.TrackExecution(mainThreadKey, () =>
+                        {
+                          for (int j = batchStart; j < batchStart + batchSize; j++) burstForDelegate(j, inputs, nativeOutputs);
+                        }, batchSize);
+                return null;
+              }
+              else
+              {
+                Log(Level.Warning, $"No optimal execution path for {uniqueId}, yielding", Category.Performance);
+                return options.IsPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+              }
+            });
+
+        if (burstResultsDelegate != null || nonBurstResultsDelegate != null)
+        {
+          float jobOverhead = MainThreadImpactTracker.GetJobOverhead($"{uniqueId}_ResultsJob");
+          float mainThreadCost = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
+          float coroutineCost = MainThreadImpactTracker.GetCoroutineCost(coroutineKey);
+          float resultsCost = Metrics.GetAvgItemTimeMs($"{uniqueId}_Results") * nativeOutputs.Length;
+          bool isHighFps = Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD;
+
+          List<TOutput> managedOutputs = new List<TOutput>(nativeOutputs.Length);
+          for (int i = 0; i < nativeOutputs.Length; i++) managedOutputs.Add(nativeOutputs[i]);
+
+          if (burstResultsDelegate != null && jobOverhead <= Math.Min(mainThreadCost, coroutineCost) && resultsCost > 0.05f)
+          {
+#if DEBUG
+            Log(Level.Verbose, $"Processing {uniqueId} results via IJob (jobOverhead={jobOverhead:F3}ms, resultsCost={resultsCost:F3}ms)", Category.Performance);
+#endif
+            var jobWrapper = new DelegateJobWrapper<TOutput, int>(
+                (start, end, inArray, outList) => burstResultsDelegate(nativeOutputs),
+                null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{uniqueId}_ResultsJob", () => jobWrapper.Schedule(), nativeOutputs.Length);
+          }
+          else
+          {
+            Action<List<TOutput>> resultsDelegate;
+            if (nonBurstResultsDelegate != null)
+            {
+              resultsDelegate = nonBurstResultsDelegate;
+            }
+            else
+            {
+              NativeList<TOutput> tempNativeOutputs = new NativeList<TOutput>(managedOutputs.Count, Allocator.Temp);
+              try
+              {
+                for (int i = 0; i < managedOutputs.Count; i++) tempNativeOutputs.Add(managedOutputs[i]);
+#if DEBUG
+                Log(Level.Verbose, $"Converted List<TOutput> to NativeList<TOutput> for {uniqueId} results (count={managedOutputs.Count})", Category.Performance);
+#endif
+                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs);
+              }
+              finally
+              {
+                if (tempNativeOutputs.IsCreated) tempNativeOutputs.Dispose();
+#if DEBUG
+                Log(Level.Verbose, $"Cleaned up tempNativeOutputs for {uniqueId} results in non-job path", Category.Performance);
+#endif
+              }
+            }
+            yield return ProcessResultsNonJob(uniqueId, null, resultsDelegate, managedOutputs, options, mainThreadCost, coroutineCost, isHighFps);
+          }
+        }
+      }
+      finally
+      {
+        if (nativeOutputs.IsCreated) nativeOutputs.Dispose();
+#if DEBUG
+        Log(Level.Verbose, $"Cleaned up nativeOutputs for {uniqueId}", Category.Performance);
+#endif
+      }
+    }
+
+    /// <summary>
+    /// Executes transform operations using the optimal execution path.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="transforms">Array of transforms to process.</param>
+    /// <param name="burstTransformDelegate">Delegate for burst-compiled transform job.</param>
+    /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    public static IEnumerator ExecuteTransforms<TInput>(
+        string uniqueId,
+        TransformAccessArray transforms,
+        Action<int, TransformAccess> burstTransformDelegate,
+        Action<int, Transform> burstMainThreadTransformDelegate,
+        NativeArray<TInput> inputs = default,
+        SmartExecutionOptions options = default)
+        where TInput : unmanaged
+    {
+      if (!transforms.isCreated || transforms.length == 0 || burstTransformDelegate == null || burstMainThreadTransformDelegate == null)
+      {
+        Log(Level.Warning, $"SmartExecution.ExecuteTransforms: Invalid input for {uniqueId}, transformCount={transforms.length}", Category.Performance);
+        yield break;
+      }
+      yield return RunExecutionLoop<TInput, int>(
+          uniqueId,
+          itemCount: transforms.length,
+          batchSize: GetDynamicBatchSize(transforms.length, 0.15f, uniqueId, true),
+          transforms: transforms,
+          burstTransformDelegate: burstTransformDelegate,
+          burstMainThreadTransformDelegate: burstMainThreadTransformDelegate,
+          inputs: inputs,
+          outputs: default,
+          options: options,
+          executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
+          {
+            string jobKey = $"{uniqueId}_IJobParallelForTransform";
+            string coroutineKey = $"{uniqueId}_Coroutine";
+            string mainThreadKey = $"{uniqueId}_MainThread";
+            float mainThreadBatchCost = mainThreadCost * batchSize;
+            if (jobType == JobType.IJobParallelForTransform && jobOverhead <= mainThreadBatchCost)
+            {
+#if DEBUG
+              Log(Level.Verbose, $"Executing {uniqueId} via IJobParallelForTransform (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
+#endif
+              var jobWrapper = new DelegateJobWrapper<TInput, int>(null, null, burstTransformDelegate, inputs, default, transforms, batchStart, batchSize, batchSize, JobType.IJobParallelForTransform);
+              return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(batchSize, batchSize), batchSize);
+            }
+            else if (coroutineCost <= mainThreadBatchCost)
+            {
+#if DEBUG
+              Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (batchSize={batchSize}, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
+#endif
+              return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstTransformCoroutine(burstMainThreadTransformDelegate, transforms, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+            }
+            else if (mainThreadBatchCost <= MAX_FRAME_TIME_MS && isHighFps)
+            {
+#if DEBUG
+              Log(Level.Verbose, $"Executing {uniqueId} via MainThread (batchSize={batchSize}, cost={mainThreadBatchCost:F3}ms, highFps={isHighFps})", Category.Performance);
+#endif
+              Metrics.TrackExecution(mainThreadKey, () =>
+                    {
+                      for (int j = batchStart; j < batchStart + batchSize; j++)
+                        burstMainThreadTransformDelegate(j, transforms[j].transform);
+                    }, batchSize);
+              return null;
+            }
+            else
+            {
+              Log(Level.Warning, $"No optimal execution path for {uniqueId}, yielding", Category.Performance);
+              return options.IsPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+            }
+          });
+      if (transforms.isCreated) transforms.Dispose();
+    }
+
+    /// <summary>
+    /// Runs the execution loop for processing items.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="itemCount">Number of items to process.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="burstDelegateIJob">Delegate for IJob execution.</param>
+    /// <param name="burstDelegateFor">Delegate for IJobFor execution.</param>
+    /// <param name="burstTransformDelegate">Delegate for transform job execution.</param>
+    /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform execution.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="transforms">Array of transforms.</param>
+    /// <param name="options">Execution options.</param>
+    /// <param name="executeAction">Action to execute for each batch.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    private static IEnumerator RunExecutionLoop<TInput, TOutput>(
+        string uniqueId,
+        int itemCount,
+        int batchSize,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateIJob = null,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateFor = null,
+        Action<int, TransformAccess> burstTransformDelegate = null,
+        Action<int, Transform> burstMainThreadTransformDelegate = null,
+        NativeArray<TInput> inputs = default,
+        NativeList<TOutput> outputs = default,
+        TransformAccessArray transforms = default,
+        SmartExecutionOptions options = default,
+        Func<int, int, JobType, float, float, float, bool, IEnumerator> executeAction = null)
+        where TInput : unmanaged
+        where TOutput : unmanaged
+    {
+      string jobKey = transforms.isCreated ? $"{uniqueId}_IJobParallelForTransform" : $"{uniqueId}_IJob";
       string coroutineKey = $"{uniqueId}_Coroutine";
       string mainThreadKey = $"{uniqueId}_MainThread";
-      int itemCount = transforms.isCreated ? transforms.length : inputs.Length;
-      int batchSize = options.BatchSizeOverride ?? GetDynamicBatchSize(itemCount, 0.15f, uniqueId, options.PreferredJobType == JobType.IJobParallelFor || options.PreferredJobType == JobType.IJobParallelForTransform);
       DynamicProfiler.AddBatchSize(uniqueId, batchSize);
       bool isDroppedFrame = Time.unscaledDeltaTime > TARGET_FRAME_TIME * 1.1f;
-
       if (isDroppedFrame)
       {
         batchSize = Mathf.Max(1, batchSize / 2);
@@ -1347,256 +1870,148 @@ namespace NoLazyWorkers.Performance
         Log(Level.Verbose, $"Dropped frame detected for {uniqueId}: frameTime={Time.unscaledDeltaTime * 1000f:F3}ms, newBatchSize={batchSize}", Category.Performance);
 #endif
       }
-
       bool isFirstRun = _firstRuns.Add(uniqueId);
-      float currentFps = 1f / Time.unscaledDeltaTime;
-      bool fpsChanged = Mathf.Abs(currentFps - _lastFps) / _lastFps > FPS_CHANGE_THRESHOLD;
-      _lastFps = currentFps;
-
-      if (!_baselineEstablished.ContainsKey(uniqueId) || fpsChanged || _executionCount.GetOrAdd(uniqueId, 0) >= REVALIDATION_INTERVAL)
+      if (!_baselineEstablished.ContainsKey(uniqueId) || isFirstRun)
       {
-        _baselineEstablished.TryRemove(uniqueId, out _);
-        yield return EstablishBaseline(uniqueId, burstDelegate, nonBurstDelegate, inputs, jobOutputs, coroutineOutputs, batchSize, options.IsNetworked);
+        if (transforms.isCreated)
+          yield return EstablishBaselineTransform(uniqueId, transforms, burstTransformDelegate, burstMainThreadTransformDelegate, inputs, batchSize, options.IsPlayerVisible);
+        else
+          yield return EstablishBaselineBurst(uniqueId, burstDelegateIJob, burstDelegateFor, inputs, outputs, null, batchSize, options.IsPlayerVisible);
       }
-
       float mainThreadCost = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
       float coroutineCost = MainThreadImpactTracker.GetCoroutineCost(coroutineKey);
       float jobOverhead = MainThreadImpactTracker.GetJobOverhead(jobKey);
       bool isHighFps = Time.unscaledDeltaTime < HIGH_FPS_THRESHOLD;
-
       for (int i = 0; i < itemCount; i += batchSize)
       {
         int currentBatchSize = Math.Min(batchSize, itemCount - i);
-        JobType jobType = options.PreferredJobType ?? DetermineJobType(uniqueId, currentBatchSize, transforms.isCreated, mainThreadCost);
-        bool useParallel = ShouldUseParallel(uniqueId, currentBatchSize);
-        float mainThreadBatchCost = mainThreadCost * currentBatchSize;
-
-        if (currentBatchSize == 1 && options.SpreadSingleItem && (burstDelegate != null || transformDelegate != null))
-        {
-          var stopwatch = Stopwatch.StartNew();
-          var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(
-              burstDelegate,
-              jobType == JobType.IJobParallelFor ? (index, inArray, outList) => burstDelegate(index, index + 1, inArray, outList) : null,
-              transformDelegate,
-              inputs,
-              jobOutputs,
-              transforms,
-              i,
-              1,
-              1,
-              jobType
-          );
-          yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), 1);
-          stopwatch.Stop();
-
-          if (stopwatch.ElapsedMilliseconds > options.SingleItemThresholdMs)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"Single item for {uniqueId} exceeded threshold ({stopwatch.ElapsedMilliseconds:F3}ms), yielding", Category.Performance);
-#endif
-            yield return options.IsNetworked ? AwaitNextFishNetTickAsync(0f) : null;
-          }
-
-          if (coroutineOutputs != null)
-            CopyOutputs(jobOutputs, coroutineOutputs);
-          continue;
-        }
-
-        bool isStale = !_baselineEstablished.ContainsKey(uniqueId);
-        if (isStale && nonBurstDelegate != null)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (stale metrics, {currentBatchSize} items)", Category.Performance);
-#endif
-          yield return Metrics.TrackExecutionCoroutine(coroutineKey, RunCoroutine(nonBurstDelegate, inputs, coroutineOutputs, i, currentBatchSize, options.IsNetworked), currentBatchSize);
-        }
-        else if (mainThreadBatchCost <= MAX_FRAME_TIME_MS && nonBurstDelegate != null && isHighFps)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Executing {uniqueId} via MainThread ({currentBatchSize} items, cost={mainThreadBatchCost:F3}ms, highFps={isHighFps})", Category.Performance);
-#endif
-          Metrics.TrackExecution(mainThreadKey, () => RunMainThread(nonBurstDelegate, inputs, coroutineOutputs, i, currentBatchSize), currentBatchSize);
-        }
-        else if (coroutineCost <= jobOverhead && nonBurstDelegate != null)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Executing {uniqueId} via Coroutine ({currentBatchSize} items, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
-#endif
-          yield return Metrics.TrackExecutionCoroutine(coroutineKey, RunCoroutine(nonBurstDelegate, inputs, coroutineOutputs, i, currentBatchSize, options.IsNetworked), currentBatchSize);
-        }
-        else if ((burstDelegate != null || transformDelegate != null) && jobOverhead <= mainThreadBatchCost)
-        {
-          var testJob = jobType == JobType.IJob
-              ? new DelegateJob<TInput, TOutput>
-              {
-                Delegate = burstDelegate != null ? BurstCompiler.CompileFunctionPointer(burstDelegate) : default,
-                Inputs = inputs,
-                Outputs = jobOutputs,
-                StartIndex = i,
-                Count = currentBatchSize
-              }
-              : default;
-          var handle = testJob.Schedule();
-          bool highQueuePressure = !handle.IsCompleted;
-          handle.Complete();
-
-          if (highQueuePressure && nonBurstDelegate != null)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"High job queue pressure for {uniqueId}, falling back to coroutine", Category.Performance);
-#endif
-            yield return Metrics.TrackExecutionCoroutine(coroutineKey, RunCoroutine(nonBurstDelegate, inputs, coroutineOutputs, i, currentBatchSize, options.IsNetworked), currentBatchSize);
-          }
-          else
-          {
-#if DEBUG
-            Log(Level.Verbose, $"Executing {uniqueId} via Job ({currentBatchSize} items, jobType={jobType}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
-#endif
-            var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(
-                burstDelegate,
-                jobType == JobType.IJobParallelFor ? (index, inArray, outList) => burstDelegate(index, index + 1, inArray, outList) : null,
-                transformDelegate,
-                inputs,
-                jobOutputs,
-                transforms,
-                i,
-                currentBatchSize,
-                currentBatchSize,
-                jobType
-            );
-            yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), currentBatchSize);
-            Metrics.TrackJobCacheAccess($"{uniqueId}_JobCache", true);
-          }
-        }
-        else if (nonBurstDelegate != null)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Executing {uniqueId} via Async ({currentBatchSize} items)", Category.Performance);
-#endif
-          yield return Metrics.TrackExecutionAsync(coroutineKey, () => Task.Run(() => nonBurstDelegate(i, i + currentBatchSize, inputs, coroutineOutputs)), currentBatchSize).AsCoroutine();
-        }
-        else
-        {
-          Log(Level.Warning, $"No valid execution path for {uniqueId}, yielding", Category.Performance);
-          yield return null;
-        }
-
+        JobType jobType = transforms.isCreated ? DetermineJobTypeExecutescope(uniqueId, currentBatchSize, true, mainThreadCost)
+            : itemCount == 1 ? JobType.IJob
+            : DetermineJobTypeExecutescope(uniqueId, currentBatchSize, false, mainThreadCost);
+        var yieldInstruction = executeAction(i, currentBatchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps);
+        if (yieldInstruction != null)
+          yield return yieldInstruction;
         _executionCount.AddOrUpdate(uniqueId, 1, (_, count) => count + 1);
-        if (Time.unscaledDeltaTime > TARGET_FRAME_TIME * 1.5f)
-        {
-          batchSize = Mathf.Max(1, batchSize / 2);
-          jobType = DetermineJobType(uniqueId, currentBatchSize, transforms.isCreated, mainThreadCost);
-#if DEBUG
-          Log(Level.Verbose, $"Performance degradation for {uniqueId}, adjusting batchSize={batchSize}, jobType={jobType}", Category.Performance);
-#endif
-        }
-
-        yield return options.IsNetworked ? AwaitNextFishNetTickAsync(0f) : null;
+        yield return options.IsPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
       }
-
-      if (coroutineOutputs != null && jobOutputs.IsCreated)
-        CopyOutputs(jobOutputs, coroutineOutputs);
-      if (jobOutputs.IsCreated)
-        jobOutputs.Dispose();
-
-#if DEBUG
-      Log(Level.Verbose, $"Completed ExecuteCore for {uniqueId}, itemCount={itemCount}", Category.Performance);
-#endif
+      if (outputs.IsCreated)
+        outputs.Dispose();
     }
 
     /// <summary>
-    /// Determines the appropriate job type based on performance metrics.
+    /// Determines the job type for execution scope.
     /// </summary>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
     /// <param name="itemCount">Number of items to process.</param>
     /// <param name="hasTransforms">Whether transforms are involved.</param>
-    /// <param name="mainThreadCost">Main thread cost per item.</param>
-    /// <returns>Selected job type.</returns>
-    private static JobType DetermineJobType(string uniqueId, int itemCount, bool hasTransforms, float mainThreadCost)
+    /// <param name="mainThreadCost">Main thread execution cost.</param>
+    /// <returns>The selected job type.</returns>
+    private static JobType DetermineJobTypeExecutescope(string uniqueId, int itemCount, bool hasTransforms, float mainThreadCost)
     {
       float avgItemTimeMs = Metrics.GetAvgItemTimeMs($"{uniqueId}_IJob");
-      int smallThreshold = 50;
-      int mediumThreshold = MetricsThresholds.GetOrAdd($"{uniqueId}_MediumThreshold", 500);
+      float parallelCost = MainThreadImpactTracker.GetJobOverhead($"{uniqueId}_IJobParallelFor");
       int parallelThreshold = MetricsThresholds.GetOrAdd($"{uniqueId}_ParallelThreshold", PARALLEL_MIN_ITEMS);
       int transformThreshold = MetricsThresholds.GetOrAdd($"{uniqueId}_TransformThreshold", PARALLEL_MIN_ITEMS * 2);
-
-      if (hasTransforms)
-      {
-        if (itemCount > transformThreshold && avgItemTimeMs > 0.05f)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Selected IJobParallelForTransform for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
-#endif
-          return JobType.IJobParallelForTransform;
-        }
-        if (itemCount > mediumThreshold)
-        {
-#if DEBUG
-          Log(Level.Verbose, $"Selected IJobFor for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
-#endif
-          return JobType.IJobFor;
-        }
-        return JobType.IJob;
-      }
-
-      if (itemCount < smallThreshold || mainThreadCost < 0.1f)
+      if (hasTransforms && itemCount > transformThreshold && avgItemTimeMs > 0.05f && parallelCost <= mainThreadCost)
       {
 #if DEBUG
-        Log(Level.Verbose, $"Selected IJob for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
+        Log(Level.Verbose, $"Selected IJobParallelForTransform for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
 #endif
-        return JobType.IJob;
+        return JobType.IJobParallelForTransform;
       }
-      if (itemCount <= mediumThreshold && avgItemTimeMs > 0.02f)
+      if (itemCount <= parallelThreshold && avgItemTimeMs > 0.02f)
       {
 #if DEBUG
         Log(Level.Verbose, $"Selected IJobFor for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
 #endif
         return JobType.IJobFor;
       }
-      if (itemCount > parallelThreshold && avgItemTimeMs > 0.05f && SystemInfo.processorCount > 2)
+      if (itemCount > parallelThreshold && avgItemTimeMs > 0.05f && SystemInfo.processorCount > 1 && parallelCost <= mainThreadCost)
       {
 #if DEBUG
         Log(Level.Verbose, $"Selected IJobParallelFor for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}, cores={SystemInfo.processorCount}", Category.Performance);
 #endif
         return JobType.IJobParallelFor;
       }
+#if DEBUG
+      Log(Level.Verbose, $"Selected IJob for {uniqueId}: itemCount={itemCount}, avgItemTimeMs={avgItemTimeMs:F3}", Category.Performance);
+#endif
       return JobType.IJob;
     }
 
     /// <summary>
-    /// Copies outputs from a NativeList to a List.
+    /// Runs a coroutine for processing Burst-compiled items with metrics-driven yielding.
     /// </summary>
-    /// <typeparam name="T">Unmanaged data type.</typeparam>
-    /// <param name="source">Source NativeList.</param>
-    /// <param name="destination">Destination List.</param>
-    private static void CopyOutputs<T>(NativeList<T> source, List<T> destination) where T : unmanaged
+    /// <typeparam name="TInput">Input data type (unmanaged).</typeparam>
+    /// <typeparam name="TOutput">Output data type (unmanaged).</typeparam>
+    /// <param name="burstDelegate">Burst-compatible delegate for processing items.</param>
+    /// <param name="inputs">Input data collection.</param>
+    /// <param name="outputs">Output data collection to store results.</param>
+    /// <param name="startIndex">Starting index for processing.</param>
+    /// <param name="count">Number of items to process.</param>
+    /// <param name="isNetworked">Whether the operation is networked (affects metrics).</param>
+    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements (determines yield type).</param>
+    /// <returns>Coroutine that yields to spread load across frames.</returns>
+    private static IEnumerator RunBurstCoroutine<TInput, TOutput>(
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
+        NativeArray<TInput> inputs,
+        NativeList<TOutput> outputs,
+        int startIndex,
+        int count,
+        bool isPlayerVisible)
+        where TInput : unmanaged
+        where TOutput : unmanaged
     {
-      destination.Clear();
-      for (int i = 0; i < source.Length; i++)
-        destination.Add(source[i]);
+      if (burstDelegate == null || !inputs.IsCreated || !outputs.IsCreated || count <= 0)
+      {
+        Log(Level.Warning, $"RunBurstCoroutine: Invalid input, delegate={burstDelegate != null}, inputs={inputs.IsCreated}, outputs={outputs.IsCreated}, count={count}", Category.Performance);
+        yield break;
+      }
+
+#if DEBUG
+      Log(Level.Verbose, $"RunBurstCoroutine: Using outputs (capacity={outputs.Capacity}, count={count})", Category.Performance);
+#endif
+
+      var stopwatch = Stopwatch.StartNew();
+      int endIndex = startIndex + count;
+      int subBatchSize = Math.Min(10, count);
+      string key = $"{typeof(TInput).Name}_{typeof(TOutput).Name}_BurstCoroutine";
+      DynamicProfiler.AddBatchSize(key, subBatchSize);
+
+      for (int i = startIndex; i < endIndex; i += subBatchSize)
+      {
+        int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
+#if DEBUG
+        Log(Level.Verbose, $"Processing batch {i / subBatchSize + 1} for {key} (startIndex={i}, batchSize={currentSubBatchSize})", Category.Performance);
+#endif
+        burstDelegate(i, i + currentSubBatchSize, inputs, outputs);
+
+        if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
+        {
+#if DEBUG
+          Log(Level.Verbose, $"Yielding for {key} after batch {i / subBatchSize + 1} (elapsed={stopwatch.ElapsedMilliseconds:F3}ms, isPlayerVisible={isPlayerVisible})", Category.Performance);
+#endif
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f).AsCoroutine() : null;
+          stopwatch.Restart();
+        }
+      }
     }
 
     /// <summary>
-    /// Runs a coroutine for processing data.
+    /// Runs a coroutine for processing transforms.
     /// </summary>
-    /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-    /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
-    /// <param name="nonBurstDelegate">Non-Burst delegate.</param>
-    /// <param name="inputs">Input data array.</param>
-    /// <param name="outputs">Output data list.</param>
-    /// <param name="startIndex">Start index for processing.</param>
-    /// <param name="count">Number of items to process.</param>
-    /// <param name="isNetworked">Whether execution is networked.</param>
-    /// <returns>Coroutine enumerator.</returns>
-    private static IEnumerator RunCoroutine<TInput, TOutput>(
-        Action<int, int, NativeArray<TInput>, List<TOutput>> nonBurstDelegate,
-        NativeArray<TInput> inputs,
-        List<TOutput> outputs,
+    /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
+    /// <param name="transforms">Array of transforms.</param>
+    /// <param name="startIndex">Starting index for processing.</param>
+    /// <param name="count">Number of transforms to process.</param>
+    /// <param name="isPlayerVisible">Whether the execution is networked.</param>
+    /// <returns>An enumerator for the coroutine.</returns>
+    private static IEnumerator RunBurstTransformCoroutine(
+        Action<int, Transform> burstMainThreadTransformDelegate,
+        TransformAccessArray transforms,
         int startIndex,
         int count,
-        bool isNetworked)
-        where TInput : unmanaged
-        where TOutput : unmanaged
+        bool isPlayerVisible)
     {
       var stopwatch = Stopwatch.StartNew();
       int endIndex = startIndex + count;
@@ -1604,35 +2019,14 @@ namespace NoLazyWorkers.Performance
       for (int i = startIndex; i < endIndex; i += subBatchSize)
       {
         int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
-        nonBurstDelegate(i, i + currentSubBatchSize, inputs, outputs);
+        for (int j = i; j < i + currentSubBatchSize; j++)
+          burstMainThreadTransformDelegate(j, transforms[j].transform);
         if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
         {
-          yield return isNetworked ? AwaitNextFishNetTickAsync(0f) : null;
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
           stopwatch.Restart();
         }
       }
-    }
-
-    /// <summary>
-    /// Runs a main thread task for processing data.
-    /// </summary>
-    /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-    /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
-    /// <param name="nonBurstDelegate">Non-Burst delegate.</param>
-    /// <param name="inputs">Input data array.</param>
-    /// <param name="outputs">Output data list.</param>
-    /// <param name="startIndex">Start index for processing.</param>
-    /// <param name="count">Number of items to process.</param>
-    private static void RunMainThread<TInput, TOutput>(
-        Action<int, int, NativeArray<TInput>, List<TOutput>> nonBurstDelegate,
-        NativeArray<TInput> inputs,
-        List<TOutput> outputs,
-        int startIndex,
-        int count)
-        where TInput : unmanaged
-        where TOutput : unmanaged
-    {
-      nonBurstDelegate(startIndex, startIndex + count, inputs, outputs);
     }
 
     /// <summary>
@@ -1694,7 +2088,7 @@ namespace NoLazyWorkers.Performance
         yield return null;
       }
       Log(Level.Info, "CPU load stable, triggering initial baseline creation", Category.Performance);
-      yield return EstablishInitialBaseline();
+      yield return EstablishInitialBaselineBurst();
     }
 
     /// <summary>
@@ -1710,76 +2104,128 @@ namespace NoLazyWorkers.Performance
       return variance;
     }
 
-    private static IEnumerator EstablishInitialBaseline()
+    /// <summary>
+    /// Establishes initial performance baseline for execution types.
+    /// </summary>
+    /// <returns>Coroutine enumerator.</returns>
+    private static IEnumerator EstablishInitialBaselineBurst()
     {
       string testId = "InitialBaselineTest";
       var testInputs = new NativeArray<int>(10, Allocator.TempJob);
       var testJobOutputs = new NativeList<int>(10, Allocator.TempJob);
-      var testCoroutineOutputs = _intOutputPool.Get();
+      var testTransforms = new TransformAccessArray(10);
+      var tempGameObjects = new GameObject[10];
+
       try
       {
         for (int i = 0; i < testInputs.Length; i++)
           testInputs[i] = i;
+
+        for (int i = 0; i < 10; i++)
+        {
+          tempGameObjects[i] = new GameObject($"TestTransform_{i}");
+          testTransforms.Add(tempGameObjects[i].transform);
+        }
+
         Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = (start, end, inputs, outputs) =>
         {
           for (int i = start; i < end; i++)
             outputs.Add(inputs[i] * 2);
         };
-        Action<int, int, NativeArray<int>, List<int>> nonBurstDelegate = (start, end, inputs, outputs) =>
+
+        Action<int, TransformAccess> burstTransformDelegate = (index, transform) =>
         {
-          for (int i = start; i < end; i++)
-            outputs.Add(inputs[i] * 2);
+          transform.position += Vector3.one * 0.01f;
         };
-        float mainThreadTime = 0;
-        Metrics.TrackExecution($"{testId}_MainThread", () => RunMainThread(nonBurstDelegate, testInputs, testCoroutineOutputs, 0, testInputs.Length), testInputs.Length);
+
+        Action<int, Transform> burstMainThreadTransformDelegate = (index, transform) =>
+        {
+          transform.position += Vector3.one * 0.01f;
+        };
+
+        float mainThreadTime = 0.0f;
+        float coroutineCostMs = 0.0f;
+        float jobTime = 0.0f;
+        float transformMainThreadTime = 0.0f;
+        float transformCoroutineCostMs = 0.0f;
+        float transformJobTime = 0.0f;
+
+        // Test generic data processing
+        Metrics.TrackExecution($"{testId}_MainThread", () => burstDelegate(0, testInputs.Length, testInputs, testJobOutputs), testInputs.Length);
         mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
-        yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunCoroutine(nonBurstDelegate, testInputs, testCoroutineOutputs, 0, testInputs.Length, false), testInputs.Length);
-        float coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
+
+        yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(burstDelegate, testInputs, default, 0, testInputs.Length, false), testInputs.Length);
+        coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
+
         var jobWrapper = new DelegateJobWrapper<int, int>(burstDelegate, null, null, testInputs, testJobOutputs, default, 0, testInputs.Length, testInputs.Length, JobType.IJob);
-        yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJob", () => jobWrapper.Schedule(testInputs.Length), testInputs.Length);
-        float jobTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJob");
-        DEFAULT_THRESHOLD = Mathf.Max(50, Mathf.FloorToInt(1000f / Math.Max(1f, mainThreadTime)));
-        MAX_FRAME_TIME_MS = Mathf.Clamp(mainThreadTime * 10, 0.5f, 2f);
-        HIGH_FPS_THRESHOLD = Mathf.Clamp(1f / (60f + mainThreadTime * 1000f), 0.005f, 0.02f);
-        FPS_CHANGE_THRESHOLD = Mathf.Clamp(mainThreadTime / 1000f, 0.1f, 0.3f);
-        MIN_TEST_EXECUTIONS = Math.Max(3, Mathf.FloorToInt(mainThreadTime / 0.1f));
+        yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJob", () => jobWrapper.Schedule(), testInputs.Length);
+        jobTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJob");
+
+        // Test transform processing
+        Metrics.TrackExecution($"{testId}_TransformMainThread", () =>
+        {
+          for (int i = 0; i < testTransforms.length; i++)
+            burstMainThreadTransformDelegate(i, testTransforms[i].transform);
+        }, testTransforms.length);
+        transformMainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_TransformMainThread");
+
+        yield return Metrics.TrackExecutionCoroutine($"{testId}_TransformCoroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, 0, testTransforms.length, false), testTransforms.length);
+        transformCoroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_TransformCoroutine");
+
+        var transformJobWrapper = new DelegateJobWrapper<int, int>(null, null, burstTransformDelegate, testInputs, default, testTransforms, 0, testTransforms.length, testTransforms.length, JobType.IJobParallelForTransform);
+        yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJobParallelForTransform", () => transformJobWrapper.Schedule(testTransforms.length, testTransforms.length), testTransforms.length);
+        transformJobTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJobParallelForTransform");
+
+        // Use the maximum times to ensure conservative thresholds
+        float maxMainThreadTime = Mathf.Max(mainThreadTime, transformMainThreadTime);
+        float maxJobTime = Mathf.Max(jobTime, transformJobTime);
+
+        DEFAULT_THRESHOLD = Mathf.Max(50, Mathf.FloorToInt(1000f / Math.Max(1f, maxMainThreadTime)));
+        MAX_FRAME_TIME_MS = Mathf.Clamp(maxMainThreadTime * 10, 0.5f, 2f);
+        HIGH_FPS_THRESHOLD = Mathf.Clamp(1f / (60f + maxMainThreadTime * 1000f), 0.005f, 0.02f);
+        FPS_CHANGE_THRESHOLD = Mathf.Clamp(maxMainThreadTime / 1000f, 0.1f, 0.3f);
+        MIN_TEST_EXECUTIONS = Math.Max(3, Mathf.FloorToInt(maxMainThreadTime / 0.1f));
         PARALLEL_MIN_ITEMS = Math.Max(100, Mathf.FloorToInt(1000f / (SystemInfo.processorCount * 0.5f)));
-        Log(Level.Info, $"Initial baseline set: DEFAULT_THRESHOLD={DEFAULT_THRESHOLD}, MAX_FRAME_TIME_MS={MAX_FRAME_TIME_MS:F3}, " +
-            $"HIGH_FPS_THRESHOLD={HIGH_FPS_THRESHOLD:F3}, FPS_CHANGE_THRESHOLD={FPS_CHANGE_THRESHOLD:F3}, " +
-            $"MIN_TEST_EXECUTIONS={MIN_TEST_EXECUTIONS}, PARALLEL_MIN_ITEMS={PARALLEL_MIN_ITEMS} (cores={SystemInfo.processorCount})",
+        Log(Level.Info, $"Initial baseline set: DEFAULT_THRESHOLD={DEFAULT_THRESHOLD}, " +
+            $"MAX_FRAME_TIME_MS={MAX_FRAME_TIME_MS:F3}, HIGH_FPS_THRESHOLD={HIGH_FPS_THRESHOLD:F3}, " +
+            $"FPS_CHANGE_THRESHOLD={FPS_CHANGE_THRESHOLD:F3}, MIN_TEST_EXECUTIONS={MIN_TEST_EXECUTIONS}, " +
+            $"PARALLEL_MIN_ITEMS={PARALLEL_MIN_ITEMS} (cores={SystemInfo.processorCount})",
             Category.Performance);
       }
       finally
       {
         testInputs.Dispose();
         testJobOutputs.Dispose();
-        _intOutputPool.Release(testCoroutineOutputs);
+        if (testTransforms.isCreated) testTransforms.Dispose();
+        for (int i = 0; i < tempGameObjects.Length; i++)
+          if (tempGameObjects[i] != null)
+            UnityEngine.Object.DestroyImmediate(tempGameObjects[i]);
       }
     }
 
     /// <summary>
-    /// Establishes a performance baseline for a task by testing different execution methods.
+    /// Establishes baseline performance for generic data processing.
     /// </summary>
-    /// <typeparam name="TInput">Unmanaged input data type.</typeparam>
-    /// <typeparam name="TOutput">Unmanaged output data type.</typeparam>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
-    /// <param name="burstDelegate">Burst-compiled job delegate for batch processing.</param>
-    /// <param name="nonBurstDelegate">Non-Burst delegate for batch processing.</param>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="burstDelegate">Delegate for IJob execution.</param>
+    /// <param name="burstForDelegate">Delegate for IJobFor execution.</param>
     /// <param name="inputs">Input data array.</param>
     /// <param name="jobOutputs">Output data list for jobs.</param>
     /// <param name="coroutineOutputs">Output data list for coroutines.</param>
-    /// <param name="batchSize">Batch size for processing.</param>
-    /// <param name="isNetworked">Whether execution is networked.</param>
-    /// <returns>Coroutine enumerator for asynchronous execution.</returns>
-    private static IEnumerator EstablishBaseline<TInput, TOutput>(
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="isPlayerVisible">Whether the execution is networked.</param>
+    /// <returns>An enumerator for the baseline coroutine.</returns>
+    private static IEnumerator EstablishBaselineBurst<TInput, TOutput>(
         string uniqueId,
         Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
-        Action<int, int, NativeArray<TInput>, List<TOutput>> nonBurstDelegate,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate,
         NativeArray<TInput> inputs,
         NativeList<TOutput> jobOutputs,
         List<TOutput> coroutineOutputs,
         int batchSize,
-        bool isNetworked)
+        bool isPlayerVisible)
         where TInput : unmanaged
         where TOutput : unmanaged
     {
@@ -1787,7 +2233,6 @@ namespace NoLazyWorkers.Performance
       int testItemCount = Math.Min(batchSize, GetDynamicBatchSize(10, 0.15f, testId));
       var testInputs = new NativeArray<TInput>(testItemCount, Allocator.TempJob);
       var testJobOutputs = new NativeList<TOutput>(testItemCount, Allocator.TempJob);
-      var testCoroutineOutputs = new List<TOutput>();
       _executionCount.TryAdd(testId, 0);
 
       try
@@ -1798,58 +2243,59 @@ namespace NoLazyWorkers.Performance
             testInputs[i] = (TInput)(object)i;
         }
 
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> testBurstDelegate = burstDelegate ?? ((start, end, inputs, outputs) =>
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> testBurstDelegate = burstDelegate ?? ((start, end, inputs, _) =>
         {
-          for (int i = start; i < end; i++)
-            outputs.Add(default);
-        });
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> testBurstForDelegate = (index, inputs, outputs) =>
-        {
-          outputs.Add(default);
-        };
-        Action<int, int, NativeArray<TInput>, List<TOutput>> testNonBurstDelegate = nonBurstDelegate ?? ((start, end, inputs, outputs) =>
-        {
-          for (int i = start; i < end; i++)
-            outputs.Add(default);
+          for (int i = start; i < end; i++) { }
         });
 
-        float mainThreadTime = 0f;
-        float coroutineCostMs = 0f;
-        float jobTime = 0f;
+        Action<int, NativeArray<TInput>, NativeList<TOutput>> testBurstForDelegate = burstForDelegate ?? ((index, inputs, _) => { });
+
+        float mainThreadTime = 0.0f;
+        float coroutineCostMs = 0.0f;
+        float jobTime = 0.0f;
+        float jobForTime = 0.0f;
         int iterations = 0;
-        int maxIterations = MIN_TEST_EXECUTIONS * 3;
+        int maxIterations = MIN_TEST_EXECUTIONS * 4;
 
         while (iterations < maxIterations)
         {
-          bool isLowLoad = !isNetworked || TimeManagerInstance.Tick % 10 == 0;
+          bool isLowLoad = !isPlayerVisible || TimeManagerInstance.Tick % 2 == 0;
           if (!isLowLoad)
           {
-            yield return isNetworked ? AwaitNextFishNetTickAsync(0f) : null;
+            yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
             continue;
           }
 
-          int executionCount = _executionCount.AddOrUpdate(testId, 0, (_, count) => count + 1);
-
-          if (executionCount % 3 == 0)
+          int executionCount = _executionCount.AddOrUpdate(testId, 1, (_, count) => count + 1);
+          if (executionCount % 4 == 0)
           {
-            Metrics.TrackExecution($"{testId}_MainThread", () => RunMainThread(testNonBurstDelegate, testInputs, testCoroutineOutputs, 0, testInputs.Length), testInputs.Length);
+            Metrics.TrackExecution($"{testId}_MainThread", () => testBurstDelegate(0, testInputs.Length, testInputs, testJobOutputs), testInputs.Length);
             mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: MainThread iteration {executionCount}, time={mainThreadTime:F3}ms", Category.Performance);
 #endif
           }
-          else if (executionCount % 3 == 1)
+          else if (executionCount % 4 == 1)
           {
-            var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(testBurstDelegate, testBurstForDelegate, null, testInputs, testJobOutputs, default, 0, testInputs.Length, testInputs.Length, JobType.IJob);
-            yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJob", () => jobWrapper.Schedule(testInputs.Length), testInputs.Length);
+            var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(testBurstDelegate, null, null, testInputs, testJobOutputs, default, 0, testItemCount, testItemCount, JobType.Baseline);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJob", () => jobWrapper.Schedule(), testItemCount);
             jobTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJob");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: IJob iteration {executionCount}, time={jobTime:F3}ms", Category.Performance);
 #endif
           }
+          else if (executionCount % 4 == 2)
+          {
+            var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(null, testBurstForDelegate, null, testInputs, testJobOutputs, default, 0, testItemCount, testItemCount, JobType.IJobFor);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJobFor", () => jobWrapper.Schedule(testItemCount, testItemCount), testItemCount);
+            jobForTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJobFor");
+#if DEBUG
+            Log(Level.Verbose, $"Baseline test {testId}: IJobFor iteration {executionCount}, time={jobForTime:F3}ms", Category.Performance);
+#endif
+          }
           else
           {
-            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunCoroutine(testNonBurstDelegate, testInputs, testCoroutineOutputs, 0, testInputs.Length, isNetworked), testInputs.Length);
+            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(testBurstDelegate, testInputs, default, 0, testInputs.Length, isPlayerVisible), testInputs.Length);
             coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: Coroutine iteration {executionCount}, time={coroutineCostMs:F3}ms", Category.Performance);
@@ -1860,9 +2306,123 @@ namespace NoLazyWorkers.Performance
           if (iterations >= MIN_TEST_EXECUTIONS)
           {
             double jobVariance = CalculateMetricVariance($"{testId}_IJob");
+            double jobForVariance = CalculateMetricVariance($"{testId}_IJobFor");
             double coroutineVariance = CalculateMetricVariance($"{testId}_Coroutine");
             double mainThreadVariance = CalculateMetricVariance($"{testId}_MainThread");
+            if (jobVariance < METRIC_STABILITY_THRESHOLD &&
+                jobForVariance < METRIC_STABILITY_THRESHOLD &&
+                coroutineVariance < METRIC_STABILITY_THRESHOLD &&
+                mainThreadVariance < METRIC_STABILITY_THRESHOLD)
+            {
+              _baselineEstablished.TryAdd(uniqueId, true);
+              CalculateThresholds(uniqueId, testId, mainThreadTime, Math.Max(jobTime, jobForTime));
+              Log(Level.Info, $"Baseline set for {uniqueId}: DEFAULT_THRESHOLD={DEFAULT_THRESHOLD}, " +
+                  $"MAX_FRAME_TIME_MS={MAX_FRAME_TIME_MS:F3}, HIGH_FPS_THRESHOLD={HIGH_FPS_THRESHOLD:F3}, " +
+                  $"FPS_CHANGE_THRESHOLD={FPS_CHANGE_THRESHOLD:F3}, MIN_TEST_EXECUTIONS={MIN_TEST_EXECUTIONS}, " +
+                  $"PARALLEL_MIN_ITEMS={PARALLEL_MIN_ITEMS} (cores={SystemInfo.processorCount})",
+                  Category.Performance);
+              break;
+            }
+          }
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
+        }
+      }
+      finally
+      {
+        testInputs.Dispose();
+        testJobOutputs.Dispose();
+#if DEBUG
+        Log(Level.Verbose, $"Cleaned up test resources for {testId}", Category.Performance);
+#endif
+      }
+    }
 
+    /// <summary>
+    /// Establishes baseline performance for transform operations.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="transforms">Array of transforms to process.</param>
+    /// <param name="burstTransformDelegate">Delegate for burst-compiled transform job.</param>
+    /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="isPlayerVisible">Whether the execution is networked.</param>
+    /// <returns>An enumerator for the baseline coroutine.</returns>
+    private static IEnumerator EstablishBaselineTransform<TInput>(
+        string uniqueId,
+        TransformAccessArray transforms,
+        Action<int, TransformAccess> burstTransformDelegate,
+        Action<int, Transform> burstMainThreadTransformDelegate,
+        NativeArray<TInput> inputs,
+        int batchSize,
+        bool isPlayerVisible)
+        where TInput : unmanaged
+    {
+      string testId = $"{uniqueId}_BaselineTest";
+      int testItemCount = Math.Min(batchSize, GetDynamicBatchSize(10, 0.15f, testId));
+      var testTransforms = new TransformAccessArray(testItemCount);
+      try
+      {
+        var tempGameObjects = new GameObject[testItemCount];
+        for (int i = 0; i < testItemCount; i++)
+        {
+          tempGameObjects[i] = new GameObject($"TestTransform_{i}");
+          testTransforms.Add(tempGameObjects[i].transform);
+        }
+
+        float mainThreadTime = 0.0f;
+        float coroutineCostMs = 0.0f;
+        float jobTime = 0.0f;
+        int iterations = 0;
+        int maxIterations = MIN_TEST_EXECUTIONS * 3;
+
+        while (iterations < maxIterations)
+        {
+          bool isLowLoad = !isPlayerVisible || TimeManagerInstance.Tick % 2 == 0;
+          if (!isLowLoad)
+          {
+            yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
+            continue;
+          }
+
+          int executionCount = _executionCount.AddOrUpdate(testId, 1, (_, count) => count + 1);
+          if (executionCount % 3 == 0)
+          {
+            Metrics.TrackExecution($"{testId}_MainThread", () =>
+            {
+              for (int i = 0; i < testItemCount; i++)
+                burstMainThreadTransformDelegate(i, testTransforms[i].transform);
+            }, testItemCount);
+            mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
+#if DEBUG
+            Log(Level.Verbose, $"Baseline test {testId}: MainThread iteration {executionCount}, time={mainThreadTime:F3}ms", Category.Performance);
+#endif
+          }
+          else if (executionCount % 3 == 1)
+          {
+            var jobWrapper = new DelegateJobWrapper<TInput, int>(null, null, burstTransformDelegate, inputs, default, testTransforms, 0, testItemCount, testItemCount, JobType.IJobParallelForTransform);
+            yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{testId}_IJobParallelForTransform", () => jobWrapper.Schedule(testItemCount, testItemCount), testItemCount);
+            jobTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_IJobParallelForTransform");
+#if DEBUG
+            Log(Level.Verbose, $"Baseline test {testId}: IJobParallelForTransform iteration {executionCount}, time={jobTime:F3}ms", Category.Performance);
+#endif
+          }
+          else
+          {
+            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, 0, testItemCount, isPlayerVisible), testItemCount);
+            coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
+#if DEBUG
+            Log(Level.Verbose, $"Baseline test {testId}: Coroutine iteration {executionCount}, time={coroutineCostMs:F3}ms", Category.Performance);
+#endif
+          }
+
+          iterations++;
+          if (iterations >= MIN_TEST_EXECUTIONS)
+          {
+            double jobVariance = CalculateMetricVariance($"{testId}_IJobParallelForTransform");
+            double coroutineVariance = CalculateMetricVariance($"{testId}_Coroutine");
+            double mainThreadVariance = CalculateMetricVariance($"{testId}_MainThread");
             if (jobVariance < METRIC_STABILITY_THRESHOLD &&
                 coroutineVariance < METRIC_STABILITY_THRESHOLD &&
                 mainThreadVariance < METRIC_STABILITY_THRESHOLD)
@@ -1877,14 +2437,15 @@ namespace NoLazyWorkers.Performance
               break;
             }
           }
-
-          yield return isNetworked ? AwaitNextFishNetTickAsync(0f) : null;
+          yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
         }
+
+        for (int i = 0; i < testItemCount; i++)
+          Object.DestroyImmediate(tempGameObjects[i]);
       }
       finally
       {
-        testInputs.Dispose();
-        testJobOutputs.Dispose();
+        if (testTransforms.isCreated) testTransforms.Dispose();
 #if DEBUG
         Log(Level.Verbose, $"Cleaned up test resources for {testId}", Category.Performance);
 #endif
@@ -2134,79 +2695,6 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Executes a task with dynamic selection of execution method (job, coroutine, or main thread).
-    /// </summary>
-    /// <param name="uniqueId">Unique identifier for the task.</param>
-    /// <param name="itemCount">Number of items to process.</param>
-    /// <param name="jobCallback">Job callback for non-Burst execution.</param>
-    /// <param name="coroutineCallback">Coroutine callback.</param>
-    /// <param name="mainThreadCallback">Main thread callback.</param>
-    /// <returns>Coroutine enumerator for asynchronous execution.</returns>
-    public static IEnumerator Execute(
-        string uniqueId,
-        int itemCount,
-        Action jobCallback = null,
-        Func<IEnumerator> coroutineCallback = null,
-        Action mainThreadCallback = null)
-    {
-      if (itemCount == 0 || (jobCallback == null && coroutineCallback == null && mainThreadCallback == null))
-      {
-        Log(Level.Warning, $"SmartExecution.Execute: Invalid input for {uniqueId}, itemCount={itemCount}", Category.Performance);
-        yield break;
-      }
-
-      string jobKey = $"{uniqueId}_Job";
-      string coroutineKey = $"{uniqueId}_Coroutine";
-      string mainThreadKey = $"{uniqueId}_MainThread";
-
-      if (!MetricsThresholds.TryGetValue(uniqueId, out int jobThreshold))
-      {
-        jobThreshold = DEFAULT_THRESHOLD;
-        MetricsThresholds.TryAdd(uniqueId, jobThreshold);
-      }
-
-      float mainThreadImpact = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
-      float coroutineImpact = MainThreadImpactTracker.GetAverageItemImpact(coroutineKey);
-
-      if (itemCount >= jobThreshold && jobCallback != null && MainThreadImpactTracker.GetJobOverhead(jobKey) <= Math.Min(mainThreadImpact, coroutineImpact))
-      {
-#if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via Job ({itemCount} items, threshold={jobThreshold})", Category.Performance);
-#endif
-        yield return Metrics.TrackExecutionCoroutine(jobKey, RunJob(jobCallback));
-      }
-      else if (coroutineCallback != null && (mainThreadCallback == null || coroutineImpact <= mainThreadImpact))
-      {
-#if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via Coroutine ({itemCount} items)", Category.Performance);
-#endif
-        yield return Metrics.TrackExecutionCoroutine(coroutineKey, coroutineCallback());
-      }
-      else if (mainThreadCallback != null)
-      {
-#if DEBUG
-        Log(Level.Verbose, $"Executing {uniqueId} via MainThread ({itemCount} items)", Category.Performance);
-#endif
-        Metrics.TrackExecution(mainThreadKey, mainThreadCallback, itemCount);
-      }
-      else
-      {
-        Log(Level.Warning, $"No valid callback provided for {uniqueId}, falling back to empty coroutine", Category.Performance);
-      }
-    }
-
-    /// <summary>
-    /// Runs a job callback as a coroutine.
-    /// </summary>
-    /// <param name="jobCallback">Job callback to execute.</param>
-    /// <returns>Coroutine enumerator.</returns>
-    private static IEnumerator RunJob(Action jobCallback)
-    {
-      jobCallback();
-      yield return null;
-    }
-
-    /// <summary>
     /// Calculates the dynamic batch size for job execution.
     /// </summary>
     /// <param name="totalItems">Total number of items to process.</param>
@@ -2275,265 +2763,9 @@ namespace NoLazyWorkers.Performance
   }
 
   /// <summary>
-  /// Provides extensions for FishNet integration, including batch size calculation and tick waiting.
-  /// </summary>
-  public static class FishNetExtensions
-  {
-    public static bool IsServer;
-    public static TimeManager TimeManagerInstance;
-
-    public static int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs, string uniqueId, bool isParallel)
-    {
-      if (!isParallel) return totalItems; // No batching for IJob
-      float avgProcessingTimeMs = DynamicProfiler.GetDynamicAvgProcessingTimeMs(uniqueId, defaultAvgProcessingTimeMs);
-      int avgBatchSize = DynamicProfiler.GetAverageBatchSize(uniqueId);
-      float targetFrameTimeMs = Mathf.Min(16.666f, Time.deltaTime * 1000f);
-      int calculatedBatchSize = Mathf.Max(1, Mathf.RoundToInt(targetFrameTimeMs / avgProcessingTimeMs));
-      if (avgBatchSize > 0)
-      {
-        calculatedBatchSize = Mathf.RoundToInt((calculatedBatchSize + avgBatchSize) / 2f);
-      }
-      return Mathf.Min(totalItems, calculatedBatchSize);
-    }
-
-    private static readonly ConcurrentDictionary<TimeManager, ConcurrentDictionary<double, TaskCompletionSource<bool>>> _tickAwaiters = new();
-
-    /// <summary>
-    /// Asynchronously waits for the next FishNet TimeManager tick.
-    /// </summary>
-    /// <returns>A Task that completes on the next tick.</returns>
-    private static Task AwaitNextTickAsyncInternal()
-    {
-      var tick = TimeManagerInstance.Tick;
-      var awaiters = _tickAwaiters.GetOrAdd(TimeManagerInstance, _ => new ConcurrentDictionary<double, TaskCompletionSource<bool>>());
-      if (awaiters.TryGetValue(tick + 1, out var tcs))
-        return tcs.Task;
-
-      tcs = new TaskCompletionSource<bool>();
-      if (!awaiters.TryAdd(tick + 1, tcs))
-        return awaiters[tick + 1].Task;
-
-      void OnTick()
-      {
-        if (TimeManagerInstance.Tick <= tick) return;
-        TimeManagerInstance.OnTick -= OnTick;
-        awaiters.TryRemove(tick + 1, out _);
-        tcs.TrySetResult(true);
-      }
-      TimeManagerInstance.OnTick += OnTick;
-      return tcs.Task;
-    }
-
-    /// <summary>
-    /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
-    /// </summary>
-    /// <param name="seconds">The duration to wait in seconds (default is 0).</param>
-    /// <returns>A Task that completes after the specified delay.</returns>
-    public static async Task AwaitNextFishNetTickAsync(float seconds = 0)
-    {
-      if (seconds < 0f)
-      {
-        Log(Level.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", Category.Tasks);
-        return;
-      }
-
-      if (seconds > 0f)
-      {
-        int ticksToWait = Mathf.CeilToInt(seconds * TimeManagerInstance.TickRate);
-        Log(Level.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {TimeManagerInstance.TickRate}", Category.Tasks);
-
-        for (int i = 0; i < ticksToWait; i++)
-        {
-          await AwaitNextTickAsyncInternal();
-        }
-      }
-      else
-        await AwaitNextTickAsyncInternal();
-    }
-
-    /// <summary>
-    /// Waits for the next FishNet tick.
-    /// </summary>
-    /// <returns>An enumerator that yields until the next tick.</returns>
-    public static IEnumerator WaitForNextTick()
-    {
-      long currentTick = TimeManagerInstance.Tick;
-      while (TimeManagerInstance.Tick == currentTick)
-        yield return null;
-    }
-  }
-
-  /// <summary>
-  /// Provides extensions for converting Tasks to Unity coroutines.
-  /// </summary>
-  public static class TaskExtensions
-  {
-    /// <summary>
-    /// Converts a Task to a coroutine.
-    /// </summary>
-    /// <param name="task">The task to convert.</param>
-    /// <returns>A TaskYieldInstruction for the coroutine.</returns>
-    public static TaskYieldInstruction AsCoroutine(this Task task) => new TaskYieldInstruction(task);
-
-    /// <summary>
-    /// Converts a Task with a result to a coroutine.
-    /// </summary>
-    /// <typeparam name="T">The result type of the task.</typeparam>
-    /// <param name="task">The task to convert.</param>
-    /// <returns>A TaskYieldInstruction for the coroutine.</returns>
-    public static TaskYieldInstruction<T> AsCoroutine<T>(this Task<T> task) => new TaskYieldInstruction<T>(task);
-
-    /// <summary>
-    /// A custom yield instruction for awaiting a Task in a coroutine.
-    /// </summary>
-    /// <remarks>
-    /// Initializes a new instance of the TaskYieldInstruction class.
-    /// </remarks>
-    /// <param name="task">The task to await.</param>
-    /// <exception cref="ArgumentNullException">Thrown if task is null.</exception>
-    public class TaskYieldInstruction(Task task) : CustomYieldInstruction
-    {
-      private readonly Task _task = task ?? throw new ArgumentNullException(nameof(task));
-
-      /// <summary>
-      /// Gets whether the coroutine should continue waiting.
-      /// </summary>
-      public override bool keepWaiting => !_task.IsCompleted;
-    }
-
-    /// <summary>
-    /// A custom yield instruction for awaiting a Task with a result in a coroutine.
-    /// </summary>
-    /// <typeparam name="T">The result type of the task.</typeparam>
-    /// <remarks>
-    /// Initializes a new instance of the TaskYieldInstruction class.
-    /// </remarks>
-    /// <param name="task">The task to await.</param>
-    /// <exception cref="ArgumentNullException">Thrown if task is null.</exception>
-    public class TaskYieldInstruction<T>(Task<T> task) : CustomYieldInstruction
-    {
-      private readonly Task<T> _task = task ?? throw new ArgumentNullException(nameof(task));
-
-      /// <summary>
-      /// Gets whether the coroutine should continue waiting.
-      /// </summary>
-      public override bool keepWaiting => !_task.IsCompleted;
-
-      /// <summary>
-      /// Gets the result of the task if completed, otherwise default(T).
-      /// </summary>
-      public T Result => _task.IsCompleted ? _task.Result : default;
-    }
-  }
-
-  /// <summary>
-  /// Manages coroutine execution in Unity with singleton behavior.
-  /// </summary>
-  public class CoroutineRunner : MonoBehaviour
-  {
-    private static CoroutineRunner _instance;
-
-    /// <summary>
-    /// Gets the singleton instance of the CoroutineRunner.
-    /// </summary>
-    public static CoroutineRunner Instance
-    {
-      get
-      {
-        if (_instance == null)
-        {
-          var go = new GameObject("CoroutineRunner");
-          _instance = go.AddComponent<CoroutineRunner>();
-          DontDestroyOnLoad(go);
-        }
-        return _instance;
-      }
-    }
-
-    /// <summary>
-    /// Runs a coroutine.
-    /// </summary>
-    /// <param name="coroutine">The coroutine to run.</param>
-    /// <returns>The started coroutine.</returns>
-    public Coroutine RunCoroutine(IEnumerator coroutine)
-    {
-      return StartCoroutine(RunCoroutineInternal(coroutine));
-    }
-
-    /// <summary>
-    /// Runs a coroutine internally, handling exceptions.
-    /// </summary>
-    /// <param name="coroutine">The coroutine to run.</param>
-    /// <returns>An enumerator for the coroutine.</returns>
-    private IEnumerator RunCoroutineInternal(IEnumerator coroutine)
-    {
-      while (true)
-      {
-        object current;
-        try
-        {
-          if (!coroutine.MoveNext())
-            yield break;
-          current = coroutine.Current;
-        }
-        catch (Exception e)
-        {
-          Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
-          yield break;
-        }
-        yield return current;
-      }
-    }
-
-    /// <summary>
-    /// Runs a coroutine with a result callback.
-    /// </summary>
-    /// <typeparam name="T">The type of the result.</typeparam>
-    /// <param name="coroutine">The coroutine to run.</param>
-    /// <param name="callback">The callback to invoke with the result.</param>
-    /// <returns>The started coroutine.</returns>
-    public Coroutine RunCoroutineWithResult<T>(IEnumerator coroutine, Action<T> callback)
-    {
-      return StartCoroutine(RunCoroutineInternal(coroutine, callback));
-    }
-
-    /// <summary>
-    /// Runs a coroutine internally with a result callback, handling exceptions.
-    /// </summary>
-    /// <typeparam name="T">The type of the result.</typeparam>
-    /// <param name="coroutine">The coroutine to run.</param>
-    /// <param name="callback">The callback to invoke with the result.</param>
-    /// <returns>An enumerator for the coroutine.</returns>
-    private IEnumerator RunCoroutineInternal<T>(IEnumerator coroutine, Action<T> callback)
-    {
-      while (true)
-      {
-        object current;
-        try
-        {
-          if (!coroutine.MoveNext())
-            yield break;
-          current = coroutine.Current;
-        }
-        catch (Exception e)
-        {
-          Log(Level.Stacktrace, $"CoroutineRunner: Exception in coroutine: {e.Message}", Category.Core);
-          callback?.Invoke(default);
-          yield break;
-        }
-        if (current is T result)
-        {
-          callback?.Invoke(result);
-          yield break;
-        }
-        yield return current;
-      }
-    }
-  }
-
-  /// <summary>
   /// Applies Harmony patches for performance-related functionality.
   /// </summary>
+  [HarmonyPatch]
   public static class PerformanceHarmonyPatches
   {
     /// <summary>
@@ -2542,7 +2774,7 @@ namespace NoLazyWorkers.Performance
     /// <param name="folderPath">Path to the folder being cleared.</param>
     [HarmonyPostfix]
     [HarmonyPatch(typeof(SetupScreen), "ClearFolderContents", new Type[] { typeof(string) })]
-    private static void SetupScreen_ClearFolderContents(string folderPath)
+    public static void SetupScreen_ClearFolderContents(string folderPath)
     {
       try
       {
@@ -2560,7 +2792,7 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     [HarmonyPostfix]
     [HarmonyPatch(typeof(ImportScreen), "Confirm")]
-    private static void ImportScreen_Confirm()
+    public static void ImportScreen_Confirm()
     {
       try
       {

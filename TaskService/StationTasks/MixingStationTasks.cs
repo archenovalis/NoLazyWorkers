@@ -6,8 +6,8 @@ using ScheduleOne.Property;
 using Unity.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Storage.Utilities;
-using static NoLazyWorkers.Storage.Constants;
-using static NoLazyWorkers.Storage.Jobs;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
+using static NoLazyWorkers.Storage.Burst;
 using static NoLazyWorkers.Employees.Utilities;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
@@ -31,7 +31,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
   public class MixingStationTask : ITask
   {
     private TaskService _taskService;
-    private CacheManager _cacheManager;
+    private CacheService _cacheManager;
     private Property _property;
 
     public enum States
@@ -51,7 +51,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       public NativeArray<ValidationResultData> Results;
       public NativeList<LogEntry> Logs;
       [ReadOnly] public NativeParallelHashMap<Guid, DisabledEntityData> DisabledEntities;
-      [ReadOnly] public CacheManager CacheManager;
+      [ReadOnly] public CacheService CacheManager;
       [ReadOnly] public TaskService TaskService;
 
       public void Execute(int index)
@@ -65,7 +65,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           return;
         }
 
-        var storageKey = new StorageKey(entityGuid, StorageTypes.Station);
+        var storageKey = new StorageKey(entityGuid, StorageType.Station);
         if (!CacheManager.TryGetStationSlots(storageKey, out var slots))
         {
           Logs.Add(new LogEntry { Message = $"No slot data for entity {entityGuid}", Level = Level.Verbose, Category = Category.MixingStation });
@@ -114,7 +114,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       NativeList<LogEntry> logs,
       Property property,
       TaskService taskService,
-      CacheManager cacheManager,
+      CacheService cacheManager,
       DisabledEntityService disabledService)
     {
       _taskService = taskService;
@@ -142,7 +142,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           return;
         }
 
-        var storageKey = new StorageKey(station.GUID, StorageTypes.Station);
+        var storageKey = new StorageKey(station.GUID, StorageType.Station);
         if (!_cacheManager.TryGetStationSlots(storageKey, out var slots))
         {
           Log(Level.Error, $"No slot data for station {station.GUID}", Category.MixingStation);
@@ -185,9 +185,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
       if (result.State == (int)States.NeedsRestock)
       {
-        var requiredItems = new NativeList<ItemKey>(Allocator.TempJob);
+        var requiredItems = new NativeList<ItemData>(Allocator.TempJob);
         var mixerItemField = MixingStationUtilities.GetInputItemForProductSlot(station);
-        ItemKey mixerItem = mixerItemField?.SelectedItem != null ? new ItemKey(mixerItemField.SelectedItem.GetDefaultInstance()) : ItemKey.Empty;
+        ItemData mixerItem = mixerItemField?.SelectedItem != null ? new ItemData(mixerItemField.SelectedItem.GetDefaultInstance()) : ItemData.Empty;
         if (mixerItem.Id != "")
         {
           requiredItems.Add(mixerItem);
@@ -197,7 +197,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           var refills = station.RefillList();
           foreach (var refill in refills)
             if (refill != null)
-              requiredItems.Add(new ItemKey(refill));
+              requiredItems.Add(new ItemData(refill));
         }
 
         bool success = false;
@@ -243,7 +243,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           }
           else
           {
-            var requiredItems = new NativeList<ItemKey>(1, Allocator.TempJob);
+            var requiredItems = new NativeList<ItemData>(1, Allocator.TempJob);
             requiredItems.Add(result.Item);
             disabledService.AddDisabledEntity(station.GUID, result.State - 1, DisabledEntityData.DisabledReasonType.NoDestination, requiredItems);
             logs.Add(new LogEntry { Message = $"No destination found for item {result.Item.Id} for station {station.GUID}", Level = Level.Verbose, Category = Category.MixingStation });
@@ -254,7 +254,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
         }
         else
         {
-          var requiredItems = new NativeList<ItemKey>(1, Allocator.TempJob);
+          var requiredItems = new NativeList<ItemData>(1, Allocator.TempJob);
           requiredItems.Add(result.Item);
           disabledService.AddDisabledEntity(station.GUID, result.State - 1, DisabledEntityData.DisabledReasonType.NoDestination, requiredItems);
           logs.Add(new LogEntry { Message = $"No destination found for item {result.Item.Id} for station {station.GUID}", Level = Level.Verbose, Category = Category.MixingStation });
@@ -312,7 +312,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
         {
           case 0: // NeedsRestock
             await ExecuteActionAsync(station, employee, task, RestockSlots);
-            var storageKey = new StorageKey(station.GUID, StorageTypes.Station);
+            var storageKey = new StorageKey(station.GUID, StorageType.Station);
             if (_cacheManager.TryGetStationSlots(storageKey, out var slots))
             {
               var logs = new NativeList<LogEntry>(Allocator.TempJob);
@@ -383,7 +383,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           return result;
         }
 
-        ItemKey outputItem = ItemKey.Empty;
+        ItemData outputItem = ItemData.Empty;
         int outputQuantity = 0;
         for (int i = 0; i < slots.Length; i++)
         {
@@ -432,7 +432,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           return result;
         }
 
-        ItemKey restockItem = ItemKey.Empty;
+        ItemData restockItem = ItemData.Empty;
         int restockQuantity = 0;
         for (int i = 0; i < slots.Length; i++)
         {
@@ -442,7 +442,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             int capacity = slot.StackLimit - slot.Quantity;
             if (capacity > 0)
             {
-              restockItem = slot.Item.Id == "" ? new ItemKey(station.InsertSlots.First(isl => isl.SlotIndex == slot.SlotIndex).ItemInstance) : slot.Item;
+              restockItem = slot.Item.Id == "" ? new ItemData(station.InsertSlots.First(isl => isl.SlotIndex == slot.SlotIndex).ItemInstance) : slot.Item;
               restockQuantity = capacity;
               break;
             }
@@ -478,7 +478,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           {
             IsValid = true,
             State = (int)States.ReadyToOperate,
-            Item = ItemKey.Empty,
+            Item = ItemData.Empty,
             Quantity = 0
           };
           return result;
@@ -491,7 +491,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       [BurstCompile]
       public static TaskDescriptor CreateTaskDescriptor(
           Guid entityGuid, TaskTypes type, int actionId, EmployeeTypes employeeType, int priority,
-          string propertyName, ItemKey item, int quantity,
+          string propertyName, ItemData item, int quantity,
           Guid pickupGuid, int[] pickupSlotIndices,
           Guid dropoffGuid, int[] dropoffSlotIndices,
           float creationTime)

@@ -97,7 +97,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             definition.EmployeeType,
             definition.Priority,
             context.AssignedPropertyName.ToString(),
-            ItemKey.Empty,
+            ItemData.Empty,
             0,
             definition.PickupType,
             guid,
@@ -404,7 +404,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             definition.EmployeeType,
             definition.Priority,
             context.AssignedPropertyName.ToString(),
-            new ItemKey(item),
+            new ItemData(item),
             1,
             definition.PickupType,
             shelf.Key.GUID,
@@ -474,7 +474,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           foreach (var pickupSlot in sourceSlots)
           {
             var slotKey = new SlotKey(shelf.GUID, pickupSlot.SlotIndex);
-            if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
+            if (!SlotService.ReserveSlot(slotKey, task.TaskId, Time.time))
             {
               Log(Level.Warning, $"FetchPackagingExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", Category.PackagingStation);
               continue;
@@ -722,7 +722,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             definition.EmployeeType,
             definition.Priority,
             context.AssignedPropertyName.ToString(),
-            new ItemKey(outputSlot.ItemInstance),
+            new ItemData(outputSlot.ItemInstance),
             outputSlot.Quantity,
             definition.PickupType,
             guid,
@@ -793,7 +793,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           foreach (var deliverySlot in deliverySlots)
           {
             var slotKey = new SlotKey(shelf.GUID, deliverySlot.SlotIndex);
-            if (!SlotManager.ReserveSlot(slotKey, task.TaskId, Time.time))
+            if (!SlotService.ReserveSlot(slotKey, task.TaskId, Time.time))
             {
               Log(Level.Warning, $"DeliverOutputExecutor: Failed to reserve slot {slotKey} for task {task.TaskId}", Category.PackagingStation);
               continue;
@@ -1024,7 +1024,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
         foreach (var pickupSlot in sourceSlots)
         {
           var slotKey = new SlotKey(shelf.Key.GUID, pickupSlot.SlotIndex);
-          if (!SlotManager.ReserveSlot(slotKey, state.State.TaskContext?.Task.TaskId ?? Guid.NewGuid(), Time.time))
+          if (!SlotService.ReserveSlot(slotKey, state.State.TaskContext?.Task.TaskId ?? Guid.NewGuid(), Time.time))
           {
             Log(Level.Warning, $"InitiatePackagingRetrieval: Failed to reserve slot {slotKey}", Category.PackagingStation);
             continue;

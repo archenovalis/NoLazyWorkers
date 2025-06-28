@@ -8,7 +8,7 @@ using System.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Storage.Utilities;
-using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Utilities;
 using static NoLazyWorkers.Employees.Constants;
@@ -48,9 +48,11 @@ namespace NoLazyWorkers.Employees
 
     public interface IEmployeeAdapter
     {
+      Guid Guid { get; }
       NpcSubType SubType { get; }
       Property AssignedProperty { get; }
       EmployeeBehaviour AdvBehaviour { get; }
+      List<ItemSlot> InventorySlots { get; }
     }
 
     public class TaskContext
@@ -167,7 +169,6 @@ namespace NoLazyWorkers.Employees
   {
     public static Dictionary<IStationAdapter, Employee> StationAdapterBehaviours = new();
     public static Dictionary<Guid, List<ItemSlot>> ReservedSlots = new();
-    public static Dictionary<Property, HashSet<ItemInstance>> NoDropOffCache = new();
     public static Dictionary<Property, Dictionary<ItemInstance, float>> TimedOutItems = new();
     public static readonly Dictionary<Guid, float> PendingAdapters = new();
     public static readonly Dictionary<Guid, EmployeeData> States = new();
@@ -231,8 +232,8 @@ namespace NoLazyWorkers.Employees
 
     public static List<TransferRequest> CreateTransferRequest(Employee employee, TaskDescriptor task)
     {
-      var source = Storage.Constants.Storages[employee.AssignedProperty].TryGetValue(task.PickupGuid, out var pickup) ? pickup : null;
-      var destination = Storage.Constants.Storages[employee.AssignedProperty].TryGetValue(task.DropoffGuid, out var dropoff) ? dropoff : null;
+      var source = Storage.ManagedDictionaries.Storages[employee.AssignedProperty].TryGetValue(task.PickupGuid, out var pickup) ? pickup : null;
+      var destination = Storage.ManagedDictionaries.Storages[employee.AssignedProperty].TryGetValue(task.DropoffGuid, out var dropoff) ? dropoff : null;
       if (source == null || destination == null)
         return new List<TransferRequest>();
 
@@ -300,7 +301,7 @@ namespace NoLazyWorkers.Employees
     }
 
     // Clears all static data
-    public static void Clear()
+    public static void Cleanup()
     {
       Log(Level.Verbose, $"ClearAll: Entered", Category.AnyEmployee);
       StationAdapterBehaviours.Clear();
@@ -323,7 +324,7 @@ namespace NoLazyWorkers.Employees
     protected readonly IEmployeeAdapter _adapter;
     public EmployeeData State { get; }
     protected readonly Employee _employee;
-    private readonly CacheManager _cacheManager;
+    private readonly CacheService _cacheManager;
 
     public EmployeeBehaviour(Employee employee, IEmployeeAdapter adapter)
     {
@@ -338,13 +339,13 @@ namespace NoLazyWorkers.Employees
       State.TaskService = TaskServiceManager.GetOrCreateService(employee.AssignedProperty);
 
       // Add employee to CacheManager
-      var _cacheManager = CacheManager.GetOrCreateCacheManager(employee.AssignedProperty);
-      var storageKey = new StorageKey { Guid = employee.GUID, Type = StorageTypes.Employee };
+      var _cacheManager = CacheService.GetOrCreateCacheManager(employee.AssignedProperty);
+      var storageKey = new StorageKey { Guid = employee.GUID, Type = StorageType.Employee };
       foreach (var slot in employee.Inventory.ItemSlots)
         _cacheManager.RegisterItemSlot(slot, storageKey);
       var slotData = employee.Inventory.ItemSlots.Select(s => new SlotData
       {
-        Item = s.ItemInstance != null ? new ItemKey(s.ItemInstance) : ItemKey.Empty,
+        Item = s.ItemInstance != null ? new ItemData(s.ItemInstance) : ItemData.Empty,
         Quantity = s.Quantity,
         SlotIndex = s.SlotIndex,
         StackLimit = s.ItemInstance?.StackLimit ?? -1,

@@ -23,7 +23,7 @@ using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Storage.Constants;
+using static NoLazyWorkers.Storage.ManagedDictionaries;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Storage.ShelfConstants;
@@ -762,16 +762,16 @@ namespace NoLazyWorkers.Storage
         var storageKey = new StorageKey
         {
           Guid = storage.GUID,
-          Type = config.Mode == StorageMode.Specific ? StorageTypes.SpecificShelf : StorageTypes.AnyShelf
+          Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf
         };
-        var cacheManager = CacheManager.GetOrCreateCacheManager(storage.ParentProperty);
+        var cacheManager = CacheService.GetOrCreateCacheManager(storage.ParentProperty);
         foreach (var slot in storage.InputSlots) // InputSlots and OutputSlots share ItemSlots
           cacheManager.RegisterItemSlot(slot, storageKey);
 
         // Queue initial slot update
         var slotData = storage.InputSlots.Select(s => new SlotData
         {
-          Item = s.ItemInstance != null ? new ItemKey(s.ItemInstance) : ItemKey.Empty,
+          Item = s.ItemInstance != null ? new ItemData(s.ItemInstance) : ItemData.Empty,
           Quantity = s.Quantity,
           SlotIndex = s.SlotIndex,
           StackLimit = s.ItemInstance?.StackLimit ?? -1,
@@ -936,9 +936,9 @@ namespace NoLazyWorkers.Storage
         var storageKey = new StorageKey
         {
           Guid = Storage.GUID,
-          Type = config.Mode == StorageMode.Specific ? StorageTypes.SpecificShelf : StorageTypes.AnyShelf
+          Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf
         };
-        var cacheManager = CacheManager.GetOrCreateCacheManager(Storage.ParentProperty);
+        var cacheManager = CacheService.GetOrCreateCacheManager(Storage.ParentProperty);
         foreach (var slot in Storage.InputSlots)
           cacheManager.UnregisterItemSlot(slot, storageKey);
         Storages[Storage.ParentProperty].Remove(Storage.GUID);
