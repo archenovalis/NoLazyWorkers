@@ -1,275 +1,337 @@
 # StorageManager API Documentation
 
-**Date**: June 26, 2025
+**Date:** June 30, 2025
 
-This document describes the public API of the `StorageManager` class in the `NoLazyWorkers.Storage` namespace, which manages storage operations, including slot reservations, item searches, and cache handling for storage entities.
+The `StorageManager` class provides a comprehensive API for managing storage operations in a networked environment, including initialization, cleanup, and slot operations for items. This documentation outlines how to utilize the public methods and structures effectively.
 
 ## Classes and Structs
 
 ### StorageManager
 
-**Description**: A static class that manages storage operations, including initialization, cleanup, slot reservations, and item searches across storage entities.
+A static class responsible for managing storage operations, including initialization, cleanup, and slot operations for items.
 
 #### Properties
 
-- `IsInitialized` (bool, read-only): Indicates whether the StorageManager is initialized.
+- **IsInitialized** (`bool`, read-only): Indicates whether the `StorageManager` is initialized.
 
 #### Methods
 
-##### Initialize
+- **Initialize()**
+  Initializes the `StorageManager` and sets up necessary resources. Must be called on the server before performing storage operations.
 
-**Description**: Initializes the StorageManager, setting up slot services. Must be called on the server.
-**Signature**:
+  ```csharp
+  StorageManager.Initialize()
+  ```
 
-```csharp
-public static void Initialize()
-```
+- **Cleanup()**
+  Cleans up resources used by the `StorageManager`. Call this to release resources when no longer needed.
 
-**Remarks**: Logs a warning and returns if already initialized or not running on the server.
-**Example**:
+  ```csharp
+  StorageManager.Cleanup()
+  ```
 
-```csharp
-StorageManager.Initialize()
-```
+- **ClearEntityCache(Property property, Guid guid)**
+  Clears the cache for a specific entity identified by its GUID within a property.
+  - **Parameters**:
+    - `property`: The `Property` containing the entity.
+    - `guid`: The `Guid` of the entity to clear from cache.
 
-##### Cleanup
+  ```csharp
+  StorageManager.ClearEntityCache(property, entityGuid);
+  ```
 
-**Description**: Cleans up the StorageManager, disposing of caches and clearing slot services. Must be called on the server.
-**Signature**:
+- **ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)**
+  Reserves a slot for an item with a specified locker and reason.
+  - **Parameters**:
+    - `entityGuid`: The `Guid` of the entity containing the slot.
+    - `slot`: The `ItemSlot` to reserve.
+    - `locker`: The `NetworkObject` locking the slot.
+    - `lockReason`: The reason for locking the slot.
+    - `item`: Optional `ItemInstance` to reserve.
+    - `quantity`: Optional quantity to reserve.
+  - **Returns**: `bool` indicating success.
 
-```csharp
-public static void Cleanup()
-```
+  ```csharp
+  bool reserved = StorageManager.ReserveSlot(entityGuid, slot, locker, "Reservation for processing", item, 10);
+  ```
 
-**Remarks**: Logs a warning and returns if not initialized or not running on the server.
-**Example**:
+- **ReleaseSlot(ItemSlot slot)**
+  Releases a previously reserved slot.
+  - **Parameters**:
+    - `slot`: The `ItemSlot` to release.
 
-```csharp
-StorageManager.Cleanup()
-```
+  ```csharp
+  StorageManager.ReleaseSlot(slot);
+  ```
 
-##### ReserveSlot
+- **FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)**
+  Finds storage containing a specific item with the required quantity. Yields a `StorageResult`.
+  - **Parameters**:
+    - `property`: The `Property` to search within.
+    - `item`: The `ItemInstance` to find.
+    - `needed`: The quantity needed.
+    - `allowTargetHigherQuality`: Whether to allow items of higher quality.
+  - **Yields**: `StorageResult` with found storage details.
 
-**Description**: Reserves a slot for an item, locking it with a specified reason.
-**Signature**:
+  ```csharp
+  IEnumerator routine = StorageManager.FindStorageWithItem(property, item, 5, true);
+  while (routine.MoveNext())
+  {
+      if (routine.Current is StorageResult result)
+      {
+          // Process result
+      }
+  }
+  ```
 
-```csharp
-public static bool ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)
-```
+- **UpdateStorageCache(Property property, Guid entityGuid, List<ItemSlot> slots, StorageType storageType)**
+  Updates the storage cache for a specific entity and its slots.
+  - **Parameters**:
+    - `property`: The `Property` to update the cache for.
+    - `entityGuid`: The `Guid` of the entity.
+    - `slots`: The list of `ItemSlot` to update.
+    - `storageType`: The `StorageType` of the storage.
+  - **Yields**: Completes asynchronously.
 
-**Parameters**:
+  ```csharp
+  IEnumerator routine = StorageManager.UpdateStorageCache(property, entityGuid, slots, StorageType.AnyShelf);
+  while (routine.MoveNext()) { }
+  ```
 
-- `entityGuid`: The GUID of the storage entity.
-- `slot`: The slot to reserve.
-- `locker`: The network object locking the slot.
-- `lockReason`: The reason for locking the slot.
-- `item`: The item to reserve (optional).
-- `quantity`: The quantity to reserve (optional).
-**Returns**: `true` if the slot was reserved successfully; otherwise, `false`.
-**Example**:
+- **FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid)**
+  Finds delivery destinations for an item with the specified quantity. Yields a list of `DeliveryDestination`.
+  - **Parameters**:
+    - `property`: The `Property` to search within.
+    - `item`: The `ItemInstance` to deliver.
+    - `quantity`: The quantity to deliver.
+    - `sourceGuid`: The `Guid` of the source entity.
+  - **Yields**: `List<DeliveryDestination>` with destination details.
 
-```csharp
-var entityGuid = Guid.NewGuid();
-var slot = new ItemSlot(); 
-var locker = new NetworkObject(); 
-bool reserved = StorageManager.ReserveSlot(entityGuid, slot, locker, "OrderProcessing");
-if (reserved)
-{
-    Console.WriteLine("Slot reserved successfully.");
-}
-```
+  ```csharp
+  IEnumerator routine = StorageManager.FindDeliveryDestination(property, item, 10, sourceGuid);
+  while (routine.MoveNext())
+  {
+      if (routine.Current is List<DeliveryDestination> destinations)
+      {
+          // Process destinations
+      }
+  }
+  ```
 
-##### ReleaseSlot
+- **FindAvailableSlots(Property property, Guid entityGuid, List<ItemSlot> slots, ItemInstance item, int quantity)**
+  Finds available slots for storing an item with the specified quantity. Yields a list of tuples containing slots and capacities.
+  - **Parameters**:
+    - `property`: The `Property` to search within.
+    - `entityGuid`: The `Guid` of the entity containing the slots.
+    - `slots`: The list of `ItemSlot` to check.
+    - `item`: The `ItemInstance` to store.
+    - `quantity`: The quantity to store.
+  - **Yields**: `List<(ItemSlot, int)>` with available slots and their capacities.
 
-**Description**: Releases a previously reserved slot, removing its lock.
-**Signature**:
+  ```csharp
+  IEnumerator routine = StorageManager.FindAvailableSlots(property, entityGuid, slots, item, 5);
+  while (routine.MoveNext())
+  {
+      if (routine.Current is List<(ItemSlot, int)> availableSlots)
+      {
+          // Process available slots
+      }
+  }
+  ```
 
-```csharp
-public static void ReleaseSlot(ItemSlot slot)
-```
+- **ExecuteSlotOperations(Property property, List<(Guid EntityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)> operations)**
+  Executes a list of slot operations (insert or remove) for items. Yields a list of boolean results indicating success.
+  - **Parameters**:
+    - `property`: The `Property` to perform operations within.
+    - `operations`: The list of operations to execute, each containing entity GUID, slot, item, quantity, insert/remove flag, locker, and lock reason.
+  - **Yields**: `List<bool>` indicating success for each operation.
 
-**Parameters**:
+  ```csharp
+  var operations = new List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)>
+  {
+      (entityGuid, slot, item, 5, true, locker, "Insert operation")
+  };
+  IEnumerator routine = StorageManager.ExecuteSlotOperations(property, operations);
+  while (routine.MoveNext())
+  {
+      if (routine.Current is List<bool> results)
+      {
+          // Process results
+      }
+  }
+  ```
 
-- `slot`: The slot to release.
-**Example**:
+### Extensions.SlotOperation
 
-```csharp
-var slot = new ItemSlot(); 
-StorageManager.ReleaseSlot(slot);
-```
+A struct representing a slot operation with details about the entity, slot, item, and locking information.
 
-##### FindStorageWithItem
+- **Fields**:
+  - `EntityGuid`: `Guid` of the entity.
+  - `SlotKey`: `SlotKey` identifying the slot.
+  - `Slot`: `ItemSlot` for the operation.
+  - `Item`: `ItemInstance` involved.
+  - `Quantity`: Quantity of the item.
+  - `IsInsert`: Indicates if the operation is an insert (`true`) or remove (`false`).
+  - `Locker`: `NetworkObject` locking the slot.
+  - `LockReason`: Reason for locking.
 
-**Description**: Finds storage locations containing the specified item and quantity.
-**Signature**:
+### Extensions.SlotResult
 
-```csharp
-public static IEnumerator FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)
-```
+A struct representing the result of checking a slot's availability.
 
-**Parameters**:
+- **Fields**:
+  - `SlotIndex`: Index of the slot.
+  - `Capacity`: Available capacity in the slot.
 
-- `property`: The property to search within.
-- `item`: The item to locate.
-- `needed`: The required quantity.
-- `allowTargetHigherQuality`: Whether to allow items of higher quality.
-**Returns**: An IEnumerator yielding a `List<StorageResult>` containing matching storage locations. Callers should convert `NativeList<int> SlotIndices` to a managed list and dispose of it.
-**Caller Responsibilities**:
-- Use `yield return` to execute the coroutine and retrieve the result.
-- Convert `StorageResult.SlotIndices` (a `NativeList<int>`) to a managed list for further use.
-- Dispose of `StorageResult.SlotIndices` to prevent memory leaks.
-**Example**:
+### Extensions.SlotReservation
 
-```csharp
-var property = new Property(); 
-var item = new ItemInstance { ID = "Item123" }; 
-int needed = 10;
-IEnumerator coroutine = StorageManager.FindStorageWithItem(property, item, needed);
-while (coroutine.MoveNext())
-{
-    if (coroutine.Current is List<StorageResult> results)
-    {
-        foreach (var result in results)
-        {
-            var slotIndices = result.SlotIndices.ToArray().ToList(); // Convert to managed list
-            Console.WriteLine($"Found shelf {result.ShelfGuid} with {result.AvailableQuantity} items in slots {string.Join(",", slotIndices)}");
-            result.SlotIndices.Dispose(); // Dispose NativeList
-        }
-    }
-}
-```
+A struct representing a reservation for a slot.
 
-##### FindDeliveryDestinations
+- **Fields**:
+  - `EntityGuid`: `Guid` of the entity.
+  - `Timestamp`: Time of reservation.
+  - `Locker`: Name of the locker.
+  - `LockReason`: Reason for locking.
+  - `Item`: `ItemData` of the reserved item.
+  - `Quantity`: Reserved quantity.
 
-**Description**: Finds suitable delivery destinations for an item and quantity.
-**Signature**:
+### Extensions.StationData
 
-```csharp
-public static IEnumerator FindDeliveryDestinations(Property property, ItemInstance item, int quantity, Guid sourceGuid)
-```
+A struct representing station data optimized for Burst compilation.
 
-**Parameters**:
+- **Fields**:
+  - `GUID`: `Guid` of the station.
+  - `PropertyId`: ID of the parent property.
+  - `InsertSlots`: List of insert slots.
+  - `ProductSlots`: List of product slots.
+  - `OutputSlot`: Output slot.
+  - `TypeName`: Type name of the station.
+  - `IsInUse`: Indicates if the station is in use.
+  - `RefillList`: List of items needed for refill.
+- **Methods**:
+  - `StationData(IStationAdapter station)`: Initializes from a station adapter.
+  - `ToStationAdapter()`: Converts to an `IStationAdapter`.
+  - `Dispose()`: Disposes of native collections.
 
-- `property`: The property to search within.
-- `item`: The item to deliver.
-- `quantity`: The quantity to deliver.
-- `sourceGuid`: The GUID of the source entity.
-**Returns**: An IEnumerator yielding a `List<DeliveryDestination>` containing suitable destinations. Callers should convert `DeliveryDestination.SlotIndices` to a managed list and dispose of it.
-**Caller Responsibilities**:
-- Use `yield return` to execute the coroutine and retrieve the result.
-- Convert `DeliveryDestination.SlotIndices` (a `NativeList<int>`) to a managed list for further use.
-- Dispose of `DeliveryDestination.SlotIndices` to prevent memory leaks.
-**Example**:
+### Extensions.StorageData
 
-```csharp
-var property = new Property(); 
-var item = new ItemInstance { ID = "Item123" }; 
-var sourceGuid = Guid.NewGuid();
-IEnumerator coroutine = StorageManager.FindDeliveryDestinations(property, item, 5, sourceGuid);
-yield return coroutine;
-var destinations = coroutine.Current
-foreach (var dest in destinations)
-{
-    var slotIndices = dest.SlotIndices.ToArray().ToList(); // Convert to managed list
-    Console.WriteLine($"Found destination {dest.DestinationGuid} with capacity {dest.Capacity} in slots {string.Join(",", slotIndices)}");
-    dest.SlotIndices.Dispose(); // Dispose NativeList
-}
-```
+A struct representing storage data for a storage entity.
 
-##### FindAvailableSlots
+- **Fields**:
+  - `GUID`: `Guid` of the storage entity.
+  - `OutputSlots`: List of output slots.
+  - `PropertyId`: ID of the parent property.
+- **Methods**:
+  - `StorageData(PlaceableStorageEntity shelf)`: Initializes from a storage entity.
+  - `ToPlaceableStorageEntity()`: Converts to a `PlaceableStorageEntity`.
+  - `Dispose()`: Disposes of native collections.
 
-**Description**: Finds available slots for storing an item and quantity.
-**Signature**:
+### Extensions.StorageType
 
-```csharp
-public static IEnumerator FindAvailableSlots(List<ItemSlot> slots, ItemInstance item, int quantity)
-```
+An enum defining types of storage entities.
 
-**Parameters**:
+- **Values**:
+  - `None`
+  - `AnyShelf`
+  - `SpecificShelf`
+  - `Employee`
+  - `Station`
+  - `LoadingDock`
 
-- `slots`: The list of slots to check.
-- `item`: The item to store.
-- `quantity`: The quantity to store.
-**Returns**: An IEnumerator yielding a `List<(ItemSlot, int)>` containing available slots and their capacities.
-**Caller Responsibilities**:
-- Use `yield return` to execute the coroutine and retrieve the result.
-- No `Native*` collections are returned, so no disposal is needed.
-**Example**:
+### Extensions.StorageKey
 
-```csharp
-var slots = new List<ItemSlot> { new ItemSlot(), new ItemSlot() }; 
-var item = new ItemInstance { ID = "Item123" }; 
-IEnumerator coroutine = StorageManager.FindAvailableSlots(slots, item, 5);
-while (coroutine.MoveNext())
-{
-    if (coroutine.Current is List<(ItemSlot, int)> results)
-    {
-        foreach (var (slot, capacity) in results)
-        {
-            Console.WriteLine($"Slot {slot.SlotIndex} has capacity {capacity}.");
-        }
-    }
-}
-```
+A struct representing a key for identifying a storage entity.
 
-##### ExecuteSlotOperations
+- **Fields**:
+  - `PropertyId`: ID of the property.
+  - `Guid`: `Guid` of the entity.
+  - `Type`: `StorageType` of the entity.
+- **Methods**:
+  - `StorageKey(Guid guid, StorageType type)`: Initializes with GUID and type.
+  - `Equals(StorageKey other)`: Checks equality.
 
-**Description**: Executes a batch of slot operations (insert or remove).
-**Signature**:
+### Extensions.ItemData
 
-```csharp
-public static IEnumerator ExecuteSlotOperations(List<(Guid EntityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)> operations)
-```
+A struct storing item data, including ID, packaging, quality, and quantity.
 
-**Parameters**:
+- **Fields**:
+  - `Id`: Item ID.
+  - `PackagingId`: Packaging ID.
+  - `Quality`: Quality of the item.
+  - `Quantity`: Quantity of the item.
+  - `StackLimit`: Maximum stack size.
+- **Methods**:
+  - `ItemData(ItemInstance item)`: Initializes from an item instance.
+  - `CreateItemInstance()`: Creates an `ItemInstance`.
+  - `AdvCanStackWithBurst(ItemData targetItem, bool allowTargetHigherQuality, bool checkQuantities)`: Checks if items can stack.
 
-- `operations`: The list of operations to execute.
-**Returns**: An IEnumerator yielding a `List<bool>` indicating success for each operation.
-**Caller Responsibilities**:
-- Use `yield return` to execute the coroutine and retrieve the result.
-- No `Native*` collections are returned, so no disposal is needed.
-**Example**:
+### Extensions.ItemKey
 
-```csharp
-var operations = new List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)>
-{
-    (Guid.NewGuid(), new ItemSlot(), new ItemInstance { ID = "Item123" }, 5, true, new NetworkObject(), "OrderProcessing")
-};
-IEnumerator coroutine = StorageManager.ExecuteSlotOperations(operations);
-while (coroutine.MoveNext())
-{
-    if (coroutine.Current is List<bool> results)
-    {
-        for (int i = 0; i < results.Count; i++)
-        {
-            Console.WriteLine($"Operation {i} {(results[i] ? "succeeded" : "failed")}.");
-        }
-    }
-}
-```
+A struct representing a key for identifying an item.
 
-### Structs
+- **Fields**:
+  - `ItemId`: Item ID.
+  - `PackagingId`: Packaging ID.
+  - `Quality`: Quality of the item.
+  - `CacheId`: Cached ID string.
+- **Methods**:
+  - `ItemKey(ItemInstance item)`: Initializes from an item instance.
+  - `Equals(ItemKey other)`: Checks equality.
 
-#### StorageResult
+### Extensions.SlotData
 
-**Description**: Represents a storage location with available items.
-**Fields**:
+A struct representing data for a slot.
 
-- `ShelfGuid` (Guid): The GUID of the storage shelf.
-- `AvailableQuantity` (int): The total quantity available.
-- `SlotIndices` (NativeList<int>): The indices of the slots containing the items. Must be converted to a managed list and disposed of by the caller.
+- **Fields**:
+  - `PropertyId`: ID of the property.
+  - `EntityGuid`: `Guid` of the entity.
+  - `SlotIndex`: Index of the slot.
+  - `Item`: `ItemData` in the slot.
+  - `Quantity`: Quantity in the slot.
+  - `IsLocked`: Indicates if the slot is locked.
+  - `StackLimit`: Maximum stack size.
+  - `IsValid`: Indicates if the slot is valid.
+  - `Type`: `StorageType` of the slot.
+- **Methods**:
+  - `SlotData(Guid guid, ItemSlot slot, StorageType type)`: Initializes from a slot and type.
+  - `Equals(SlotData other)`: Checks equality.
 
-#### DeliveryDestination
+### Extensions.SlotKey
 
-**Description**: Represents a destination for item delivery.
-**Fields**:
+A struct representing a key for identifying a slot within an entity.
 
-- `DestinationGuid` (Guid): The GUID of the destination.
-- `SlotIndices` (NativeList<int>): The indices of available slots. Must be converted to a managed list and disposed of by the caller.
-- `Capacity` (int): The total capacity for the item.
+- **Fields**:
+  - `EntityGuid`: `Guid` of the entity.
+  - `SlotIndex`: Index of the slot.
+- **Methods**:
+  - `SlotKey(Guid entityGuid, int slotIndex)`: Initializes with GUID and slot index.
+  - `Equals(SlotKey other)`: Checks equality.
+  - `GetItemSlotFromKey(Property property)`: Retrieves the associated `ItemSlot`.
+
+### Extensions.StorageResult
+
+A struct representing a storage result with shelf and slot details.
+
+- **Fields**:
+  - `Shelf`: The `PlaceableStorageEntity` found.
+  - `AvailableQuantity`: Available quantity of the item.
+  - `ItemSlots`: List of `ItemSlot` containing the item.
+
+### Extensions.DeliveryDestination
+
+A struct representing a delivery destination with entity and slot details.
+
+- **Fields**:
+  - `Entity`: The `ITransitEntity` for delivery.
+  - `ItemSlots`: List of `ItemSlot` for delivery.
+  - `Capacity`: Available capacity.
 
 ## Usage Notes
 
-- All operations require `StorageManager` to be initialized and executed on the server (`InstanceFinder.NetworkManager.IsServer` must be true).
-- Coroutine entrypoints (`FindStorageWithItem`, `FindDeliveryDestinations`, `FindAvailableSlots`, `ExecuteSlotOperations`) must be executed using `yield return` in a coroutine context (e.g., within a MonoBehaviour or via `CoroutineRunner.Instance.RunCoroutine`).
-- For `FindStorageWithItem` and `FindDeliveryDestinations`, callers must convert `NativeList<int> SlotIndices` to a managed list (e.g., using `ToArray().ToList()`) and call `Dispose()` on the `NativeList<int>` to prevent memory leaks.
+- **Server-Side Operations**: Most methods require server-side execution (`FishNetExtensions.IsServer`). Ensure calls are made in a server context.
+- **Initialization**: Call `Initialize()` before using any storage operations and `Cleanup()` when done to manage resources.
+- **Coroutines**: Methods like `FindStorageWithItem`, `UpdateStorageCache`, `FindDeliveryDestination`, `FindAvailableSlots`, and `ExecuteSlotOperations` are coroutines and must be executed within a coroutine context (e.g., using `MonoBehaviour.StartCoroutine`).
+- **Dependencies**: The API assumes dependencies like `FishNetExtensions`, `SlotService`, `CacheService`, and others are defined and accessible. Ensure these are properly set up in your project.
+- **Burst Compilation**: Structures like `StationData`, `StorageData`, `ItemData`, and others are optimized for Burst compilation, improving performance in compute-intensive operations.
+
+This API is designed for efficient storage management in a networked environment, leveraging caching and Burst compilation for performance.

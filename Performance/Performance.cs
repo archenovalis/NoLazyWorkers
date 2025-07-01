@@ -1646,7 +1646,7 @@ namespace NoLazyWorkers.Performance
             executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
             {
               float mainThreadBatchCost = mainThreadCost * batchSize;
-              if (jobType == JobType.IJobParallelFor && ShouldUseParallel(uniqueId, batchSize) && jobOverhead <= mainThreadBatchCost)
+              if (ShouldUseParallel(uniqueId, batchSize) && jobOverhead <= mainThreadBatchCost)
               {
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via IJobParallelFor (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
@@ -1654,7 +1654,7 @@ namespace NoLazyWorkers.Performance
                 var jobWrapper = new DelegateJobWrapper<TInput, TOutput>(null, burstForDelegate, null, inputs, nativeOutputs, default, batchStart, batchSize, batchSize, JobType.IJobParallelFor);
                 return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(batchSize, batchSize), batchSize);
               }
-              else if (jobType == JobType.IJobFor && jobOverhead <= mainThreadBatchCost)
+              else if (jobOverhead <= mainThreadBatchCost)
               {
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via IJobFor (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);
@@ -1788,7 +1788,7 @@ namespace NoLazyWorkers.Performance
             string coroutineKey = $"{uniqueId}_Coroutine";
             string mainThreadKey = $"{uniqueId}_MainThread";
             float mainThreadBatchCost = mainThreadCost * batchSize;
-            if (jobType == JobType.IJobParallelForTransform && jobOverhead <= mainThreadBatchCost)
+            if (jobOverhead <= mainThreadBatchCost)
             {
 #if DEBUG
               Log(Level.Verbose, $"Executing {uniqueId} via IJobParallelForTransform (batchSize={batchSize}, jobOverhead={jobOverhead:F3}ms)", Category.Performance);

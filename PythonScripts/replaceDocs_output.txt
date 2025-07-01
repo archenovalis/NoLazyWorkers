@@ -8,6 +8,7 @@ using UnityEngine;
 using ScheduleOne.Product;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
+using System.Collections.Concurrent;
 using Unity.Collections;
 using FishNet;
 using static NoLazyWorkers.Storage.ShelfExtensions;
@@ -101,35 +102,35 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Clears the cache for a specific entity identified by its GUID within a property.
-    /// </summary>
-    /// <param name="property">The property containing the entity.</param>
-    /// <param name="guid">The GUID of the entity to clear from cache.</param>
-    public static void ClearEntityCache(Property property, Guid guid)
+/// Clears the cache for a specific entity identified by its GUID within a property.
+/// </summary>
+/// <param name="property">The property containing the entity.</param>
+/// <param name="guid">The GUID of the entity to clear from cache.</param>
+public static void ClearEntityCache (Property property, Guid guid)
     {
       CacheService.GetOrCreateCacheService(property).ClearCacheForEntity(guid);
     }
 
     /// <summary>
-    /// Reserves a slot for an item with a specified locker and reason.
-    /// </summary>
-    /// <param name="entityGuid">The GUID of the entity containing the slot.</param>
-    /// <param name="slot">The slot to reserve.</param>
-    /// <param name="locker">The network object locking the slot.</param>
-    /// <param name="lockReason">The reason for locking the slot.</param>
-    /// <param name="item">The item to reserve (optional).</param>
-    /// <param name="quantity">The quantity to reserve (optional).</param>
-    /// <returns>True if the slot was reserved successfully, false otherwise.</returns>
-    public static bool ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)
+/// Reserves a slot for an item with a specified locker and reason.
+/// </summary>
+/// <param name="entityGuid">The GUID of the entity containing the slot.</param>
+/// <param name="slot">The slot to reserve.</param>
+/// <param name="locker">The network object locking the slot.</param>
+/// <param name="lockReason">The reason for locking the slot.</param>
+/// <param name="item">The item to reserve (optional).</param>
+/// <param name="quantity">The quantity to reserve (optional).</param>
+/// <returns>True if the slot was reserved successfully, false otherwise.</returns>
+public static bool ReserveSlot (Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)
     {
       return SlotService.ReserveSlot(entityGuid, slot, locker, lockReason, item, quantity);
     }
 
     /// <summary>
-    /// Releases a previously reserved slot.
-    /// </summary>
-    /// <param name="slot">The slot to release.</param>
-    public static void ReleaseSlot(ItemSlot slot)
+/// Releases a previously reserved slot.
+/// </summary>
+/// <param name="slot">The slot to release.</param>
+public static void ReleaseSlot (ItemSlot slot)
     {
       SlotService.ReleaseSlot(slot);
     }
@@ -137,14 +138,14 @@ namespace NoLazyWorkers.Storage
     #region Coroutine Entrypoints
 
     /// <summary>
-    /// Finds storage containing a specific item with the required quantity.
-    /// </summary>
-    /// <param name="property">The property to search within.</param>
-    /// <param name="item">The item to find.</param>
-    /// <param name="needed">The quantity needed.</param>
-    /// <param name="allowTargetHigherQuality">Whether to allow items of higher quality.</param>
-    /// <returns>An enumerator yielding a StorageResult with the found storage details.</returns>
-    public static IEnumerator FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)
+/// Finds storage containing a specific item with the required quantity.
+/// </summary>
+/// <param name="property">The property to search within.</param>
+/// <param name="item">The item to find.</param>
+/// <param name="needed">The quantity needed.</param>
+/// <param name="allowTargetHigherQuality">Whether to allow items of higher quality.</param>
+/// <returns>An enumerator yielding a StorageResult with the found storage details.</returns>
+public static IEnumerator FindStorageWithItem (Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)
     {
       if (!IsInitialized)
       {
@@ -235,14 +236,14 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Updates the storage cache for a specific entity and its slots.
-    /// </summary>
-    /// <param name="property">The property to update the cache for.</param>
-    /// <param name="entityGuid">The GUID of the entity.</param>
-    /// <param name="slots">The list of slots to update.</param>
-    /// <param name="storageType">The type of storage.</param>
-    /// <returns>An enumerator for asynchronous cache update.</returns>
-    public static IEnumerator UpdateStorageCache(Property property, Guid entityGuid, List<ItemSlot> slots, StorageType storageType)
+/// Updates the storage cache for a specific entity and its slots.
+/// </summary>
+/// <param name="property">The property to update the cache for.</param>
+/// <param name="entityGuid">The GUID of the entity.</param>
+/// <param name="slots">The list of slots to update.</param>
+/// <param name="storageType">The type of storage.</param>
+/// <returns>An enumerator for asynchronous cache update.</returns>
+public static IEnumerator UpdateStorageCache (Property property, Guid entityGuid, List<ItemSlot> slots, StorageType storageType)
     {
       if (!IsInitialized || !InstanceFinder.NetworkManager.IsServer || property == null || slots == null || slots.Count == 0)
       {
@@ -276,14 +277,14 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Finds delivery destinations for an item with the specified quantity.
-    /// </summary>
-    /// <param name="property">The property to search within.</param>
-    /// <param name="item">The item to deliver.</param>
-    /// <param name="quantity">The quantity to deliver.</param>
-    /// <param name="sourceGuid">The GUID of the source entity.</param>
-    /// <returns>An enumerator yielding a list of DeliveryDestinationBurst objects.</returns>
-    public static IEnumerator FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid)
+/// Finds delivery destinations for an item with the specified quantity.
+/// </summary>
+/// <param name="property">The property to search within.</param>
+/// <param name="item">The item to deliver.</param>
+/// <param name="quantity">The quantity to deliver.</param>
+/// <param name="sourceGuid">The GUID of the source entity.</param>
+/// <returns>An enumerator yielding a list of DeliveryDestinationBurst objects.</returns>
+public static IEnumerator FindDeliveryDestination (Property property, ItemInstance item, int quantity, Guid sourceGuid)
     {
       if (!IsInitialized || !InstanceFinder.NetworkManager.IsServer || item == null || quantity <= 0)
       {
@@ -397,15 +398,15 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Finds available slots for storing an item with the specified quantity.
-    /// </summary>
-    /// <param name="property">The property to search within.</param>
-    /// <param name="entityGuid">The GUID of the entity containing the slots.</param>
-    /// <param name="slots">The list of slots to check.</param>
-    /// <param name="item">The item to store.</param>
-    /// <param name="quantity">The quantity to store.</param>
-    /// <returns>An enumerator yielding a list of tuples containing available slots and their capacities.</returns>
-    public static IEnumerator FindAvailableSlots(Property property, Guid entityGuid, List<ItemSlot> slots, ItemInstance item, int quantity)
+/// Finds available slots for storing an item with the specified quantity.
+/// </summary>
+/// <param name="property">The property to search within.</param>
+/// <param name="entityGuid">The GUID of the entity containing the slots.</param>
+/// <param name="slots">The list of slots to check.</param>
+/// <param name="item">The item to store.</param>
+/// <param name="quantity">The quantity to store.</param>
+/// <returns>An enumerator yielding a list of tuples containing available slots and their capacities.</returns>
+public static IEnumerator FindAvailableSlots (Property property, Guid entityGuid, List<ItemSlot> slots, ItemInstance item, int quantity)
     {
       if (!IsInitialized || !FishNetExtensions.IsServer || slots == null || item == null || quantity <= 0)
       {
@@ -448,12 +449,12 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Executes a list of slot operations (insert or remove) for items.
-    /// </summary>
-    /// <param name="property">The property to perform operations within.</param>
-    /// <param name="operations">The list of operations to execute.</param>
-    /// <returns>An enumerator yielding a list of boolean results indicating success for each operation.</returns>
-    public static IEnumerator ExecuteSlotOperations(Property property, List<(Guid EntityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)> operations)
+/// Executes a list of slot operations (insert or remove) for items.
+/// </summary>
+/// <param name="property">The property to perform operations within.</param>
+/// <param name="operations">The list of operations to execute.</param>
+/// <returns>An enumerator yielding a list of boolean results indicating success for each operation.</returns>
+public static IEnumerator ExecuteSlotOperations (Property property, List<(Guid EntityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)> operations)
     {
       if (!IsInitialized || !FishNetExtensions.IsServer || operations == null || operations.Count == 0)
       {
@@ -518,9 +519,9 @@ namespace NoLazyWorkers.Storage
   public static class Extensions
   {
     /// <summary>
-    /// Represents a slot operation with details about the entity, slot, item, and locking information.
-    /// </summary>
-    public struct SlotOperation
+/// Represents a slot operation with details about the entity, slot, item, and locking information.
+/// </summary>
+public struct SlotOperation
     {
       public Guid EntityGuid;
       public SlotKey SlotKey;
@@ -533,18 +534,18 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents the result of checking a slot's availability.
-    /// </summary>
-    public struct SlotResult
+/// Represents the result of checking a slot's availability.
+/// </summary>
+public struct SlotResult
     {
       public int SlotIndex;
       public int Capacity;
     }
 
     /// <summary>
-    /// Contains data for a slot operation, including slot and item details.
-    /// </summary>
-    public struct OperationData
+/// Contains data for a slot operation, including slot and item details.
+/// </summary>
+public struct OperationData
     {
       public SlotKey SlotKey;
       public SlotData Slot;
@@ -557,9 +558,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents the result of a slot operation.
-    /// </summary>
-    public struct SlotOperationResult
+/// Represents the result of a slot operation.
+/// </summary>
+public struct SlotOperationResult
     {
       public bool IsValid;
       public Guid EntityGuid;
@@ -572,9 +573,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a reservation for a slot.
-    /// </summary>
-    public struct SlotReservation
+/// Represents a reservation for a slot.
+/// </summary>
+public struct SlotReservation
     {
       public Guid EntityGuid;
       public float Timestamp;
@@ -585,10 +586,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents station data optimized for Burst compilation.
-    /// </summary>
-    [BurstCompile]
-    public struct StationData : IEquatable<StationData>
+/// Represents station data optimized for Burst compilation.
+/// </summary>
+[BurstCompile]
+public struct StationData : IEquatable<StationData>
     {
       public Guid GUID;
       public int PropertyId;
@@ -600,10 +601,10 @@ namespace NoLazyWorkers.Storage
       public NativeList<ItemKey> RefillList;
 
       /// <summary>
-      /// Initializes a StationData instance from a station adapter.
-      /// </summary>
-      /// <param name="station">The station adapter to initialize from.</param>
-      public StationData(IStationAdapter station)
+/// Initializes a StationData instance from a station adapter.
+/// </summary>
+/// <param name="station">The station adapter to initialize from.</param>
+public StationData (IStationAdapter station)
       {
         GUID = station.GUID;
         PropertyId = station.ParentProperty.NetworkObject.ObjectId;
@@ -623,10 +624,10 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Converts the StationData to an IStationAdapter.
-      /// </summary>
-      /// <returns>The corresponding IStationAdapter.</returns>
-      public IStationAdapter ToStationAdapter()
+/// Converts the StationData to an IStationAdapter.
+/// </summary>
+/// <returns>The corresponding IStationAdapter.</returns>
+public IStationAdapter ToStationAdapter ()
       {
         return IStations[IdToProperty[PropertyId]][GUID];
       }
@@ -642,31 +643,31 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Checks equality with another StationData instance.
-      /// </summary>
-      /// <param name="other">The StationData to compare with.</param>
-      /// <returns>True if equal, false otherwise.</returns>
-      public readonly bool Equals(StationData other)
+/// Checks equality with another StationData instance.
+/// </summary>
+/// <param name="other">The StationData to compare with.</param>
+/// <returns>True if equal, false otherwise.</returns>
+public readonly bool Equals (StationData other)
       {
         return GUID == other.GUID;
       }
     }
 
     /// <summary>
-    /// Represents storage data for a storage entity.
-    /// </summary>
-    [BurstCompile]
-    public struct StorageData
+/// Represents storage data for a storage entity.
+/// </summary>
+[BurstCompile]
+public struct StorageData
     {
       public Guid GUID;
       public NativeList<SlotData> OutputSlots;
       public int PropertyId;
 
       /// <summary>
-      /// Initializes a StorageData instance from a storage entity.
-      /// </summary>
-      /// <param name="shelf">The storage entity to initialize from.</param>
-      public StorageData(PlaceableStorageEntity shelf)
+/// Initializes a StorageData instance from a storage entity.
+/// </summary>
+/// <param name="shelf">The storage entity to initialize from.</param>
+public StorageData (PlaceableStorageEntity shelf)
       {
         GUID = shelf.GUID;
         OutputSlots = new NativeList<SlotData>(Allocator.Persistent);
@@ -680,10 +681,10 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Converts the StorageData to a PlaceableStorageEntity.
-      /// </summary>
-      /// <returns>The corresponding PlaceableStorageEntity.</returns>
-      public PlaceableStorageEntity ToPlaceableStorageEntity()
+/// Converts the StorageData to a PlaceableStorageEntity.
+/// </summary>
+/// <returns>The corresponding PlaceableStorageEntity.</returns>
+public PlaceableStorageEntity ToPlaceableStorageEntity ()
       {
         return Storages[IdToProperty[PropertyId]][GUID];
       }
@@ -698,9 +699,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Defines types of storage entities.
-    /// </summary>
-    public enum StorageType
+/// Defines types of storage entities.
+/// </summary>
+public enum StorageType
     {
       None,
       AnyShelf,
@@ -886,44 +887,44 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a key for identifying a slot within an entity.
-    /// </summary>
-    public struct SlotKey : IEquatable<SlotKey>
+/// Represents a key for identifying a slot within an entity.
+/// </summary>
+public struct SlotKey : IEquatable<SlotKey>
     {
       public Guid EntityGuid;
       public int SlotIndex;
 
       /// <summary>
-      /// Initializes a SlotKey with an entity GUID and slot index.
-      /// </summary>
-      /// <param name="entityGuid">The GUID of the entity.</param>
-      /// <param name="slotIndex">The index of the slot.</param>
-      public SlotKey(Guid entityGuid, int slotIndex)
+/// Initializes a SlotKey with an entity GUID and slot index.
+/// </summary>
+/// <param name="entityGuid">The GUID of the entity.</param>
+/// <param name="slotIndex">The index of the slot.</param>
+public SlotKey (Guid entityGuid, int slotIndex)
       {
         EntityGuid = entityGuid;
         SlotIndex = slotIndex;
       }
 
       /// <summary>
-      /// Checks equality with another SlotKey.
-      /// </summary>
-      /// <param name="other">The SlotKey to compare with.</param>
-      /// <returns>True if equal, false otherwise.</returns>
-      public bool Equals(SlotKey other) => EntityGuid == other.EntityGuid && SlotIndex == other.SlotIndex;
+/// Checks equality with another SlotKey.
+/// </summary>
+/// <param name="other">The SlotKey to compare with.</param>
+/// <returns>True if equal, false otherwise.</returns>
+public bool Equals (SlotKey other) => EntityGuid == other.EntityGuid && SlotIndex == other.SlotIndex;
       public override bool Equals(object obj) => obj is SlotKey other && Equals(other);
       /// <summary>
-      /// Gets the hash code for the SlotKey.
-      /// </summary>
-      /// <returns>The hash code.</returns>
-      public override int GetHashCode() => HashCode.Combine(EntityGuid, SlotIndex);
+/// Gets the hash code for the SlotKey.
+/// </summary>
+/// <returns>The hash code.</returns>
+public override int GetHashCode () => HashCode.Combine(EntityGuid, SlotIndex);
 
       /// <summary>
-      /// Retrieves the ItemSlot associated with this SlotKey.
-      /// </summary>
-      /// <param name="property">The property containing the slot.</param>
-      /// <returns>The ItemSlot associated with the key.</returns>
-      /// <exception cref="KeyNotFoundException">Thrown if the slot is not found.</exception>
-      internal ItemSlot GetItemSlotFromKey(Property property)
+/// Retrieves the ItemSlot associated with this SlotKey.
+/// </summary>
+/// <param name="property">The property containing the slot.</param>
+/// <returns>The ItemSlot associated with the key.</returns>
+/// <exception cref="KeyNotFoundException">Thrown if the slot is not found.</exception>
+internal ItemSlot GetItemSlotFromKey (Property property)
       {
         var cacheService = CacheService.GetOrCreateCacheService(property);
         if (cacheService._slotCache.TryGetValue(this, out var slotInfo))
@@ -960,10 +961,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a storage result optimized for Burst compilation.
-    /// </summary>
-    [BurstCompile]
-    public struct StorageResultBurst
+/// Represents a storage result optimized for Burst compilation.
+/// </summary>
+[BurstCompile]
+public struct StorageResultBurst
     {
       public int PropertyId;
       public Guid ShelfGuid;
@@ -971,10 +972,10 @@ namespace NoLazyWorkers.Storage
       public NativeList<SlotData> SlotData;
 
       /// <summary>
-      /// Converts the Burst-optimized result to a managed StorageResult.
-      /// </summary>
-      /// <returns>The managed StorageResult.</returns>
-      public StorageResult GetResult()
+/// Converts the Burst-optimized result to a managed StorageResult.
+/// </summary>
+/// <returns>The managed StorageResult.</returns>
+public StorageResult GetResult ()
       {
         var shelf = Storages[IdToProperty[PropertyId]][ShelfGuid];
         List<ItemSlot> itemSlots = new();
@@ -991,9 +992,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a storage result with shelf and slot details.
-    /// </summary>
-    public struct StorageResult
+/// Represents a storage result with shelf and slot details.
+/// </summary>
+public struct StorageResult
     {
       public PlaceableStorageEntity Shelf;
       public int AvailableQuantity;
@@ -1001,20 +1002,20 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a delivery destination optimized for Burst compilation.
-    /// </summary>
-    [BurstCompile]
-    public struct DeliveryDestinationBurst
+/// Represents a delivery destination optimized for Burst compilation.
+/// </summary>
+[BurstCompile]
+public struct DeliveryDestinationBurst
     {
       public Guid Guid;
       public NativeList<SlotData> SlotData;
       public int Capacity;
 
       /// <summary>
-      /// Converts the Burst-optimized result to a managed DeliveryDestination.
-      /// </summary>
-      /// <returns>The managed DeliveryDestination.</returns>
-      public DeliveryDestination GetResult()
+/// Converts the Burst-optimized result to a managed DeliveryDestination.
+/// </summary>
+/// <returns>The managed DeliveryDestination.</returns>
+public DeliveryDestination GetResult ()
       {
         var result = new DeliveryDestination();
         List<ItemSlot> itemSlots = new();
@@ -1026,9 +1027,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a delivery destination with entity and slot details.
-    /// </summary>
-    public struct DeliveryDestination
+/// Represents a delivery destination with entity and slot details.
+/// </summary>
+public struct DeliveryDestination
     {
       public ITransitEntity Entity;
       public List<ItemSlot> ItemSlots;
@@ -1049,9 +1050,9 @@ namespace NoLazyWorkers.Storage
   }
 
   /// <summary>
-  /// Manages object pools for various data types used in storage operations.
-  /// </summary>
-  internal class PoolManager
+/// Manages object pools for various data types used in storage operations.
+/// </summary>
+internal class PoolManager
   {
     private static PoolManager _instance;
     public static PoolManager Instance => _instance ??= new PoolManager();
@@ -1064,9 +1065,9 @@ namespace NoLazyWorkers.Storage
     public ObjectPool<List<(ItemData, int)>> ItemQuantityListPool { get; }
 
     /// <summary>
-    /// Initializes a new instance of the PoolManager.
-    /// </summary>
-    private PoolManager()
+/// Initializes a new instance of the PoolManager.
+/// </summary>
+private PoolManager ()
     {
       IntListPool = CreatePool<List<int>>(10);
       StorageResultListPool = CreatePool<List<StorageResultBurst>>(10);
@@ -1077,11 +1078,11 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Creates an object pool for a specified type with a default capacity.
-    /// </summary>
-    /// <param name="defaultCapacity">The default capacity of the pool.</param>
-    /// <returns>An ObjectPool for the specified type.</returns>
-    private ObjectPool<T> CreatePool<T>(int defaultCapacity) where T : class, new()
+/// Creates an object pool for a specified type with a default capacity.
+/// </summary>
+/// <param name="defaultCapacity">The default capacity of the pool.</param>
+/// <returns>An ObjectPool for the specified type.</returns>
+private ObjectPool<T> CreatePool <T> (int defaultCapacity) where T : class, new()
     {
       return new ObjectPool<T>(
           createFunc: () => new T(),
@@ -1094,9 +1095,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Clears all object pools.
-    /// </summary>
-    public void Cleanup()
+/// Clears all object pools.
+/// </summary>
+public void Cleanup ()
     {
       IntListPool.Clear();
       StorageResultListPool.Clear();
@@ -1108,9 +1109,9 @@ namespace NoLazyWorkers.Storage
   }
 
   /// <summary>
-  /// Manages caching for storage-related data and operations.
-  /// </summary>
-  internal class CacheService : IDisposable
+/// Manages caching for storage-related data and operations.
+/// </summary>
+internal class CacheService : IDisposable
   {
     private readonly Property _property;
     private bool _isActive;
@@ -1130,11 +1131,11 @@ namespace NoLazyWorkers.Storage
     internal NativeParallelHashSet<StationData> StationData;
 
     /// <summary>
-    /// Initializes a new instance of the CacheService for a property.
-    /// </summary>
-    /// <param name="property">The property to associate with the cache service.</param>
-    /// <exception cref="ArgumentNullException">Thrown if the property is null.</exception>
-    public CacheService(Property property)
+/// Initializes a new instance of the CacheService for a property.
+/// </summary>
+/// <param name="property">The property to associate with the cache service.</param>
+/// <exception cref="ArgumentNullException">Thrown if the property is null.</exception>
+public CacheService (Property property)
     {
       _property = property ?? throw new ArgumentNullException(nameof(property));
       _storageSlotsCache = new NativeParallelHashMap<StorageKey, NativeList<SlotData>>(100, Allocator.Persistent);
@@ -1161,9 +1162,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Activates the cache service, enabling update processing.
-    /// </summary>
-    public void Activate()
+/// Activates the cache service, enabling update processing.
+/// </summary>
+public void Activate ()
     {
       if (_isActive) return;
       _isActive = true;
@@ -1173,9 +1174,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Deactivates the cache service, stopping update processing.
-    /// </summary>
-    public void Deactivate()
+/// Deactivates the cache service, stopping update processing.
+/// </summary>
+public void Deactivate ()
     {
       if (!_isActive) return;
       _isActive = false;
@@ -1184,9 +1185,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Disposes of all native collections and clears pools.
-    /// </summary>
-    public void Dispose()
+/// Disposes of all native collections and clears pools.
+/// </summary>
+public void Dispose ()
     {
       if (!IsInitialized)
       {
@@ -1242,19 +1243,19 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Cleans up pending updates and event subscriptions.
-    /// </summary>
-    private void Cleanup()
+/// Cleans up pending updates and event subscriptions.
+/// </summary>
+private void Cleanup ()
     {
       Log(Level.Info, "CacheService cleaned up", Category.Storage);
     }
 
     /// <summary>
-    /// Retrieves or creates a CacheService for a given property.
-    /// </summary>
-    /// <param name="property">The property to associate with the cache service.</param>
-    /// <returns>The CacheService instance, or null if not on server.</returns>
-    public static CacheService GetOrCreateCacheService(Property property)
+/// Retrieves or creates a CacheService for a given property.
+/// </summary>
+/// <param name="property">The property to associate with the cache service.</param>
+/// <returns>The CacheService instance, or null if not on server.</returns>
+public static CacheService GetOrCreateCacheService (Property property)
     {
       if (!FishNetExtensions.IsServer)
       {
@@ -1270,26 +1271,26 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Updates the storage cache for a slot in a Burst-compatible manner.
-    /// </summary>
-    /// <param name="index">The index of the slot to process.</param>
-    /// <param name="inputs">The array of slot data.</param>
-    /// <param name="key">The storage key.</param>
-    /// <param name="propertyId">The ID of the property.</param>
-    /// <param name="storageSlotsCache">The cache of storage slots.</param>
-    /// <param name="anyShelfKeys">The list of any shelf keys.</param>
-    /// <param name="notFoundItems">The set of items not found.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    internal void UpdateStorageCacheBurst(
-                int index,
-                NativeArray<SlotData> inputs,
-                StorageKey key,
-                int propertyId,
-                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
-                NativeList<StorageKey> anyShelfKeys,
-                NativeParallelHashSet<ItemKey> notFoundItems,
-                NativeList<LogEntry> logs)
+/// Updates the storage cache for a slot in a Burst-compatible manner.
+/// </summary>
+/// <param name="index">The index of the slot to process.</param>
+/// <param name="inputs">The array of slot data.</param>
+/// <param name="key">The storage key.</param>
+/// <param name="propertyId">The ID of the property.</param>
+/// <param name="storageSlotsCache">The cache of storage slots.</param>
+/// <param name="anyShelfKeys">The list of any shelf keys.</param>
+/// <param name="notFoundItems">The set of items not found.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+internal void UpdateStorageCacheBurst (
+            int index,
+            NativeArray<SlotData> inputs,
+            StorageKey key,
+            int propertyId,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            NativeList<StorageKey> anyShelfKeys,
+            NativeParallelHashSet<ItemKey> notFoundItems,
+            NativeList<LogEntry> logs)
     {
       // Updates storage slots cache
       var slot = inputs[index];
@@ -1322,10 +1323,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Retrieves loading dock keys from the cache.
-    /// </summary>
-    /// <returns>A list of loading dock storage keys.</returns>
-    internal NativeList<StorageKey> GetLoadingDockKeys()
+/// Retrieves loading dock keys from the cache.
+/// </summary>
+/// <returns>A list of loading dock storage keys.</returns>
+internal NativeList<StorageKey> GetLoadingDockKeys ()
     {
       var keys = new NativeList<StorageKey>(_loadingDockKeys.Count(), Allocator.Temp);
       foreach (var kvp in _loadingDockKeys)
@@ -1339,20 +1340,20 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Checks if an item is marked as not found in the cache.
-    /// </summary>
-    /// <param name="cacheKey">The key of the item to check.</param>
-    /// <returns>True if the item is marked as not found, false otherwise.</returns>
-    internal bool IsItemNotFound(ItemKey cacheKey)
+/// Checks if an item is marked as not found in the cache.
+/// </summary>
+/// <param name="cacheKey">The key of the item to check.</param>
+/// <returns>True if the item is marked as not found, false otherwise.</returns>
+internal bool IsItemNotFound (ItemKey cacheKey)
     {
       return _notFoundItems.Contains(cacheKey);
     }
 
     /// <summary>
-    /// Clears the cache for a specific entity.
-    /// </summary>
-    /// <param name="guid">The GUID of the entity to clear from cache.</param>
-    public void ClearCacheForEntity(Guid guid)
+/// Clears the cache for a specific entity.
+/// </summary>
+/// <param name="guid">The GUID of the entity to clear from cache.</param>
+public void ClearCacheForEntity (Guid guid)
     {
       var storageKey = new StorageKey(guid, StorageType.AnyShelf);
       if (_storageSlotsCache.TryGetValue(storageKey, out var slots))
@@ -1367,10 +1368,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Initializes caches for property data asynchronously.
-    /// </summary>
-    /// <returns>An enumerator for asynchronous cache initialization.</returns>
-    private IEnumerator InitializePropertyDataCaches()
+/// Initializes caches for property data asynchronously.
+/// </summary>
+/// <returns>An enumerator for asynchronous cache initialization.</returns>
+private IEnumerator InitializePropertyDataCaches ()
     {
       var slotKeys = new NativeList<SlotKeyData>(Allocator.TempJob);
       var results = new NativeList<SlotCacheEntry>(Allocator.TempJob);
@@ -1469,18 +1470,18 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes a slot cache item in a Burst-compatible manner.
-    /// </summary>
-    /// <param name="index">The index of the slot to process.</param>
-    /// <param name="inputs">The array of slot key data.</param>
-    /// <param name="outputs">The list to store cache entries.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    private void ProcessSlotCacheItemBurst(
-                int index,
-                NativeArray<SlotKeyData> inputs,
-                NativeList<SlotCacheEntry> outputs,
-                NativeList<LogEntry> logs)
+/// Processes a slot cache item in a Burst-compatible manner.
+/// </summary>
+/// <param name="index">The index of the slot to process.</param>
+/// <param name="inputs">The array of slot key data.</param>
+/// <param name="outputs">The list to store cache entries.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+private void ProcessSlotCacheItemBurst (
+            int index,
+            NativeArray<SlotKeyData> inputs,
+            NativeList<SlotCacheEntry> outputs,
+            NativeList<LogEntry> logs)
     {
       var keyData = inputs[index];
       outputs.Add(new SlotCacheEntry
@@ -1501,14 +1502,14 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes results of slot cache item processing.
-    /// </summary>
-    /// <param name="results">The list of slot cache entries.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    private void ProcessSlotCacheItemResults(
-            NativeList<SlotCacheEntry> results,
-            NativeList<LogEntry> logs)
+/// Processes results of slot cache item processing.
+/// </summary>
+/// <param name="results">The list of slot cache entries.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+private void ProcessSlotCacheItemResults (
+        NativeList<SlotCacheEntry> results,
+        NativeList<LogEntry> logs)
     {
       foreach (var entry in results)
       {
@@ -1531,10 +1532,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents data for a slot key used in cache initialization.
-    /// </summary>
-    [BurstCompile]
-    public struct SlotKeyData
+/// Represents data for a slot key used in cache initialization.
+/// </summary>
+[BurstCompile]
+public struct SlotKeyData
     {
       public Guid EntityGuid;
       public int SlotIndex;
@@ -1543,10 +1544,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Represents a cache entry for a slot.
-    /// </summary>
-    [BurstCompile]
-    public struct SlotCacheEntry
+/// Represents a cache entry for a slot.
+/// </summary>
+[BurstCompile]
+public struct SlotCacheEntry
     {
       public SlotKey Key;
       public int PropertyId;
@@ -1555,13 +1556,13 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Attempts to retrieve slots for a storage key from the cache.
-    /// </summary>
-    /// <param name="key">The storage key to retrieve slots for.</param>
-    /// <param name="slots">The retrieved slots, if any.</param>
-    /// <returns>True if slots were found, false otherwise.</returns>
-    [BurstCompile]
-    internal bool TryGetSlots(StorageKey key, out NativeList<SlotData> slots)
+/// Attempts to retrieve slots for a storage key from the cache.
+/// </summary>
+/// <param name="key">The storage key to retrieve slots for.</param>
+/// <param name="slots">The retrieved slots, if any.</param>
+/// <returns>True if slots were found, false otherwise.</returns>
+[BurstCompile]
+internal bool TryGetSlots (StorageKey key, out NativeList<SlotData> slots)
     {
       bool hit = _storageSlotsCache.TryGetValue(key, out slots);
       Metrics.TrackCacheAccess("StorageSlotsCache", hit);
@@ -1569,10 +1570,10 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Marks an item as not found in the cache.
-    /// </summary>
-    /// <param name="cacheKey">The key of the item to mark as not found.</param>
-    public void AddItemNotFound(ItemKey cacheKey)
+/// Marks an item as not found in the cache.
+/// </summary>
+/// <param name="cacheKey">The key of the item to mark as not found.</param>
+public void AddItemNotFound (ItemKey cacheKey)
     {
       _notFoundItems.Add(cacheKey);
 #if DEBUG
@@ -1581,22 +1582,22 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Clears an item from the not found cache.
-    /// </summary>
-    /// <param name="item">The item to clear from the not found cache.</param>
-    [BurstCompile]
-    public void ClearItemNotFoundCache(ItemKey item)
+/// Clears an item from the not found cache.
+/// </summary>
+/// <param name="item">The item to clear from the not found cache.</param>
+[BurstCompile]
+public void ClearItemNotFoundCache (ItemKey item)
     {
       _notFoundItems.Remove(item);
     }
 
     /// <summary>
-    /// Adds an item to the no drop-off cache.
-    /// </summary>
-    /// <param name="item">The item to add to the no drop-off cache.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void AddNoDropOffCache(ItemKey item, NativeList<LogEntry> logs)
+/// Adds an item to the no drop-off cache.
+/// </summary>
+/// <param name="item">The item to add to the no drop-off cache.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void AddNoDropOffCache (ItemKey item, NativeList<LogEntry> logs)
     {
       _noDropOffCache.Add(item);
 #if DEBUG
@@ -1610,12 +1611,12 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Removes an item from the no drop-off cache.
-    /// </summary>
-    /// <param name="item">The item to remove from the no drop-off cache.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void RemoveNoDropOffCache(ItemKey item, NativeList<LogEntry> logs)
+/// Removes an item from the no drop-off cache.
+/// </summary>
+/// <param name="item">The item to remove from the no drop-off cache.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void RemoveNoDropOffCache (ItemKey item, NativeList<LogEntry> logs)
     {
       _noDropOffCache.Remove(item);
 #if DEBUG
@@ -1629,12 +1630,12 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Clears zero quantity entries from the shelf search cache.
-    /// </summary>
-    /// <param name="shelf">The storage entity to process.</param>
-    /// <param name="items">The array of items to clear.</param>
-    /// <returns>An enumerator for asynchronous cache update.</returns>
-    public IEnumerator ClearZeroQuantityEntries(PlaceableStorageEntity shelf, ItemInstance[] items)
+/// Clears zero quantity entries from the shelf search cache.
+/// </summary>
+/// <param name="shelf">The storage entity to process.</param>
+/// <param name="items">The array of items to clear.</param>
+/// <returns>An enumerator for asynchronous cache update.</returns>
+public IEnumerator ClearZeroQuantityEntries (PlaceableStorageEntity shelf, ItemInstance[] items)
     {
       if (shelf == null || items == null || items.Length == 0)
       {
@@ -1668,20 +1669,20 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Clears a zero quantity entry from the shelf search cache in a Burst-compatible manner.
-    /// </summary>
-    /// <param name="index">The index of the item to process.</param>
-    /// <param name="inputs">The array of item keys.</param>
-    /// <param name="shelfSearchCache">The shelf search cache.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    /// <param name="shelfGuid">The GUID of the shelf.</param>
-    [BurstCompile]
-    private void ClearZeroQuantityEntriesBurst(
-                    int index,
-                    NativeArray<ItemKey> inputs,
-                    NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
-                    NativeList<LogEntry> logs,
-                    Guid shelfGuid)
+/// Clears a zero quantity entry from the shelf search cache in a Burst-compatible manner.
+/// </summary>
+/// <param name="index">The index of the item to process.</param>
+/// <param name="inputs">The array of item keys.</param>
+/// <param name="shelfSearchCache">The shelf search cache.</param>
+/// <param name="logs">The list to store log entries.</param>
+/// <param name="shelfGuid">The GUID of the shelf.</param>
+[BurstCompile]
+private void ClearZeroQuantityEntriesBurst (
+                int index,
+                NativeArray<ItemKey> inputs,
+                NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
+                NativeList<LogEntry> logs,
+                Guid shelfGuid)
     {
       var cacheKey = inputs[index];
       shelfSearchCache.Remove(cacheKey);
@@ -1696,11 +1697,11 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Removes entries from the shelf search cache.
-    /// </summary>
-    /// <param name="cacheKeys">The list of item keys to remove.</param>
-    /// <returns>An enumerator for asynchronous cache update.</returns>
-    internal IEnumerator RemoveShelfSearchCacheEntries(List<ItemKey> cacheKeys)
+/// Removes entries from the shelf search cache.
+/// </summary>
+/// <param name="cacheKeys">The list of item keys to remove.</param>
+/// <returns>An enumerator for asynchronous cache update.</returns>
+internal IEnumerator RemoveShelfSearchCacheEntries (List<ItemKey> cacheKeys)
     {
       if (cacheKeys == null || cacheKeys.Count == 0)
       {
@@ -1731,18 +1732,18 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Removes a shelf search cache entry in a Burst-compatible manner.
-    /// </summary>
-    /// <param name="index">The index of the item to process.</param>
-    /// <param name="inputs">The array of item keys.</param>
-    /// <param name="shelfSearchCache">The shelf search cache.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    private void RemoveShelfSearchCacheEntriesBurst(
-            int index,
-            NativeArray<ItemKey> inputs,
-            NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
-            NativeList<LogEntry> logs)
+/// Removes a shelf search cache entry in a Burst-compatible manner.
+/// </summary>
+/// <param name="index">The index of the item to process.</param>
+/// <param name="inputs">The array of item keys.</param>
+/// <param name="shelfSearchCache">The shelf search cache.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+private void RemoveShelfSearchCacheEntriesBurst (
+        int index,
+        NativeArray<ItemKey> inputs,
+        NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
+        NativeList<LogEntry> logs)
     {
       var cacheKey = inputs[index];
       shelfSearchCache.Remove(cacheKey);
@@ -1757,11 +1758,11 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Registers an item slot in the cache.
-    /// </summary>
-    /// <param name="slot">The item slot to register.</param>
-    /// <param name="storageKey">The storage key associated with the slot.</param>
-    internal void RegisterItemSlot(ItemSlot slot, StorageKey storageKey)
+/// Registers an item slot in the cache.
+/// </summary>
+/// <param name="slot">The item slot to register.</param>
+/// <param name="storageKey">The storage key associated with the slot.</param>
+internal void RegisterItemSlot (ItemSlot slot, StorageKey storageKey)
     {
       if (slot.ItemInstance != null)
       {
@@ -1777,11 +1778,11 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Unregisters an item slot from the cache.
-    /// </summary>
-    /// <param name="slot">The item slot to unregister.</param>
-    /// <param name="storageKey">The storage key associated with the slot.</param>
-    internal void UnregisterItemSlot(ItemSlot slot, StorageKey storageKey)
+/// Unregisters an item slot from the cache.
+/// </summary>
+/// <param name="slot">The item slot to unregister.</param>
+/// <param name="storageKey">The storage key associated with the slot.</param>
+internal void UnregisterItemSlot (ItemSlot slot, StorageKey storageKey)
     {
       if (slot.ItemInstance != null)
       {
@@ -1801,17 +1802,17 @@ namespace NoLazyWorkers.Storage
     internal static class CacheServicePatches
     {
       /// <summary>
-      /// Applies patches to the Property class for cache management.
-      /// </summary>
-      [HarmonyPatch(typeof(Property))]
-      public class PropertyPatch
+/// Applies patches to the Property class for cache management.
+/// </summary>
+[HarmonyPatch(typeof(Property))]
+public class PropertyPatch
       {
         /// <summary>
-        /// Activates the cache service after a property is set as owned.
-        /// </summary>
-        [HarmonyPostfix]
-        [HarmonyPatch("SetOwned")]
-        public static void SetOwnedPostfix(Property __instance)
+/// Activates the cache service after a property is set as owned.
+/// </summary>
+[HarmonyPostfix]
+[HarmonyPatch("SetOwned")]
+public static void SetOwnedPostfix (Property __instance)
         {
           var cacheManager = GetOrCreateCacheService(__instance);
           cacheManager.Activate();
@@ -1819,19 +1820,19 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Applies patches to the LoadingDock class for cache updates.
-      /// </summary>
-      [HarmonyPatch(typeof(LoadingDock))]
-      public class LoadingDockPatch
+/// Applies patches to the LoadingDock class for cache updates.
+/// </summary>
+[HarmonyPatch(typeof(LoadingDock))]
+public class LoadingDockPatch
       {
         /// <summary>
-        /// Updates the cache when a loading dock's occupant is set.
-        /// </summary>
-        /// <param name="__instance">The loading dock instance.</param>
-        /// <param name="occupant">The vehicle occupying the loading dock.</param>
-        [HarmonyPostfix]
-        [HarmonyPatch("SetOccupant")]
-        public static void SetOccupant_Postfix(LoadingDock __instance, LandVehicle occupant)
+/// Updates the cache when a loading dock's occupant is set.
+/// </summary>
+/// <param name="__instance">The loading dock instance.</param>
+/// <param name="occupant">The vehicle occupying the loading dock.</param>
+[HarmonyPostfix]
+[HarmonyPatch("SetOccupant")]
+public static void SetOccupant_Postfix (LoadingDock __instance, LandVehicle occupant)
         {
           var storageKey = new StorageKey(__instance.GUID, StorageType.LoadingDock);
           var cacheManager = GetOrCreateCacheService(__instance.ParentProperty);
@@ -1845,24 +1846,24 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Applies patches to the GridItem class for storage initialization and cleanup.
-      /// </summary>
-      [HarmonyPatch(typeof(GridItem))]
-      public class GridItemPatch
+/// Applies patches to the GridItem class for storage initialization and cleanup.
+/// </summary>
+[HarmonyPatch(typeof(GridItem))]
+public class GridItemPatch
       {
         /// <summary>
-        /// Initializes storage for a grid item if applicable.
-        /// </summary>
-        /// <param name="__instance">The grid item instance.</param>
-        /// <param name="instance">The item instance to initialize.</param>
-        /// <param name="grid">The grid the item is placed on.</param>
-        /// <param name="originCoordinate">The origin coordinate of the item.</param>
-        /// <param name="rotation">The rotation of the item.</param>
-        /// <param name="id">The ID of the item.</param>
-        /// <returns>True if initialization should proceed, false otherwise.</returns>
-        [HarmonyPrefix]
-        [HarmonyPatch("InitializeGridItem", new Type[] { typeof(ItemInstance), typeof(Grid), typeof(Vector2), typeof(int), typeof(string) })]
-        public static bool InitializeGridItemPrefix(GridItem __instance, ItemInstance instance, Grid grid, Vector2 originCoordinate, int rotation, string id)
+/// Initializes storage for a grid item if applicable.
+/// </summary>
+/// <param name="__instance">The grid item instance.</param>
+/// <param name="instance">The item instance to initialize.</param>
+/// <param name="grid">The grid the item is placed on.</param>
+/// <param name="originCoordinate">The origin coordinate of the item.</param>
+/// <param name="rotation">The rotation of the item.</param>
+/// <param name="id">The ID of the item.</param>
+/// <returns>True if initialization should proceed, false otherwise.</returns>
+[HarmonyPrefix]
+[HarmonyPatch("InitializeGridItem", new Type[] { typeof(ItemInstance), typeof(Grid), typeof(Vector2), typeof(int), typeof(string) })]
+public static bool InitializeGridItemPrefix (GridItem __instance, ItemInstance instance, Grid grid, Vector2 originCoordinate, int rotation, string id)
         {
           try
           {
@@ -1888,13 +1889,13 @@ namespace NoLazyWorkers.Storage
         }
 
         /// <summary>
-        /// Cleans up cache entries when a grid item is destroyed.
-        /// </summary>
-        /// <param name="__instance">The grid item instance.</param>
-        /// <param name="callOnServer">Whether to call the destroy on the server.</param>
-        [HarmonyPostfix]
-        [HarmonyPatch("DestroyItem")]
-        public static void DestroyItemPostfix(GridItem __instance, bool callOnServer = true)
+/// Cleans up cache entries when a grid item is destroyed.
+/// </summary>
+/// <param name="__instance">The grid item instance.</param>
+/// <param name="callOnServer">Whether to call the destroy on the server.</param>
+[HarmonyPostfix]
+[HarmonyPatch("DestroyItem")]
+public static void DestroyItemPostfix (GridItem __instance, bool callOnServer = true)
         {
           if (__instance is PlaceableStorageEntity storage)
           {
@@ -1912,20 +1913,20 @@ namespace NoLazyWorkers.Storage
       }
 
       /// <summary>
-      /// Applies patches to the ItemSlot class for cache updates on slot changes.
-      /// </summary>
-      [HarmonyPatch(typeof(ItemSlot))]
-      public class ItemSlotPatch
+/// Applies patches to the ItemSlot class for cache updates on slot changes.
+/// </summary>
+[HarmonyPatch(typeof(ItemSlot))]
+public class ItemSlotPatch
       {
         /// <summary>
-        /// Updates cache when an item slot's quantity changes.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="change">The quantity change.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
-        [HarmonyPostfix]
-        [HarmonyPatch("ChangeQuantity")]
-        public static void ChangeQuantityPostfix(ItemSlot __instance, int change, bool _internal)
+/// Updates cache when an item slot's quantity changes.
+/// </summary>
+/// <param name="__instance">The item slot instance.</param>
+/// <param name="change">The quantity change.</param>
+/// <param name="_internal">Whether the change is internal.</param>
+[HarmonyPostfix]
+[HarmonyPatch("ChangeQuantity")]
+public static void ChangeQuantityPostfix (ItemSlot __instance, int change, bool _internal)
         {
           if (change == 0 || __instance.ItemInstance == null) return;
           var owner = __instance.SlotOwner;
@@ -1948,14 +1949,14 @@ namespace NoLazyWorkers.Storage
         }
 
         /// <summary>
-        /// Updates cache when an item is set in a slot.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="instance">The item instance to set.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
-        [HarmonyPostfix]
-        [HarmonyPatch("SetStoredItem")]
-        public static void SetStoredItemPostfix(ItemSlot __instance, ItemInstance instance, bool _internal)
+/// Updates cache when an item is set in a slot.
+/// </summary>
+/// <param name="__instance">The item slot instance.</param>
+/// <param name="instance">The item instance to set.</param>
+/// <param name="_internal">Whether the change is internal.</param>
+[HarmonyPostfix]
+[HarmonyPatch("SetStoredItem")]
+public static void SetStoredItemPostfix (ItemSlot __instance, ItemInstance instance, bool _internal)
         {
           var owner = __instance.SlotOwner as BuildableItem;
           if (owner == null || instance == null || owner.ParentProperty == null)
@@ -2011,13 +2012,13 @@ namespace NoLazyWorkers.Storage
         }
 
         /// <summary>
-        /// Updates cache when an item is cleared from a slot.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
-        [HarmonyPostfix]
-        [HarmonyPatch("ClearStoredInstance")]
-        public static void ClearStoredInstancePostfix(ItemSlot __instance, bool _internal)
+/// Updates cache when an item is cleared from a slot.
+/// </summary>
+/// <param name="__instance">The item slot instance.</param>
+/// <param name="_internal">Whether the change is internal.</param>
+[HarmonyPostfix]
+[HarmonyPatch("ClearStoredInstance")]
+public static void ClearStoredInstancePostfix (ItemSlot __instance, bool _internal)
         {
           var owner = __instance.SlotOwner as BuildableItem;
           if (owner == null || owner.ParentProperty == null)
@@ -2076,26 +2077,26 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Finds items in storage that match the target item and required quantity.
-    /// </summary>
-    /// <param name="index">The index of the storage key to process.</param>
-    /// <param name="inputs">The array of storage keys.</param>
-    /// <param name="outputs">The list to store results.</param>
-    /// <param name="targetItem">The target item to find.</param>
-    /// <param name="needed">The required quantity.</param>
-    /// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    /// <param name="storageSlotsCache">The cache of storage slots.</param>
-    [BurstCompile]
-    public void FindItem(
-                int index,
-                NativeArray<StorageKey> inputs,
-                NativeList<StorageResultBurst> outputs,
-                ItemData targetItem,
-                int needed,
-                bool allowTargetHigherQuality,
-                NativeList<LogEntry> logs,
-                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache)
+/// Finds items in storage that match the target item and required quantity.
+/// </summary>
+/// <param name="index">The index of the storage key to process.</param>
+/// <param name="inputs">The array of storage keys.</param>
+/// <param name="outputs">The list to store results.</param>
+/// <param name="targetItem">The target item to find.</param>
+/// <param name="needed">The required quantity.</param>
+/// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
+/// <param name="logs">The list to store log entries.</param>
+/// <param name="storageSlotsCache">The cache of storage slots.</param>
+[BurstCompile]
+public void FindItem (
+            int index,
+            NativeArray<StorageKey> inputs,
+            NativeList<StorageResultBurst> outputs,
+            ItemData targetItem,
+            int needed,
+            bool allowTargetHigherQuality,
+            NativeList<LogEntry> logs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache)
     {
       var storageKey = inputs[index];
       if (TryGetSlots(storageKey, out var slots))
@@ -2142,24 +2143,24 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes results of item search and updates caches.
-    /// </summary>
-    /// <param name="results">The list of storage results.</param>
-    /// <param name="shelfSearchCache">The cache for shelf search results.</param>
-    /// <param name="filteredStorageKeys">The cache for filtered storage keys.</param>
-    /// <param name="storagePropertyMap">The map of storage keys to property IDs.</param>
-    /// <param name="propertyId">The ID of the property.</param>
-    /// <param name="targetItem">The target item data.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void FindItemResults(
-            NativeList<StorageResultBurst> results,
-            NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
-            NativeParallelHashMap<ItemKey, NativeList<StorageKey>> filteredStorageKeys,
-            NativeParallelHashMap<StorageKey, int> storagePropertyMap,
-            int propertyId,
-            ItemData targetItem,
-            NativeList<LogEntry> logs)
+/// Processes results of item search and updates caches.
+/// </summary>
+/// <param name="results">The list of storage results.</param>
+/// <param name="shelfSearchCache">The cache for shelf search results.</param>
+/// <param name="filteredStorageKeys">The cache for filtered storage keys.</param>
+/// <param name="storagePropertyMap">The map of storage keys to property IDs.</param>
+/// <param name="propertyId">The ID of the property.</param>
+/// <param name="targetItem">The target item data.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void FindItemResults (
+        NativeList<StorageResultBurst> results,
+        NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
+        NativeParallelHashMap<ItemKey, NativeList<StorageKey>> filteredStorageKeys,
+        NativeParallelHashMap<StorageKey, int> storagePropertyMap,
+        int propertyId,
+        ItemData targetItem,
+        NativeList<LogEntry> logs)
     {
       var cacheUpdates = new NativeList<(ItemKey, (StorageKey, int, NativeList<SlotData>))>(results.Length, Allocator.Temp);
       foreach (var result in results)
@@ -2199,18 +2200,18 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Updates the station refill list in a Burst-compatible manner.
-    /// </summary>
-    /// <param name="index">The index of the station to process.</param>
-    /// <param name="inputs">The array of station data.</param>
-    /// <param name="item">The item to add to the refill list.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void UpdateStationRefillListBurst(
-                    int index,
-                    NativeArray<(Guid, NativeList<ItemKey>)> inputs,
-                    ItemKey item,
-                    NativeList<LogEntry> logs)
+/// Updates the station refill list in a Burst-compatible manner.
+/// </summary>
+/// <param name="index">The index of the station to process.</param>
+/// <param name="inputs">The array of station data.</param>
+/// <param name="item">The item to add to the refill list.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void UpdateStationRefillListBurst (
+                int index,
+                NativeArray<(Guid, NativeList<ItemKey>)> inputs,
+                ItemKey item,
+                NativeList<LogEntry> logs)
     {
       var (stationGuid, refillList) = inputs[index];
       if (!refillList.Contains(item))
@@ -2228,26 +2229,26 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Finds delivery destinations for an item.
-    /// </summary>
-    /// <param name="index">The index of the input to process.</param>
-    /// <param name="inputs">The array of storage keys and station flags.</param>
-    /// <param name="outputs">The list to store results.</param>
-    /// <param name="quantity">The quantity to deliver.</param>
-    /// <param name="sourceGuid">The GUID of the source entity.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    /// <param name="storageSlotsCache">The cache of storage slots.</param>
-    /// <param name="remainingQty">The remaining quantity to allocate.</param>
-    [BurstCompile]
-    public void FindDeliveryDestinationBurst(
-                int index,
-                NativeArray<(StorageKey Key, bool IsStation)> inputs,
-                NativeList<DeliveryDestinationBurst> outputs,
-                int quantity,
-                Guid sourceGuid,
-                NativeList<LogEntry> logs,
-                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
-                ref int remainingQty)
+/// Finds delivery destinations for an item.
+/// </summary>
+/// <param name="index">The index of the input to process.</param>
+/// <param name="inputs">The array of storage keys and station flags.</param>
+/// <param name="outputs">The list to store results.</param>
+/// <param name="quantity">The quantity to deliver.</param>
+/// <param name="sourceGuid">The GUID of the source entity.</param>
+/// <param name="logs">The list to store log entries.</param>
+/// <param name="storageSlotsCache">The cache of storage slots.</param>
+/// <param name="remainingQty">The remaining quantity to allocate.</param>
+[BurstCompile]
+public void FindDeliveryDestinationBurst (
+            int index,
+            NativeArray<(StorageKey Key, bool IsStation)> inputs,
+            NativeList<DeliveryDestinationBurst> outputs,
+            int quantity,
+            Guid sourceGuid,
+            NativeList<LogEntry> logs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            ref int remainingQty)
     {
       var (storageKey, isStation) = inputs[index];
       if (!isStation && storageKey.Guid == sourceGuid) return;
@@ -2299,14 +2300,14 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes delivery destination results.
-    /// </summary>
-    /// <param name="destinations">The list of delivery destinations.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void FindDeliveryDestinationResults(
-            NativeList<DeliveryDestinationBurst> destinations,
-            NativeList<LogEntry> logs)
+/// Processes delivery destination results.
+/// </summary>
+/// <param name="destinations">The list of delivery destinations.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void FindDeliveryDestinationResults (
+        NativeList<DeliveryDestinationBurst> destinations,
+        NativeList<LogEntry> logs)
     {
       foreach (var destination in destinations)
       {
@@ -2322,22 +2323,22 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Finds available slots for an item.
-    /// </summary>
-    /// <param name="index">The index of the slot to process.</param>
-    /// <param name="inputs">The array of slot data.</param>
-    /// <param name="outputs">The list to store results.</param>
-    /// <param name="item">The item to store.</param>
-    /// <param name="quantity">The quantity to store.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void FindAvailableSlotsBurst(
-                int index,
-                NativeArray<SlotData> inputs,
-                NativeList<SlotResult> outputs,
-                ItemData item,
-                int quantity,
-                NativeList<LogEntry> logs)
+/// Finds available slots for an item.
+/// </summary>
+/// <param name="index">The index of the slot to process.</param>
+/// <param name="inputs">The array of slot data.</param>
+/// <param name="outputs">The list to store results.</param>
+/// <param name="item">The item to store.</param>
+/// <param name="quantity">The quantity to store.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void FindAvailableSlotsBurst (
+            int index,
+            NativeArray<SlotData> inputs,
+            NativeList<SlotResult> outputs,
+            ItemData item,
+            int quantity,
+            NativeList<LogEntry> logs)
     {
       var slot = inputs[index];
       if (!slot.IsValid || slot.IsLocked) return;
@@ -2356,16 +2357,16 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes slot availability results.
-    /// </summary>
-    /// <param name="results">The list of slot results.</param>
-    /// <param name="slots">The list of item slots.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void FindAvailableSlotsBurstResults(
-                NativeList<SlotResult> results,
-                List<ItemSlot> slots,
-                NativeList<LogEntry> logs)
+/// Processes slot availability results.
+/// </summary>
+/// <param name="results">The list of slot results.</param>
+/// <param name="slots">The list of item slots.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void FindAvailableSlotsBurstResults (
+            NativeList<SlotResult> results,
+            List<ItemSlot> slots,
+            NativeList<LogEntry> logs)
     {
       foreach (var result in results)
       {
@@ -2381,18 +2382,18 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes slot operations (insert/remove).
-    /// </summary>
-    /// <param name="index">The index of the operation to process.</param>
-    /// <param name="inputs">The array of operation data.</param>
-    /// <param name="outputs">The list to store results.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void ProcessSlotOperationsBurst(
-                int index,
-                NativeArray<OperationData> inputs,
-                NativeList<SlotOperationResult> outputs,
-                NativeList<LogEntry> logs)
+/// Processes slot operations (insert/remove).
+/// </summary>
+/// <param name="index">The index of the operation to process.</param>
+/// <param name="inputs">The array of operation data.</param>
+/// <param name="outputs">The list to store results.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void ProcessSlotOperationsBurst (
+            int index,
+            NativeArray<OperationData> inputs,
+            NativeList<SlotOperationResult> outputs,
+            NativeList<LogEntry> logs)
     {
       var op = inputs[index];
       if (!op.IsValid || op.Quantity <= 0)
@@ -2438,20 +2439,20 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Processes results of slot operations and updates the operation list.
-    /// </summary>
-    /// <param name="results">The list of slot operation results.</param>
-    /// <param name="operations">The list of slot operations.</param>
-    /// <param name="opList">The list to store processed operations.</param>
-    /// <param name="networkObjectCache">The cache of network objects.</param>
-    /// <param name="logs">The list to store log entries.</param>
-    [BurstCompile]
-    public void ProcessOperationResults(
-            NativeList<SlotOperationResult> results,
-            List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)> operations,
-            List<SlotOperation> opList,
-            List<NetworkObject> networkObjectCache,
-            NativeList<LogEntry> logs)
+/// Processes results of slot operations and updates the operation list.
+/// </summary>
+/// <param name="results">The list of slot operation results.</param>
+/// <param name="operations">The list of slot operations.</param>
+/// <param name="opList">The list to store processed operations.</param>
+/// <param name="networkObjectCache">The cache of network objects.</param>
+/// <param name="logs">The list to store log entries.</param>
+[BurstCompile]
+public void ProcessOperationResults (
+        NativeList<SlotOperationResult> results,
+        List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)> operations,
+        List<SlotOperation> opList,
+        List<NetworkObject> networkObjectCache,
+        NativeList<LogEntry> logs)
     {
       foreach (var res in results)
       {
@@ -2564,9 +2565,9 @@ namespace NoLazyWorkers.Storage
     private bool IsInitialized { get; set; }
 
     /// <summary>
-    /// Initializes the StorageManager, setting up necessary services if running on the server.
-    /// </summary>
-    public static void Initialize()
+/// Initializes the StorageManager, setting up necessary services if running on the server.
+/// </summary>
+public static void Initialize ()
     {
       if (Instance.IsInitialized)
       {
@@ -2578,9 +2579,9 @@ namespace NoLazyWorkers.Storage
     }
 
     /// <summary>
-    /// Cleans up resources and resets the StorageManager state.
-    /// </summary>
-    public static void Cleanup()
+/// Cleans up resources and resets the StorageManager state.
+/// </summary>
+public static void Cleanup ()
     {
       if (!Instance.IsInitialized)
       {

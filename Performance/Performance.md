@@ -6,7 +6,52 @@ Date: June 28, 2025
 
 The `NoLazyWorkers.Performance` namespace provides a high-performance job scheduling and execution system optimized for Unity, leveraging Unity's Job System, Burst compilation, and dynamic profiling to minimize main thread impact. It includes job wrappers, execution time tracking, dynamic batch size load spreading, and smart execution strategies for single items, multiple items, and transform operations. The updated API introduces support for both Burst-compiled and non-Burst delegates, enhancing flexibility for non-Burst scenarios while maintaining performance optimizations.
 
-Delegates must be Burst-compiled for Burst jobs, but non-Burst delegates are supported for main thread or coroutine execution.The system dynamically chooses the optimal execution path(main thread, coroutine, or job) based on performance metrics.Heavy methods should use smart execution for load spreading.
+Delegates must be Burst-compiled for Burst jobs, but non-Burst delegates are supported for main thread or coroutine execution. The system dynamically sets thresholds and chooses the optimal execution path(main thread, coroutine, or job) based on performance metrics. Heavy methods should use smart execution for load spreading. Non-Burst execution should be used to handle potentially heavy iterations when burst-compiling is not feasible.
+
+Delegates need to use Deferred logging for Job compatibility. Use yield return ProcessLogs.
+
+```csharp
+public static class Deferred
+{
+  public static IEnumerator ProcessLogs(NativeList<LogEntry> logs)
+  {
+    var outputs = new List<FixedString64Bytes>();
+    yield return SmartExecution.Execute(
+        uniqueId: nameof(ProcessLogs),
+        itemCount: logs.Length,
+        nonBurstDelegate: (start, count, inputs, outputs) =>
+        {
+          for (int i = start; i < start + count; i++)
+          {
+            var log = logs[i];
+            outputs.Add($"{log.Level}: {log.Message} [{log.Category}]");
+          }
+        },
+        nonBurstResultsDelegate: (results) =>
+        {
+          foreach (var log in results)
+          {
+            Log(Level.Info, log.ToString(), Category.Storage);
+          }
+        },
+        inputs: logs.Select(l => l).ToArray(),
+        outputs: outputs,
+        options: default
+    );
+  }
+
+  /// <summary>
+  /// Represents a log entry for deferred logging in Burst jobs.
+  /// </summary>
+  [BurstCompile]
+  public struct LogEntry
+  {
+    public FixedString128Bytes Message;
+    public Level Level;
+    public Category Category;
+  }
+}
+```
 
 ---
 
@@ -165,9 +210,9 @@ public static IEnumerator Start()
           itemCount: 100,
           burstForDelegate: ProcessMultipleItems,
           burstResultsDelegate: null,
-          nonBurstResultsDelegate: ProcessNonBurstResults,
           inputs: inputs,
           outputs: outputs,
+          nonBurstResultsDelegate: ProcessNonBurstResults,
           options: options
       );
     }

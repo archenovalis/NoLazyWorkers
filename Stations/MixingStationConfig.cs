@@ -20,12 +20,12 @@ using static NoLazyWorkers.Stations.MixingStationUtilities;
 using static NoLazyWorkers.Stations.MixingStationConfigUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Storage.ManagedDictionaries;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Property;
 using ScheduleOne.Persistence.Datas;
 using static NoLazyWorkers.Debug;
+using static NoLazyWorkers.Storage.Extensions;
 
 namespace NoLazyWorkers.Stations
 {
@@ -39,6 +39,7 @@ namespace NoLazyWorkers.Stations
       private readonly MixingStation _station;
       private readonly StationRouteManager _routeManager;
       private StationState<MixingStationStates> _stationState;
+      private StationData _stationData;
 
       public MixingStationAdapter(MixingStation station)
       {
@@ -57,6 +58,7 @@ namespace NoLazyWorkers.Stations
           RouteManagers[station.GUID] = new StationRouteManager(station.stationConfiguration, station);
         }
         _routeManager = RouteManagers[station.GUID];
+        _stationData = new StationData(this);
       }
 
       public MixingStation Station => _station;
@@ -77,6 +79,7 @@ namespace NoLazyWorkers.Stations
       public Type TypeOf => _station.GetType();
       public void StartOperation(Employee employee) => (employee as Chemist).StartMixingStation(_station);
       public List<ItemInstance> RefillList() => _routeManager.Refills.Where(item => item != null).ToList();
+      public StationData StationData => _stationData;
       public bool CanRefill(ItemInstance item) => item.CanRefill(_routeManager);
       public IStationState StationState
       {

@@ -7,6 +7,7 @@ using UnityEngine;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Storage.Extensions;
 using NoLazyWorkers.Storage;
+using Unity.Collections;
 
 namespace NoLazyWorkers.Stations
 {
@@ -30,6 +31,7 @@ namespace NoLazyWorkers.Stations
       BuildableItem Buildable { get; }
       Property ParentProperty { get; }
       List<ItemInstance> RefillList();
+      StationData StationData { get; }
       bool CanRefill(ItemInstance item);
       Type TypeOf { get; }
       IStationState StationState { get; set; }
@@ -48,42 +50,17 @@ namespace NoLazyWorkers.Stations
     {
       public StationState(IStationAdapter adapter)
       {
-        // Initialize Station in CacheManager
-        var cacheManager = CacheService.GetOrCreateCacheManager(adapter.ParentProperty);
+        // Initialize Station in CacheService
+        var cacheService = CacheService.GetOrCreateCacheService(adapter.ParentProperty);
+        cacheService.StationData.Add(new StationData(adapter));
         var storageKey = new StorageKey { Guid = adapter.GUID, Type = StorageType.Station };
         foreach (var slot in adapter.InsertSlots)
-          cacheManager.RegisterItemSlot(slot, storageKey);
+          cacheService.RegisterItemSlot(slot, storageKey);
         foreach (var slot in adapter.ProductSlots)
-          cacheManager.RegisterItemSlot(slot, storageKey);
-        cacheManager.RegisterItemSlot(adapter.OutputSlot, storageKey);
-        var slotData = new List<SlotData>();
-        for (int i = 0; i < adapter.InsertSlots.Count; i++)
-          slotData.Add(new SlotData
-          {
-            Item = adapter.InsertSlots[i].ItemInstance != null ? new ItemData(adapter.InsertSlots[i].ItemInstance) : ItemData.Empty,
-            Quantity = adapter.InsertSlots[i].Quantity,
-            SlotIndex = adapter.InsertSlots[i].SlotIndex,
-            StackLimit = adapter.InsertSlots[i].ItemInstance != null ? adapter.InsertSlots[i].GetCapacityForItem(adapter.InsertSlots[i].ItemInstance) : -1,
-            IsValid = true
-          });
-        for (int i = 0; i < adapter.ProductSlots.Count; i++)
-          slotData.Add(new SlotData
-          {
-            Item = adapter.ProductSlots[i].ItemInstance != null ? new ItemData(adapter.ProductSlots[i].ItemInstance) : ItemData.Empty,
-            Quantity = adapter.ProductSlots[i].Quantity,
-            SlotIndex = adapter.ProductSlots[i].SlotIndex,
-            StackLimit = adapter.ProductSlots[i].ItemInstance != null ? adapter.ProductSlots[i].GetCapacityForItem(adapter.ProductSlots[i].ItemInstance) : -1,
-            IsValid = true
-          });
-        slotData.Add(new SlotData
-        {
-          Item = adapter.OutputSlot.ItemInstance != null ? new ItemData(adapter.OutputSlot.ItemInstance) : ItemData.Empty,
-          Quantity = adapter.OutputSlot.Quantity,
-          SlotIndex = adapter.OutputSlot.SlotIndex,
-          StackLimit = adapter.OutputSlot.ItemInstance != null ? adapter.OutputSlot.GetCapacityForItem(adapter.OutputSlot.ItemInstance) : -1,
-          IsValid = true
-        });
-        cacheManager.QueueSlotUpdate(storageKey, slotData);
+          cacheService.RegisterItemSlot(slot, storageKey);
+        cacheService.RegisterItemSlot(adapter.OutputSlot, storageKey);
+        List<ItemSlot> itemSlots = [.. adapter.InsertSlots, .. adapter.ProductSlots, .. new[] { adapter.OutputSlot }];
+        StorageManager.UpdateStorageCache(adapter.ParentProperty, adapter.GUID, itemSlots, StorageType.Station);
       }
 
       public TStates State { get; set; } // Type-safe state

@@ -89,11 +89,25 @@ namespace NoLazyWorkers
     /// </summary>
     public static class Deferred
     {
-      public static void ProcessLogs(NativeList<LogEntry> logs)
+      public static IEnumerator ProcessLogs(NativeList<LogEntry> logs)
       {
-        foreach (var log in logs)
-          Log(log.Level, log.Message.ToString(), log.Category);
-        logs.Dispose();
+        var outputs = new List<FixedString64Bytes>();
+        yield return SmartExecution.Execute(
+            uniqueId: nameof(ProcessLogs),
+            itemCount: logs.Length,
+            nonBurstDelegate: (start, count, inputs, outputs) =>
+            {
+              for (int i = start; i < start + count; i++)
+              {
+                var log = logs[i];
+                Log(Level.Info, log.ToString(), Category.Storage);
+              }
+            },
+            nonBurstResultsDelegate: null,
+            inputs: logs.Select(l => l).ToArray(),
+            outputs: outputs,
+            options: default
+        );
       }
 
       /// <summary>
