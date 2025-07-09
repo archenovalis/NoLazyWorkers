@@ -437,7 +437,7 @@ namespace NoLazyWorkers.Employees
     private async Task<TaskDescriptor?> CheckEmployeeInitiatedTasks()
     {
       // Check DeliverInventory
-      var definition = TaskRegistry.Get(TaskTypes.DeliverInventory);
+      var definition = TaskRegistry.Get(TaskName.DeliverInventory);
       if (definition == null)
         return null;
 

@@ -51,9 +51,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
     // StateValidation Task
     public class StateValidationTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagingStationState;
+      public TaskName Type => TaskName.PackagingStationState;
       public int Priority => 5;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => false;
       public bool RequiresDropoff => false;
       public TransitTypes PickupType => TransitTypes.PackagingStation;
@@ -149,22 +149,22 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
           state.State.TaskContext = new TaskContext { Station = stationAdapter };
           var (isReady, nextStep, packagingId, productItem) = await Utilities.IsStationReady(station, packager, state);
-          TaskTypes? followUpTask = null;
+          TaskName? followUpTask = null;
 
           if (!isReady)
           {
             if (nextStep == "Unpackage")
-              followUpTask = TaskTypes.PackagingStationUnpackage;
+              followUpTask = TaskName.PackagingStationUnpackage;
             else if (nextStep == "Fetch" || nextStep == "Refill")
-              followUpTask = TaskTypes.PackagingStationFetchPackaging;
+              followUpTask = TaskName.PackagingStationFetchPackaging;
           }
           else if (station.ProductSlot?.ItemInstance != null && station.ProductSlot.Quantity > 0)
           {
-            followUpTask = TaskTypes.PackagingStationOperate;
+            followUpTask = TaskName.PackagingStationOperate;
           }
           else if (station.OutputSlot?.ItemInstance != null && station.OutputSlot.Quantity > 0)
           {
-            followUpTask = TaskTypes.PackagingStationDeliver;
+            followUpTask = TaskName.PackagingStationDeliver;
           }
 
           if (followUpTask.HasValue)
@@ -193,9 +193,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
     // UnpackageBaggies Task
     public class UnpackageBaggiesTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagingStationUnpackage;
+      public TaskName Type => TaskName.PackagingStationUnpackage;
       public int Priority => 4;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => false;
       public bool RequiresDropoff => false;
       public TransitTypes PickupType => TransitTypes.PackagingStation;
@@ -203,7 +203,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       public IEntitySelector EntitySelector { get; } = new PackagingStationEntitySelector();
       public ITaskValidator Validator { get; } = new UnpackageBaggiesValidator();
       public ITaskExecutor Executor { get; } = new UnpackageBaggiesExecutor();
-      public TaskTypes FollowUpTask => TaskTypes.PackagingStationState;
+      public TaskName FollowUpTask => TaskName.PackagingStationState;
     }
 
     [BurstCompile]
@@ -330,9 +330,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
     // FetchPackaging Task
     public class FetchPackagingTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagingStationFetchPackaging;
+      public TaskName Type => TaskName.PackagingStationFetchPackaging;
       public int Priority => 3;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => true;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.PlaceableStorageEntity;
@@ -340,7 +340,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       public IEntitySelector EntitySelector { get; } = new PackagingStationEntitySelector();
       public ITaskValidator Validator { get; } = new FetchPackagingValidator();
       public ITaskExecutor Executor { get; } = new FetchPackagingExecutor();
-      public TaskTypes FollowUpTask => TaskTypes.PackagingStationState;
+      public TaskName FollowUpTask => TaskName.PackagingStationState;
     }
 
     [BurstCompile]
@@ -515,9 +515,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
     // StartPackaging Task
     public class StartPackagingTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagingStationOperate;
+      public TaskName Type => TaskName.PackagingStationOperate;
       public int Priority => 3;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => false;
       public bool RequiresDropoff => false;
       public TransitTypes PickupType => TransitTypes.PackagingStation;
@@ -525,7 +525,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       public IEntitySelector EntitySelector { get; } = new PackagingStationEntitySelector();
       public ITaskValidator Validator { get; } = new StartPackagingValidator();
       public ITaskExecutor Executor { get; } = new StartPackagingExecutor();
-      public TaskTypes FollowUpTask => TaskTypes.PackagingStationState;
+      public TaskName FollowUpTask => TaskName.PackagingStationState;
     }
 
     [BurstCompile]
@@ -662,9 +662,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
     // DeliverOutput Task
     public class DeliverOutputTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagingStationDeliver;
+      public TaskName Type => TaskName.PackagingStationDeliver;
       public int Priority => 2;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => true;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.PackagingStation;
@@ -672,7 +672,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       public IEntitySelector EntitySelector { get; } = new PackagingStationEntitySelector();
       public ITaskValidator Validator { get; } = new DeliverOutputValidator();
       public ITaskExecutor Executor { get; } = new DeliverOutputExecutor();
-      public TaskTypes FollowUpTask => TaskTypes.PackagingStationState;
+      public TaskName FollowUpTask => TaskName.PackagingStationState;
     }
 
     [BurstCompile]

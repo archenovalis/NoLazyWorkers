@@ -33,9 +33,9 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
     /// </summary>
     public class DeliverInventoryTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.DeliverInventory;
+      public TaskName Type => TaskName.DeliverInventory;
       public int Priority => 40;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Any;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Any;
       public bool RequiresPickup => false;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.Inventory;

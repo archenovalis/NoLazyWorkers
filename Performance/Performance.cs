@@ -1159,9 +1159,9 @@ namespace NoLazyWorkers.Performance
         string uniqueId,
         int itemCount,
         Action<int, int, TInput[], List<TOutput>> nonBurstDelegate,
-        Action<List<TOutput>> nonBurstResultsDelegate,
-        TInput[] inputs,
-        List<TOutput> outputs,
+        TInput[] inputs = default,
+        List<TOutput> outputs = default,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
         Action<List<TOutput>> burstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TOutput : unmanaged
@@ -1442,6 +1442,47 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
+    /// Executes a Burst-compiled job for a single item using a simplified delegate without index parameters.
+    /// </summary>
+    /// <param name="uniqueId">Unique identifier for the job, used for metrics tracking.</param>
+    /// <param name="burstDelegate">Burst-compiled delegate to process a single item.</param>
+    /// <param name="burstResultsDelegate">Optional Burst-compiled delegate to process results.</param>
+    /// <param name="inputs">Input data as a NativeArray. Must be created and disposed by the caller.</param>
+    /// <param name="outputs">Output data as a NativeList. Must be created and disposed by the caller.</param>
+    /// <param name="nonBurstResultsDelegate">Optional non-Burst delegate to process results if Burst is not used.</param>
+    /// <param name="options">Execution options, such as batch size or job type preferences.</param>
+    /// <returns>An IEnumerator for coroutine execution, yielding to spread load across frames.</returns>
+    [BurstCompile]
+    public static IEnumerator ExecuteBurst<TInput, TOutput>(
+        string uniqueId,
+        Action<NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
+        NativeArray<TInput> inputs = default,
+        NativeList<TOutput> outputs = default,
+        Action<NativeList<TOutput>> burstResultsDelegate = null,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
+        SmartExecutionOptions options = default)
+        where TInput : unmanaged
+        where TOutput : unmanaged
+    {
+      if (burstDelegate == null)
+      {
+        Log(Level.Warning, $"SmartExecution.ExecuteBurst: No valid delegate for {uniqueId}", Category.Performance);
+        yield break;
+      }
+
+      // Wrap the simplified delegate into the standard range-based delegate
+      Action<int, int, NativeArray<TInput>, NativeList<TOutput>> wrappedDelegate = (start, end, inArray, outList) =>
+      {
+        burstDelegate(inArray, outList);
+#if DEBUG
+        Log(Level.Verbose, $"Executed single-item delegate for {uniqueId}", Category.Performance);
+#endif
+      };
+
+      yield return ExecuteBurstInternal(uniqueId, wrappedDelegate, burstResultsDelegate, inputs, outputs, nonBurstResultsDelegate, options);
+    }
+
+    /// <summary>
     /// Executes a Burst-compiled job for a single item with metrics-driven results processing.
     /// </summary>
     /// <typeparam name="TInput">Unmanaged input type.</typeparam>
@@ -1454,7 +1495,7 @@ namespace NoLazyWorkers.Performance
     /// <param name="outputs">Output data list.</param>
     /// <param name="options">Execution options.</param>
     /// <returns>An enumerator for the execution coroutine.</returns>
-    public static IEnumerator ExecuteBurst<TInput, TOutput>(
+    private static IEnumerator ExecuteBurstInternal<TInput, TOutput>(
         string uniqueId,
         Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
         Action<NativeList<TOutput>> burstResultsDelegate,
@@ -1602,9 +1643,9 @@ namespace NoLazyWorkers.Performance
         string uniqueId,
         int itemCount,
         Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate,
-        Action<NativeList<TOutput>> burstResultsDelegate,
         NativeArray<TInput> inputs = default,
         NativeList<TOutput> outputs = default,
+        Action<NativeList<TOutput>> burstResultsDelegate = null,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TInput : unmanaged

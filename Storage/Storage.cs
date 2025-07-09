@@ -29,6 +29,9 @@ using UnityEngine.Pool;
 using NoLazyWorkers.Extensions;
 using FishNet.Object;
 using ScheduleOne.UI;
+using ScheduleOne.Employees;
+using ScheduleOne.NPCs;
+using NoLazyWorkers.TaskService;
 
 namespace NoLazyWorkers.Storage
 {
@@ -137,13 +140,13 @@ namespace NoLazyWorkers.Storage
     #region Coroutine Entrypoints
 
     /// <summary>
-    /// Finds storage containing a specific item with the required quantity.
+    /// Finds storage containing the specified item with the required quantity.
     /// </summary>
-    /// <param name="property">The property to search within.</param>
+    /// <param name="property">The property to search in.</param>
     /// <param name="item">The item to find.</param>
     /// <param name="needed">The quantity needed.</param>
-    /// <param name="allowTargetHigherQuality">Whether to allow items of higher quality.</param>
-    /// <returns>An enumerator yielding a StorageResult with the found storage details.</returns>
+    /// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
+    /// <returns>An enumerator yielding the storage result.</returns>
     public static IEnumerator FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)
     {
       if (!IsInitialized)
@@ -164,72 +167,65 @@ namespace NoLazyWorkers.Storage
         yield return new StorageResult();
         yield break;
       }
+
       var cacheService = CacheService.GetOrCreateCacheService(property);
       var itemKey = new ItemKey(item);
       var itemData = new ItemData(item);
       if (cacheService.IsItemNotFound(itemKey))
       {
-#if DEBUG
-        Log(Level.Verbose, $"Item {itemKey.ToString()} not found in cache", Category.Storage);
-#endif
+        Log(Level.Info, $"Item {itemKey.ToString()} not found in cache", Category.Storage);
         yield return new StorageResult();
         yield break;
       }
-      if (cacheService._filteredStorageKeys.TryGetValue(itemKey, out var cachedKeys) && cachedKeys.Length > 0)
-      {
-        if (Storages[property].TryGetValue(cachedKeys[0].Guid, out var shelf))
-        {
-          if (cacheService._shelfSearchCache.TryGetValue(itemKey, out var cachedResult) && cachedResult.Item2 >= needed)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"Using cached result for item {itemKey.ToString()}", Category.Storage);
-#endif
-            var persistentSlotData = new NativeList<SlotData>(Allocator.Persistent);
-            foreach (var slot in cachedResult.Item3)
-              persistentSlotData.Add(slot);
-            yield return new StorageResultBurst
-            {
-              ShelfGuid = shelf.GUID,
-              AvailableQuantity = cachedResult.Item2,
-              SlotData = persistentSlotData
-            }.GetResult();
-            yield break;
-          }
-        }
-      }
+
       var storageKeys = new NativeList<StorageKey>(Allocator.TempJob);
       var results = new NativeList<StorageResultBurst>(Allocator.TempJob);
       var logs = new NativeList<LogEntry>(Allocator.TempJob);
       try
       {
-        if (cacheService._itemToStorageCache.TryGetValue(itemKey, out var specificKeys))
-          storageKeys.AddRange(specificKeys.AsArray());
+        // Collect storage keys from _itemToSlotIndices and _anyShelfKeys
+        if (cacheService._itemToSlotIndices.TryGetValue(itemKey, out var storageEntries))
+        {
+          foreach (var (storageKey, _) in storageEntries)
+            storageKeys.Add(storageKey);
+        }
         storageKeys.AddRange(cacheService._anyShelfKeys.AsArray());
+
         yield return SmartExecution.ExecuteBurstFor<StorageKey, StorageResultBurst>(
             uniqueId: nameof(FindStorageWithItem),
             itemCount: storageKeys.Length,
-            burstForDelegate: (i, inputs, outputs) => cacheService.FindItem(i, inputs, outputs, itemData, needed, allowTargetHigherQuality, logs, cacheService._storageSlotsCache),
-            burstResultsDelegate: (results) => cacheService.FindItemResults(results, cacheService._shelfSearchCache, cacheService._filteredStorageKeys, cacheService._storagePropertyMap, property.NetworkObject.ObjectId, itemData, logs),
+            burstForDelegate: (i, inputs, outputs) => cacheService.FindItem(i, inputs, outputs, itemData, needed, allowTargetHigherQuality, logs, cacheService._storageSlotsCache, cacheService._itemToSlotIndices),
+            burstResultsDelegate: null,
             inputs: storageKeys.AsArray(),
             outputs: results,
             options: default
         );
-        StorageResult managedResult = results[0].GetResult();
-        if (managedResult.ItemSlots?.Count <= 0)
+
+        if (results.Length > 0 && results[0].SlotData.Length > 0)
+        {
+          var result = results[0].GetResult();
+          Log(Level.Info, $"Found storage for item {itemKey.ToString()}, qty={result.AvailableQuantity}, shelf={result.Shelf.GUID}", Category.Storage);
+          yield return result;
+        }
+        else
         {
           cacheService.AddItemNotFound(itemKey);
-#if DEBUG
-          Log(Level.Verbose, $"No storage found for item {itemKey.ToString()}, added to not found cache", Category.Storage);
-#endif
+          Log(Level.Info, $"No storage found for item {itemKey.ToString()}, added to not found cache", Category.Storage);
+          yield return new StorageResult();
         }
-        yield return managedResult;
+
         yield return ProcessLogs(logs);
       }
       finally
       {
-        storageKeys.Dispose();
-        results.Dispose();
-        logs.Dispose();
+        if (storageKeys.IsCreated) storageKeys.Dispose();
+        if (results.IsCreated)
+        {
+          foreach (var result in results)
+            result.SlotData.Dispose();
+          results.Dispose();
+        }
+        if (logs.IsCreated) logs.Dispose();
         cacheService._storageResultPool.Release(new List<StorageResultBurst>());
       }
     }
@@ -249,28 +245,43 @@ namespace NoLazyWorkers.Storage
         Log(Level.Warning, $"UpdateStorageCache: Invalid input (init={IsInitialized}, server={InstanceFinder.NetworkManager.IsServer}, property={property != null}, slots={slots?.Count ?? 0})", Category.Storage);
         yield break;
       }
+
       var cacheService = CacheService.GetOrCreateCacheService(property);
-      NativeArray<SlotData> slotData = new NativeArray<SlotData>(slots.Count, Allocator.TempJob);
-      NativeList<LogEntry> logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
+      if (!cacheService._ownerToStorageType.TryGetValue(entityGuid, out var cachedType) || cachedType != storageType)
+      {
+        Log(Level.Warning, $"UpdateStorageCache: Invalid or mismatched storage type for {entityGuid}, expected={storageType}, cached={cachedType}", Category.Storage);
+        yield break;
+      }
+
+      var slotUpdates = new NativeList<SlotUpdate>(slots.Count, Allocator.TempJob);
+      var logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
       try
       {
-        var key = new StorageKey(entityGuid, storageType);
-        for (int i = 0; i < slots.Count; i++)
-          slotData[i] = new SlotData(entityGuid, slots[i], storageType);
-        yield return SmartExecution.ExecuteBurstFor<SlotData, SlotData>(
-            uniqueId: nameof(UpdateStorageCache),
-            itemCount: slots.Count,
-            burstForDelegate: (index, inputs, outputs) => cacheService.UpdateStorageCacheBurst(index, inputs, key, property.NetworkObject.ObjectId, cacheService._storageSlotsCache, cacheService._anyShelfKeys, cacheService._notFoundItems, logs),
-            burstResultsDelegate: null,
-            inputs: slotData,
-            outputs: default,
-            options: default
-        );
-        yield return Deferred.ProcessLogs(logs);
+        foreach (var slot in slots)
+        {
+          var slotKey = slot.GetSlotKey();
+          if (slotKey.EntityGuid != entityGuid) continue;
+          cacheService._slotCache[slotKey] = (property.NetworkObject.ObjectId, storageType, slot.SlotIndex);
+          slotUpdates.Add(new SlotUpdate
+          {
+            StorageKey = new StorageKey(entityGuid, storageType),
+            SlotData = new SlotData(entityGuid, slot, storageType)
+          });
+#if DEBUG
+          Log(Level.Verbose, $"Queued update for slot {slot.SlotIndex} on {entityGuid}, item={slot.ItemInstance?.ID ?? "None"}", Category.Storage);
+#endif
+        }
+
+        if (slotUpdates.Length > 0)
+        {
+          cacheService._pendingSlotUpdates.AddRange(slotUpdates.AsArray());
+        }
+
+        yield return ProcessLogs(logs);
       }
       finally
       {
-        if (slotData.IsCreated) slotData.Dispose();
+        if (slotUpdates.IsCreated) slotUpdates.Dispose();
         if (logs.IsCreated) logs.Dispose();
       }
     }
@@ -300,7 +311,7 @@ namespace NoLazyWorkers.Storage
       var logs = new NativeList<LogEntry>(Allocator.TempJob);
       try
       {
-        if (ManagedDictionaries.IStations.TryGetValue(property, out var stations))
+        if (IStations.TryGetValue(property, out var stations))
         {
           foreach (var station in stations.Values)
           {
@@ -376,13 +387,11 @@ namespace NoLazyWorkers.Storage
         List<DeliveryDestination> managedResult = new();
         foreach (var destination in destinations)
         {
-#if DEBUG
-          Log(Level.Verbose, $"Returning destination {destination.Guid} with capacity {destination.Capacity}", Category.Storage);
-#endif
+          Log(Level.Info, $"Returning destination {destination.Guid} with capacity {destination.Capacity}", Category.Storage);
           managedResult.Add(destination.GetResult());
         }
         yield return managedResult;
-        yield return Deferred.ProcessLogs(logs);
+        yield return ProcessLogs(logs);
       }
       finally
       {
@@ -517,6 +526,13 @@ namespace NoLazyWorkers.Storage
 
   public static class Extensions
   {
+    [BurstCompile]
+    public struct SlotUpdate
+    {
+      public StorageKey StorageKey;
+      public SlotData SlotData;
+    }
+
     /// <summary>
     /// Represents a slot operation with details about the entity, slot, item, and locking information.
     /// </summary>
@@ -868,6 +884,7 @@ namespace NoLazyWorkers.Storage
 
       public SlotData(Guid guid, ItemSlot slot, StorageType type)
       {
+        PropertyId = slot.GetProperty()?.NetworkObject.ObjectId ?? 0;
         SlotIndex = slot.SlotIndex;
         Item = slot.ItemInstance != null ? new ItemData(slot.ItemInstance) : ItemData.Empty;
         Quantity = slot.Quantity;
@@ -1046,65 +1063,7 @@ namespace NoLazyWorkers.Storage
     public static Dictionary<Property, Dictionary<Guid, IStationAdapter>> IStations = new();
     public static Dictionary<Property, Dictionary<Guid, IEmployeeAdapter>> IEmployees = new();
     public static Dictionary<Guid, JObject> PendingConfigData = new();
-  }
-
-  /// <summary>
-  /// Manages object pools for various data types used in storage operations.
-  /// </summary>
-  internal class PoolManager
-  {
-    private static PoolManager _instance;
-    public static PoolManager Instance => _instance ??= new PoolManager();
-
-    public ObjectPool<List<int>> IntListPool { get; }
-    public ObjectPool<List<StorageResultBurst>> StorageResultListPool { get; }
-    public ObjectPool<List<DeliveryDestinationBurst>> DeliveryDestinationListPool { get; }
-    public ObjectPool<List<bool>> BoolListPool { get; }
-    public ObjectPool<List<SlotData>> SlotDataListPool { get; }
-    public ObjectPool<List<(ItemData, int)>> ItemQuantityListPool { get; }
-
-    /// <summary>
-    /// Initializes a new instance of the PoolManager.
-    /// </summary>
-    private PoolManager()
-    {
-      IntListPool = CreatePool<List<int>>(10);
-      StorageResultListPool = CreatePool<List<StorageResultBurst>>(10);
-      DeliveryDestinationListPool = CreatePool<List<DeliveryDestinationBurst>>(10);
-      BoolListPool = CreatePool<List<bool>>(10);
-      SlotDataListPool = CreatePool<List<SlotData>>(10);
-      ItemQuantityListPool = CreatePool<List<(ItemData, int)>>(10);
-    }
-
-    /// <summary>
-    /// Creates an object pool for a specified type with a default capacity.
-    /// </summary>
-    /// <param name="defaultCapacity">The default capacity of the pool.</param>
-    /// <returns>An ObjectPool for the specified type.</returns>
-    private ObjectPool<T> CreatePool<T>(int defaultCapacity) where T : class, new()
-    {
-      return new ObjectPool<T>(
-          createFunc: () => new T(),
-          actionOnGet: null,
-          actionOnRelease: list => { if (list is IList items) items.Clear(); },
-          actionOnDestroy: null,
-          collectionCheck: false,
-          defaultCapacity: defaultCapacity,
-          maxSize: 100);
-    }
-
-    /// <summary>
-    /// Clears all object pools.
-    /// </summary>
-    public void Cleanup()
-    {
-      IntListPool.Clear();
-      StorageResultListPool.Clear();
-      DeliveryDestinationListPool.Clear();
-      BoolListPool.Clear();
-      SlotDataListPool.Clear();
-      ItemQuantityListPool.Clear();
-    }
+    public static readonly Dictionary<Property, EntityDisableService> DisabledEntityServices = new();
   }
 
   /// <summary>
@@ -1115,19 +1074,20 @@ namespace NoLazyWorkers.Storage
     private readonly Property _property;
     private bool _isActive;
     private bool IsInitialized { get; set; }
-    internal NativeParallelHashMap<SlotKey, (int PropertyId, StorageType Type, int SlotIndex)> _slotCache;
-    internal NativeParallelHashMap<StorageKey, NativeList<SlotData>> _storageSlotsCache;
-    internal NativeParallelHashMap<ItemKey, NativeList<StorageKey>> _itemToStorageCache;
-    internal NativeList<StorageKey> _anyShelfKeys;
     internal readonly ObjectPool<List<StorageResultBurst>> _storageResultPool;
     internal readonly ObjectPool<List<DeliveryDestinationBurst>> _deliveryResultPool;
+    internal NativeParallelHashMap<SlotKey, (int PropertyId, StorageType Type, int SlotIndex)> _slotCache;
+    internal NativeParallelHashMap<StorageKey, NativeList<SlotData>> _storageSlotsCache;
+    internal NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> _itemToSlotIndices;
+    internal NativeList<StorageKey> _anyShelfKeys;
     internal NativeParallelHashSet<ItemKey> _notFoundItems;
-    internal NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> _shelfSearchCache;
-    internal NativeParallelHashMap<Guid, StorageKey> _loadingDockKeys;
-    internal NativeParallelHashMap<ItemKey, NativeList<StorageKey>> _filteredStorageKeys;
-    internal NativeParallelHashMap<StorageKey, int> _storagePropertyMap;
+    internal NativeParallelHashMap<Guid, StorageType> _ownerToStorageType;
     internal NativeParallelHashSet<ItemKey> _noDropOffCache;
     internal NativeParallelHashSet<StationData> StationData;
+    internal NativeList<SlotUpdate> _pendingSlotUpdates;
+    internal NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> _shelfSearchCache;
+    internal NativeParallelHashMap<ItemKey, NativeList<StorageKey>> _itemToStorageCache;
+    internal NativeParallelHashMap<StorageKey, int> _storagePropertyMap;
 
     /// <summary>
     /// Initializes a new instance of the CacheService for a property.
@@ -1138,9 +1098,10 @@ namespace NoLazyWorkers.Storage
     {
       _property = property ?? throw new ArgumentNullException(nameof(property));
       _storageSlotsCache = new NativeParallelHashMap<StorageKey, NativeList<SlotData>>(100, Allocator.Persistent);
-      _itemToStorageCache = new NativeParallelHashMap<ItemKey, NativeList<StorageKey>>(100, Allocator.Persistent);
+      _itemToSlotIndices = new NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>>(100, Allocator.Persistent);
       _slotCache = new NativeParallelHashMap<SlotKey, (int PropertyId, StorageType Type, int SlotIndex)>(100, Allocator.Persistent);
       _anyShelfKeys = new NativeList<StorageKey>(100, Allocator.Persistent);
+      _ownerToStorageType = new NativeParallelHashMap<Guid, StorageType>(100, Allocator.Persistent);
       _storageResultPool = new ObjectPool<List<StorageResultBurst>>(
           createFunc: () => new List<StorageResultBurst>(10),
           actionOnGet: null,
@@ -1149,12 +1110,17 @@ namespace NoLazyWorkers.Storage
           collectionCheck: false,
           defaultCapacity: 10,
           maxSize: 100);
+      _deliveryResultPool = new ObjectPool<List<DeliveryDestinationBurst>>(
+          createFunc: () => new List<DeliveryDestinationBurst>(10),
+          actionOnGet: null,
+          actionOnRelease: list => list.Clear(),
+          actionOnDestroy: null,
+          collectionCheck: false,
+          defaultCapacity: 10,
+          maxSize: 100);
       _notFoundItems = new NativeParallelHashSet<ItemKey>(100, Allocator.Persistent);
-      _shelfSearchCache = new NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)>(100, Allocator.Persistent);
-      _storagePropertyMap = new NativeParallelHashMap<StorageKey, int>(100, Allocator.Persistent);
-      _filteredStorageKeys = new NativeParallelHashMap<ItemKey, NativeList<StorageKey>>(100, Allocator.Persistent);
-      _loadingDockKeys = new NativeParallelHashMap<Guid, StorageKey>(10, Allocator.Persistent);
       _noDropOffCache = new NativeParallelHashSet<ItemKey>(100, Allocator.Persistent);
+      _pendingSlotUpdates = new NativeList<SlotUpdate>(100, Allocator.Persistent);
       CoroutineRunner.Instance.RunCoroutine(InitializePropertyDataCaches());
       IsInitialized = true;
       Log(Level.Info, $"CacheService initialized for {_property.name}", Category.Storage);
@@ -1203,38 +1169,28 @@ namespace NoLazyWorkers.Storage
         slotsArray.Dispose();
         _storageSlotsCache.Dispose();
       }
-      if (_itemToStorageCache.IsCreated)
+      if (_itemToSlotIndices.IsCreated)
       {
-        var keysArray = _itemToStorageCache.GetValueArray(Allocator.Temp);
-        foreach (var keys in keysArray)
-          keys.Dispose();
-        keysArray.Dispose();
-        _itemToStorageCache.Dispose();
+        var indicesArray = _itemToSlotIndices.GetValueArray(Allocator.Temp);
+        foreach (var indices in indicesArray)
+        {
+          foreach (var (key, slotIndices) in indices)
+            slotIndices.Dispose();
+          indices.Dispose();
+        }
+        indicesArray.Dispose();
+        _itemToSlotIndices.Dispose();
       }
       if (_anyShelfKeys.IsCreated)
         _anyShelfKeys.Dispose();
       if (_notFoundItems.IsCreated)
         _notFoundItems.Dispose();
-      if (_shelfSearchCache.IsCreated)
-      {
-        var cacheArray = _shelfSearchCache.GetValueArray(Allocator.Temp);
-        foreach (var cache in cacheArray)
-          cache.Item3.Dispose();
-        cacheArray.Dispose();
-        _shelfSearchCache.Dispose();
-      }
-      if (_storagePropertyMap.IsCreated)
-        _storagePropertyMap.Dispose();
-      if (_filteredStorageKeys.IsCreated)
-      {
-        var keysArray = _filteredStorageKeys.GetValueArray(Allocator.Temp);
-        foreach (var keys in keysArray)
-          keys.Dispose();
-        keysArray.Dispose();
-        _filteredStorageKeys.Dispose();
-      }
+      if (_ownerToStorageType.IsCreated)
+        _ownerToStorageType.Dispose();
       if (_noDropOffCache.IsCreated)
         _noDropOffCache.Dispose();
+      if (_pendingSlotUpdates.IsCreated)
+        _pendingSlotUpdates.Dispose();
       _storageResultPool.Clear();
       _deliveryResultPool.Clear();
       IsInitialized = false;
@@ -1246,7 +1202,99 @@ namespace NoLazyWorkers.Storage
     /// </summary>
     private void Cleanup()
     {
+      _pendingSlotUpdates.Clear();
       Log(Level.Info, "CacheService cleaned up", Category.Storage);
+    }
+
+    private IEnumerator ProcessPendingSlotUpdates()
+    {
+      while (_isActive)
+      {
+        if (_pendingSlotUpdates.Length > 0)
+        {
+          var logs = new NativeList<LogEntry>(Allocator.TempJob);
+          var updates = new NativeArray<SlotUpdate>(_pendingSlotUpdates.AsArray(), Allocator.TempJob);
+          _pendingSlotUpdates.Clear();
+          yield return SmartExecution.ExecuteBurstFor<SlotUpdate, SlotData>(
+              uniqueId: nameof(ProcessPendingSlotUpdates),
+              itemCount: updates.Length,
+              burstForDelegate: (index, inputs, outputs) => UpdateStorageCacheBurst(index, inputs, outputs, _storageSlotsCache, _itemToSlotIndices, _anyShelfKeys, _notFoundItems, logs)
+          );
+          yield return ProcessLogs(logs);
+          updates.Dispose();
+          logs.Dispose();
+        }
+        yield return null;
+      }
+    }
+
+    // Add method to consolidate slot update logic
+    public IEnumerator UpdateSlot(ItemSlot slot, Property property, ItemInstance instance, int change, bool isClear, bool isSet, NativeParallelHashMap<Guid, DisabledEntityData> disabledEntities)
+    {
+      if (slot.SlotOwner is NPC && slot.SlotOwner is not Employee) yield break;
+      if (property == null || (isClear && slot.ItemInstance == null) || (isSet && instance == null)) yield break;
+
+      var slotKey = slot.GetSlotKey();
+      if (!_ownerToStorageType.TryGetValue(slotKey.EntityGuid, out var type))
+      {
+        Log(Level.Warning, $"{(isClear ? "ClearStoredInstance" : isSet ? "SetStoredItem" : "ChangeQuantity")}: Unknown owner {slotKey.EntityGuid}", Category.Storage);
+        yield break;
+      }
+
+      _slotCache[slotKey] = (property.NetworkObject.ObjectId, type, slot.SlotIndex);
+      var slotData = new SlotData(slotKey.EntityGuid, slot, type);
+      _pendingSlotUpdates.Add(new SlotUpdate
+      {
+        StorageKey = new StorageKey(slotKey.EntityGuid, type),
+        SlotData = slotData
+      });
+
+      string logMessage = isClear
+          ? $"ClearStoredInstancePostfix: Slot={slot.SlotIndex}, entity={slotKey.EntityGuid}, type={type}"
+          : isSet
+              ? $"SetStoredItemPostfix: Slot={slot.SlotIndex}, item={instance.ID}{(instance is QualityItemInstance qual ? $" Quality={qual.Quality}" : "")}, entity={slotKey.EntityGuid}, type={type}"
+              : $"ChangeQuantityPostfix: Slot={slot.SlotIndex}, item={slot.ItemInstance.ID}{(slot.ItemInstance is QualityItemInstance qual1 ? $" Quality={qual1.Quality}" : "")}, change={change}, newQty={slot.Quantity}, entity={slotKey.EntityGuid}, type={type}";
+      Log(Level.Info, logMessage, Category.Storage);
+
+      if ((isSet || (change > 0 && !isClear)) && slot.ItemInstance != null)
+        ClearItemNotFoundCache(new ItemKey(slot.ItemInstance));
+
+      if (slot.SlotOwner is PlaceableStorageEntity shelf && slot.Quantity <= 0 && slot.ItemInstance != null)
+        yield return ClearZeroQuantityEntries(shelf, new[] { slot.ItemInstance });
+
+      yield return HandleSlotUpdate(new StorageKey(slotKey.EntityGuid, type), slotData, disabledEntities);
+      yield return StorageManager.UpdateStorageCache(property, slotKey.EntityGuid, [slot], type);
+    }
+
+    public IEnumerator HandleSlotUpdate(StorageKey storageKey, SlotData slotData, NativeParallelHashMap<Guid, DisabledEntityData> disabledEntities)
+    {
+      var logs = new NativeList<LogEntry>(Allocator.TempJob);
+      var keysToRemove = new NativeList<Guid>(Allocator.TempJob);
+      var inputs = new NativeArray<SlotUpdate>([new SlotUpdate() { StorageKey = storageKey, SlotData = slotData }], Allocator.TempJob);
+      var handleSlotUpdateBurst = new HandleSlotUpdateBurst
+      {
+        DisabledEntities = disabledEntities,
+        KeysToRemove = keysToRemove,
+        Logs = logs
+      };
+      yield return SmartExecution.ExecuteBurst<SlotUpdate, Empty>(
+          uniqueId: nameof(HandleSlotUpdate),
+          burstDelegate: handleSlotUpdateBurst.Execute
+      );
+
+      foreach (var guid in keysToRemove)
+      {
+        if (disabledEntities.TryGetValue(guid, out var data))
+        {
+          if (data.RequiredItems.IsCreated)
+            data.RequiredItems.Dispose();
+          disabledEntities.Remove(guid);
+        }
+      }
+
+      yield return ProcessLogs(logs);
+      keysToRemove.Dispose();
+      logs.Dispose();
     }
 
     /// <summary>
@@ -1282,39 +1330,111 @@ namespace NoLazyWorkers.Storage
     /// <param name="logs">The list to store log entries.</param>
     [BurstCompile]
     internal void UpdateStorageCacheBurst(
-                int index,
-                NativeArray<SlotData> inputs,
-                StorageKey key,
-                int propertyId,
-                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
-                NativeList<StorageKey> anyShelfKeys,
-                NativeParallelHashSet<ItemKey> notFoundItems,
-                NativeList<LogEntry> logs)
+            int index,
+            NativeArray<SlotUpdate> inputs,
+            NativeList<SlotData> outputs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices,
+            NativeList<StorageKey> anyShelfKeys,
+            NativeParallelHashSet<ItemKey> notFoundItems,
+            NativeList<LogEntry> logs)
     {
-      // Updates storage slots cache
-      var slot = inputs[index];
-      var slots = new NativeList<SlotData>(Allocator.Persistent);
-      storageSlotsCache.TryGetValue(key, out slots);
-      if (index == 0 && slots.Length > 0)
+      var update = inputs[index];
+      var storageKey = update.StorageKey;
+      var slotData = update.SlotData;
+
+      if (!storageSlotsCache.TryGetValue(storageKey, out var slots))
       {
-        slots.Clear();
+        slots = new NativeList<SlotData>(Allocator.Persistent);
+        storageSlotsCache[storageKey] = slots;
       }
-      slots.Add(slot);
+      if (slotData.IsValid)
+      {
+        bool found = false;
+        for (int i = 0; i < slots.Length; i++)
+        {
+          if (slots[i].SlotIndex == slotData.SlotIndex)
+          {
+            slots[i] = slotData;
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          slots.Add(slotData);
+      }
+      else
+      {
+        for (int i = 0; i < slots.Length; i++)
+        {
+          if (slots[i].SlotIndex == slotData.SlotIndex)
+          {
+            slots.RemoveAtSwapBack(i);
+            break;
+          }
+        }
+      }
 
-      // Updates any shelf keys
-      if (key.Type == StorageType.AnyShelf && !anyShelfKeys.Contains(key))
-        anyShelfKeys.Add(key);
+      if (slotData.IsValid && slotData.Item.Id != "")
+      {
+        var itemKey = new ItemKey(slotData.Item);
+        if (!itemToSlotIndices.TryGetValue(itemKey, out var indices))
+        {
+          indices = new NativeList<(StorageKey, NativeList<int>)>(Allocator.Persistent);
+          itemToSlotIndices[itemKey] = indices;
+        }
+        bool indexFound = false;
+        for (int i = 0; i < indices.Length; i++)
+        {
+          if (indices[i].Item1.Equals(storageKey))
+          {
+            if (!indices[i].Item2.Contains(slotData.SlotIndex))
+              indices[i].Item2.Add(slotData.SlotIndex);
+            indexFound = true;
+            break;
+          }
+        }
+        if (!indexFound)
+        {
+          var slotIndices = new NativeList<int>(Allocator.Persistent);
+          slotIndices.Add(slotData.SlotIndex);
+          indices.Add((storageKey, slotIndices));
+        }
+        notFoundItems.Remove(itemKey);
+      }
+      else if (slotData.Item.Id != "")
+      {
+        var itemKey = new ItemKey(slotData.Item);
+        if (itemToSlotIndices.TryGetValue(itemKey, out var indices))
+        {
+          for (int i = 0; i < indices.Length; i++)
+          {
+            if (indices[i].Item1.Equals(storageKey))
+            {
+              indices[i].Item2.Remove(slotData.SlotIndex);
+              if (indices[i].Item2.Length == 0)
+              {
+                indices[i].Item2.Dispose();
+                indices.RemoveAtSwapBack(i);
+              }
+              break;
+            }
+          }
+          if (indices.Length == 0)
+          {
+            indices.Dispose();
+            itemToSlotIndices.Remove(itemKey);
+          }
+        }
+      }
 
-      // Updates property map and not-found cache
-      storageSlotsCache[key] = slots;
-      _storagePropertyMap[key] = propertyId;
-      if (slot.Item.Id != "")
-        notFoundItems.Remove(new ItemKey(slot.Item));
+      if (storageKey.Type == StorageType.AnyShelf && !anyShelfKeys.Contains(storageKey))
+        anyShelfKeys.Add(storageKey);
 
 #if DEBUG
       logs.Add(new LogEntry
       {
-        Message = $"Updated cache for slot {slot.SlotIndex} on shelf {key.Guid}",
+        Message = $"Updated cache for slot {slotData.SlotIndex} on {storageKey.Guid}, item={slotData.Item.Id}, qty={slotData.Quantity}",
         Level = Level.Verbose,
         Category = Category.Storage
       });
@@ -1327,13 +1447,16 @@ namespace NoLazyWorkers.Storage
     /// <returns>A list of loading dock storage keys.</returns>
     internal NativeList<StorageKey> GetLoadingDockKeys()
     {
-      var keys = new NativeList<StorageKey>(_loadingDockKeys.Count(), Allocator.Temp);
-      foreach (var kvp in _loadingDockKeys)
+      var keys = new NativeList<StorageKey>(_ownerToStorageType.Count(), Allocator.Temp);
+      foreach (var kvp in _ownerToStorageType)
       {
+        if (kvp.Value == StorageType.LoadingDock)
+        {
+          keys.Add(new StorageKey(kvp.Key, StorageType.LoadingDock));
 #if DEBUG
-        Log(Level.Verbose, $"Adding loading dock key {kvp.Value.Guid}", Category.Storage);
+          Log(Level.Verbose, $"Adding loading dock key {kvp.Key}", Category.Storage);
 #endif
-        keys.Add(kvp.Value);
+        }
       }
       return keys;
     }
@@ -1373,20 +1496,17 @@ namespace NoLazyWorkers.Storage
     private IEnumerator InitializePropertyDataCaches()
     {
       var slotKeys = new NativeList<SlotKeyData>(Allocator.TempJob);
-      var results = new NativeList<SlotCacheEntry>(Allocator.TempJob);
+      var outputs = new NativeList<SlotCacheEntry>(Allocator.TempJob);
       var logs = new NativeList<LogEntry>(Allocator.TempJob);
       try
       {
         var storages = Storages.TryGetValue(_property, out var storageDict) ? storageDict.Values.ToList() : new List<PlaceableStorageEntity>();
         foreach (var storage in storages)
         {
-#if DEBUG
-          Log(Level.Verbose, $"Collecting slot data for storage {storage.GUID}", Category.Storage);
-#endif
-          var type = StorageConfigs.TryGetValue(_property, out var configs) &&
-                     configs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
-              ? StorageType.SpecificShelf
-              : StorageType.AnyShelf;
+          if (StorageConfigs[_property].TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.None)
+            continue;
+          var type = config.Mode == StorageMode.Any ? StorageType.AnyShelf : StorageType.SpecificShelf;
+          _ownerToStorageType[storage.GUID] = type;
           for (int i = 0; i < storage.OutputSlots.Count; i++)
           {
             slotKeys.Add(new SlotKeyData
@@ -1397,13 +1517,14 @@ namespace NoLazyWorkers.Storage
               Type = type
             });
           }
+#if DEBUG
+          Log(Level.Verbose, $"Collecting slot data for storage {storage.GUID}, type={type}", Category.Storage);
+#endif
         }
         var stations = IStations.TryGetValue(_property, out var stationDict) ? stationDict.Values.ToList() : new List<IStationAdapter>();
         foreach (var station in stations)
         {
-#if DEBUG
-          Log(Level.Verbose, $"Collecting slot data for station {station.GUID}", Category.Storage);
-#endif
+          _ownerToStorageType[station.GUID] = StorageType.Station;
           foreach (var slot in station.InsertSlots.Concat(station.ProductSlots).Concat(new[] { station.OutputSlot }))
           {
             slotKeys.Add(new SlotKeyData
@@ -1414,13 +1535,14 @@ namespace NoLazyWorkers.Storage
               Type = StorageType.Station
             });
           }
+#if DEBUG
+          Log(Level.Verbose, $"Collecting slot data for station {station.GUID}", Category.Storage);
+#endif
         }
         var docks = LoadingDocks.TryGetValue(_property, out var dockDict) ? dockDict.Values.ToList() : new List<LoadingDock>();
         foreach (var dock in docks)
         {
-#if DEBUG
-          Log(Level.Verbose, $"Collecting slot data for loading dock {dock.GUID}", Category.Storage);
-#endif
+          _ownerToStorageType[dock.GUID] = StorageType.LoadingDock;
           for (int i = 0; i < dock.OutputSlots.Count; i++)
           {
             slotKeys.Add(new SlotKeyData
@@ -1431,13 +1553,14 @@ namespace NoLazyWorkers.Storage
               Type = StorageType.LoadingDock
             });
           }
+#if DEBUG
+          Log(Level.Verbose, $"Collecting slot data for loading dock {dock.GUID}", Category.Storage);
+#endif
         }
         var employees = IEmployees.TryGetValue(_property, out var employeeDict) ? employeeDict.Values.ToList() : new List<IEmployeeAdapter>();
         foreach (var employee in employees)
         {
-#if DEBUG
-          Log(Level.Verbose, $"Collecting slot data for employee {employee.Guid}", Category.Storage);
-#endif
+          _ownerToStorageType[employee.Guid] = StorageType.Employee;
           for (int i = 0; i < employee.InventorySlots.Count; i++)
           {
             slotKeys.Add(new SlotKeyData
@@ -1448,22 +1571,22 @@ namespace NoLazyWorkers.Storage
               Type = StorageType.Employee
             });
           }
+#if DEBUG
+          Log(Level.Verbose, $"Collecting slot data for employee {employee.Guid}", Category.Storage);
+#endif
         }
-        yield return SmartExecution.ExecuteBurstFor(
+        yield return SmartExecution.ExecuteBurstFor<SlotKeyData, SlotCacheEntry>(
             uniqueId: nameof(InitializePropertyDataCaches),
             itemCount: slotKeys.Length,
             burstForDelegate: (index, inputs, outputs) => ProcessSlotCacheItemBurst(index, inputs, outputs, logs),
-            burstResultsDelegate: (results) => ProcessSlotCacheItemResults(results, logs),
-            inputs: slotKeys.AsArray(),
-            outputs: results,
-            options: default
+            burstResultsDelegate: (outputs) => ProcessSlotCacheItemResults(outputs, logs)
         );
         yield return ProcessLogs(logs);
       }
       finally
       {
         if (slotKeys.IsCreated) slotKeys.Dispose();
-        if (results.IsCreated) results.Dispose();
+        if (outputs.IsCreated) outputs.Dispose();
         if (logs.IsCreated) logs.Dispose();
       }
     }
@@ -1477,10 +1600,10 @@ namespace NoLazyWorkers.Storage
     /// <param name="logs">The list to store log entries.</param>
     [BurstCompile]
     private void ProcessSlotCacheItemBurst(
-                int index,
-                NativeArray<SlotKeyData> inputs,
-                NativeList<SlotCacheEntry> outputs,
-                NativeList<LogEntry> logs)
+            int index,
+            NativeArray<SlotKeyData> inputs,
+            NativeList<SlotCacheEntry> outputs,
+            NativeList<LogEntry> logs)
     {
       var keyData = inputs[index];
       outputs.Add(new SlotCacheEntry
@@ -1490,14 +1613,12 @@ namespace NoLazyWorkers.Storage
         Type = keyData.Type,
         SlotIndex = keyData.SlotIndex
       });
-#if DEBUG
       logs.Add(new LogEntry
       {
         Message = $"Processed slot cache item for {keyData.EntityGuid}, slot {keyData.SlotIndex}",
-        Level = Level.Verbose,
+        Level = Level.Info,
         Category = Category.Storage
       });
-#endif
     }
 
     /// <summary>
@@ -1638,7 +1759,9 @@ namespace NoLazyWorkers.Storage
     {
       if (shelf == null || items == null || items.Length == 0)
       {
-        Log(Level.Warning, $"ClearZeroQuantityEntries: Invalid input (shelf={shelf?.GUID}, items={items?.Length ?? 0})", Category.Storage);
+#if DEBUG
+        Log(Level.Verbose, $"ClearZeroQuantityEntries: Invalid input (shelf={shelf?.GUID}, items={items?.Length ?? 0})", Category.Storage);
+#endif
         yield break;
       }
 
@@ -1652,7 +1775,7 @@ namespace NoLazyWorkers.Storage
         yield return SmartExecution.ExecuteBurstFor<ItemKey, ItemKey>(
             uniqueId: nameof(ClearZeroQuantityEntries),
             itemCount: items.Length,
-            burstForDelegate: (index, inputs, outputs) => ClearZeroQuantityEntriesBurst(index, inputs, _shelfSearchCache, logs, shelf.GUID),
+            burstForDelegate: (index, inputs, outputs) => ClearZeroQuantityEntriesBurst(index, inputs, _itemToSlotIndices, logs, shelf.GUID),
             burstResultsDelegate: null,
             inputs: itemKeys,
             outputs: default,
@@ -1677,22 +1800,35 @@ namespace NoLazyWorkers.Storage
     /// <param name="shelfGuid">The GUID of the shelf.</param>
     [BurstCompile]
     private void ClearZeroQuantityEntriesBurst(
-                    int index,
-                    NativeArray<ItemKey> inputs,
-                    NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
-                    NativeList<LogEntry> logs,
-                    Guid shelfGuid)
+            int index,
+            NativeArray<ItemKey> inputs,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices,
+            NativeList<LogEntry> logs,
+            Guid shelfGuid)
     {
-      var cacheKey = inputs[index];
-      shelfSearchCache.Remove(cacheKey);
-#if DEBUG
-      logs.Add(new LogEntry
+      var itemKey = inputs[index];
+      if (itemToSlotIndices.TryGetValue(itemKey, out var indices))
       {
-        Message = $"Cleared zero quantity entry for {cacheKey.CacheId} on shelf {shelfGuid}",
-        Level = Level.Verbose,
-        Category = Category.Storage
-      });
-#endif
+        for (int i = indices.Length - 1; i >= 0; i--)
+        {
+          if (indices[i].Item1.Guid == shelfGuid)
+          {
+            indices[i].Item2.Dispose();
+            indices.RemoveAtSwapBack(i);
+          }
+        }
+        if (indices.Length == 0)
+        {
+          indices.Dispose();
+          itemToSlotIndices.Remove(itemKey);
+        }
+        logs.Add(new LogEntry
+        {
+          Message = $"Cleared zero quantity entry for {itemKey.CacheId} on shelf {shelfGuid}",
+          Level = Level.Info,
+          Category = Category.Storage
+        });
+      }
     }
 
     /// <summary>
@@ -1798,6 +1934,49 @@ namespace NoLazyWorkers.Storage
       }
     }
 
+    [BurstCompile]
+    public struct HandleSlotUpdateBurst
+    {
+      public NativeParallelHashMap<Guid, DisabledEntityData> DisabledEntities;
+      public NativeList<Guid> KeysToRemove;
+      public NativeList<LogEntry> Logs;
+
+      public void Execute(NativeArray<SlotUpdate> inputs, NativeList<Empty> _)
+      {
+        KeysToRemove.Clear();
+        var enumerator = DisabledEntities.GetEnumerator();
+        while (enumerator.MoveNext())
+        {
+          var kvp = enumerator.Current;
+          var entityGuid = kvp.Key;
+          var data = kvp.Value;
+          if (data.ReasonType == DisabledEntityData.DisabledReasonType.MissingItem)
+          {
+            bool allItemsAvailable = true;
+            bool anyItemAvailable = false;
+            for (int i = 0; i < data.RequiredItems.Length; i++)
+            {
+              if (data.RequiredItems[i].Equals(inputs[0].SlotData.Item) && inputs[0].SlotData.Quantity > 0)
+                anyItemAvailable = true;
+              else
+                allItemsAvailable = false;
+              if (anyItemAvailable && !allItemsAvailable) break;
+            }
+            if ((data.AnyItem && anyItemAvailable) || allItemsAvailable)
+            {
+              KeysToRemove.Add(entityGuid);
+              Logs.Add(new LogEntry
+              {
+                Message = $"Re-enabled entity {entityGuid} for action {data.ActionId} due to item availability",
+                Level = Level.Info,
+                Category = Category.Tasks
+              });
+            }
+          }
+        }
+      }
+    }
+
     internal static class CacheServicePatches
     {
       /// <summary>
@@ -1834,12 +2013,11 @@ namespace NoLazyWorkers.Storage
         public static void SetOccupant_Postfix(LoadingDock __instance, LandVehicle occupant)
         {
           var storageKey = new StorageKey(__instance.GUID, StorageType.LoadingDock);
-          var cacheManager = GetOrCreateCacheService(__instance.ParentProperty);
-          cacheManager._loadingDockKeys[__instance.GUID] = storageKey;
+          var cacheService = GetOrCreateCacheService(__instance.ParentProperty);
           foreach (var slot in __instance.OutputSlots)
-            cacheManager.UnregisterItemSlot(slot, storageKey);
+            cacheService.UnregisterItemSlot(slot, storageKey);
           foreach (var slot in __instance.OutputSlots)
-            cacheManager.RegisterItemSlot(slot, storageKey);
+            cacheService.RegisterItemSlot(slot, storageKey);
           StorageManager.UpdateStorageCache(__instance.ParentProperty, __instance.GUID, __instance.OutputSlots, StorageType.LoadingDock);
         }
       }
@@ -1911,166 +2089,40 @@ namespace NoLazyWorkers.Storage
         }
       }
 
-      /// <summary>
-      /// Applies patches to the ItemSlot class for cache updates on slot changes.
-      /// </summary>
       [HarmonyPatch(typeof(ItemSlot))]
       public class ItemSlotPatch
       {
-        /// <summary>
-        /// Updates cache when an item slot's quantity changes.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="change">The quantity change.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
         [HarmonyPostfix]
         [HarmonyPatch("ChangeQuantity")]
         public static void ChangeQuantityPostfix(ItemSlot __instance, int change, bool _internal)
         {
-          if (change == 0 || __instance.ItemInstance == null) return;
-          var owner = __instance.SlotOwner;
-          if (owner == null) return;
-          var slotKey = __instance.GetSlotKey();
           var property = __instance.GetProperty();
-          var type = __instance.OwnerType();
-
+          if (property == null) return;
           var cacheService = GetOrCreateCacheService(property);
-          cacheService._slotCache[slotKey] = (property.NetworkObject.ObjectId, type, __instance.SlotIndex);
-#if DEBUG
-          Log(Level.Verbose,
-              $"ItemSlotPatch.ChangeQuantityPostfix: Slot={__instance.SlotIndex}, item={__instance.ItemInstance.ID}{(__instance.ItemInstance is QualityItemInstance qual ? $" Quality={qual.Quality}" : "")}, change={change}, newQty={__instance.Quantity}, entity={slotKey.EntityGuid}, type={type}",
-              Category.Storage);
-#endif
-          if (change > 0)
-            cacheService.ClearItemNotFoundCache(new ItemKey(__instance.ItemInstance));
-          if (owner is PlaceableStorageEntity shelf && __instance.Quantity <= 0)
-            cacheService.ClearZeroQuantityEntries(shelf, new[] { __instance.ItemInstance });
+          var disabledEntities = DisabledEntityServices[property]._disabledEntities;
+          CoroutineRunner.Instance.RunCoroutine(cacheService.UpdateSlot(__instance, property, null, change, false, false, disabledEntities));
         }
 
-        /// <summary>
-        /// Updates cache when an item is set in a slot.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="instance">The item instance to set.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
         [HarmonyPostfix]
         [HarmonyPatch("SetStoredItem")]
         public static void SetStoredItemPostfix(ItemSlot __instance, ItemInstance instance, bool _internal)
         {
-          var owner = __instance.SlotOwner as BuildableItem;
-          if (owner == null || instance == null || owner.ParentProperty == null)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"SetStoredItemPostfix: Invalid input (owner={owner?.GUID}, item={instance?.ID})", Category.Storage);
-#endif
-            return;
-          }
-
-          var cacheService = CacheService.GetOrCreateCacheService(owner.ParentProperty);
-          var slotKey = new SlotKey(owner.GUID, __instance.SlotIndex);
-          if (!cacheService._slotCache.TryGetValue(slotKey, out var slotInfo))
-          {
-#if DEBUG
-            Log(Level.Verbose, $"SetStoredItemPostfix: Slot {slotKey.EntityGuid}:{slotKey.SlotIndex} not found in cache", Category.Storage);
-#endif
-            return;
-          }
-
-          // Skip non-employee NPCs
-          if (slotInfo.Type == StorageType.Employee &&
-              !IEmployees.TryGetValue(owner.ParentProperty, out var employees) &&
-              !employees.ContainsKey(owner.GUID))
-          {
-#if DEBUG
-            Log(Level.Verbose, $"SetStoredItemPostfix: Skipping non-employee NPC {owner.GUID}", Category.Storage);
-#endif
-            return;
-          }
-
-          // Validate storage type
-          if (slotInfo.Type != StorageType.SpecificShelf &&
-              slotInfo.Type != StorageType.AnyShelf &&
-              slotInfo.Type != StorageType.Station &&
-              slotInfo.Type != StorageType.LoadingDock &&
-              slotInfo.Type != StorageType.Employee)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"SetStoredItemPostfix: Invalid storage type {slotInfo.Type} for {owner.GUID}", Category.Storage);
-#endif
-            return;
-          }
-
-#if DEBUG
-          Log(Level.Verbose,
-              $"SetStoredItemPostfix: Slot={__instance.SlotIndex}, item={(instance?.ID ?? "null")}{(instance is QualityItemInstance qual ? $" Quality={qual.Quality}" : "")}, owner={owner.GUID}, type={slotInfo.Type}",
-              Category.Storage);
-#endif
-
-          cacheService.ClearItemNotFoundCache(new ItemKey(instance));
-          CoroutineRunner.Instance.RunCoroutine(StorageManager.UpdateStorageCache(owner.ParentProperty, owner.GUID, [__instance], slotInfo.Type));
+          var property = __instance.GetProperty();
+          if (property == null) return;
+          var cacheService = GetOrCreateCacheService(property);
+          var disabledEntities = DisabledEntityServices[property]._disabledEntities;
+          CoroutineRunner.Instance.RunCoroutine(cacheService.UpdateSlot(__instance, property, instance, 0, false, true, disabledEntities));
         }
 
-        /// <summary>
-        /// Updates cache when an item is cleared from a slot.
-        /// </summary>
-        /// <param name="__instance">The item slot instance.</param>
-        /// <param name="_internal">Whether the change is internal.</param>
         [HarmonyPostfix]
         [HarmonyPatch("ClearStoredInstance")]
         public static void ClearStoredInstancePostfix(ItemSlot __instance, bool _internal)
         {
-          var owner = __instance.SlotOwner as BuildableItem;
-          if (owner == null || owner.ParentProperty == null)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"ClearStoredInstancePostfix: Invalid owner={owner?.GUID}", Category.Storage);
-#endif
-            return;
-          }
-
-          var cacheService = CacheService.GetOrCreateCacheService(owner.ParentProperty);
-          var slotKey = new SlotKey(owner.GUID, __instance.SlotIndex);
-          if (!cacheService._slotCache.TryGetValue(slotKey, out var slotInfo))
-          {
-#if DEBUG
-            Log(Level.Verbose, $"ClearStoredInstancePostfix: Slot {slotKey.EntityGuid}:{slotKey.SlotIndex} not found in cache", Category.Storage);
-#endif
-            return;
-          }
-
-          // Skip non-employee NPCs
-          if (slotInfo.Type == StorageType.Employee &&
-              !ManagedDictionaries.IEmployees.TryGetValue(owner.ParentProperty, out var employees) &&
-              !employees.ContainsKey(owner.GUID))
-          {
-#if DEBUG
-            Log(Level.Verbose, $"ClearStoredInstancePostfix: Skipping non-employee NPC {owner.GUID}", Category.Storage);
-#endif
-            return;
-          }
-
-          // Validate storage type
-          if (slotInfo.Type != StorageType.SpecificShelf &&
-              slotInfo.Type != StorageType.AnyShelf &&
-              slotInfo.Type != StorageType.Station &&
-              slotInfo.Type != StorageType.LoadingDock &&
-              slotInfo.Type != StorageType.Employee)
-          {
-#if DEBUG
-            Log(Level.Verbose, $"ClearStoredInstancePostfix: Invalid storage type {slotInfo.Type} for {owner.GUID}", Category.Storage);
-#endif
-            return;
-          }
-
-#if DEBUG
-          Log(Level.Verbose,
-              $"ClearStoredInstancePostfix: Slot={__instance.SlotIndex}, owner={owner.GUID}, type={slotInfo.Type}",
-              Category.Storage);
-#endif
-
-          if (owner is PlaceableStorageEntity shelf && __instance.ItemInstance != null)
-            cacheService.ClearZeroQuantityEntries(shelf, new[] { __instance.ItemInstance });
-          CoroutineRunner.Instance.RunCoroutine(StorageManager.UpdateStorageCache(owner.ParentProperty, owner.GUID, [__instance], slotInfo.Type));
+          var property = __instance.GetProperty();
+          if (property == null) return;
+          var cacheService = GetOrCreateCacheService(property);
+          var disabledEntities = DisabledEntityServices[property]._disabledEntities;
+          CoroutineRunner.Instance.RunCoroutine(cacheService.UpdateSlot(__instance, property, null, 0, true, false, disabledEntities));
         }
       }
     }
@@ -2088,56 +2140,66 @@ namespace NoLazyWorkers.Storage
     /// <param name="storageSlotsCache">The cache of storage slots.</param>
     [BurstCompile]
     public void FindItem(
-                int index,
-                NativeArray<StorageKey> inputs,
-                NativeList<StorageResultBurst> outputs,
-                ItemData targetItem,
-                int needed,
-                bool allowTargetHigherQuality,
-                NativeList<LogEntry> logs,
-                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache)
+            int index,
+            NativeArray<StorageKey> inputs,
+            NativeList<StorageResultBurst> outputs,
+            ItemData targetItem,
+            int needed,
+            bool allowTargetHigherQuality,
+            NativeList<LogEntry> logs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices)
     {
-      var storageKey = inputs[index];
-      if (TryGetSlots(storageKey, out var slots))
+      var itemKey = new ItemKey(targetItem);
+      if (!_itemToSlotIndices.TryGetValue(itemKey, out var storageEntries))
+        return;
+
+      int totalQty = 0;
+      var slotData = new NativeList<SlotData>(Allocator.Persistent);
+      foreach (var (storageKey, slotIndices) in storageEntries)
       {
-        int totalQty = 0;
-        var slotData = new NativeList<SlotData>(1, Allocator.Persistent);
-        for (int j = 0; j < slots.Length; j++)
+        if (storageSlotsCache.TryGetValue(storageKey, out var slots))
         {
+          for (int i = 0; i < slotIndices.Length; i++)
+          {
+            int slotIndex = slotIndices[i];
+            for (int j = 0; j < slots.Length; j++)
+            {
+              if (slots[j].SlotIndex == slotIndex && slots[j].IsValid && slots[j].Item.AdvCanStackWithBurst(targetItem, allowTargetHigherQuality) && slots[j].Quantity > 0)
+              {
+                totalQty += slots[j].Quantity;
+                slotData.Add(slots[j]);
 #if DEBUG
-          logs.Add(new LogEntry
-          {
-            Message = $"Checking slot {slots[j].SlotIndex} for item {targetItem.Id}",
-            Level = Level.Verbose,
-            Category = Category.Storage
-          });
+                logs.Add(new LogEntry
+                {
+                  Message = $"Found slot {slotIndex} for item {targetItem.Id} in {storageKey.Guid}",
+                  Level = Level.Verbose,
+                  Category = Category.Storage
+                });
 #endif
-          var slot = slots[j];
-          if (slot.IsValid && slot.Item.AdvCanStackWithBurst(targetItem, allowTargetHigherQuality) && slot.Quantity > 0)
-          {
-            totalQty += slot.Quantity;
-            slotData.Add(slot);
+              }
+            }
           }
         }
-        if (totalQty >= needed)
+      }
+      if (totalQty >= needed)
+      {
+        outputs.Add(new StorageResultBurst
         {
-          outputs.Add(new StorageResultBurst
-          {
-            ShelfGuid = storageKey.Guid,
-            AvailableQuantity = totalQty,
-            SlotData = slotData
-          });
-          logs.Add(new LogEntry
-          {
-            Message = $"Found shelf {storageKey.Guid} with {totalQty} of {targetItem.Id}",
-            Level = Level.Info,
-            Category = Category.Storage
-          });
-        }
-        else
+          ShelfGuid = storageEntries[0].Item1.Guid,
+          AvailableQuantity = totalQty,
+          SlotData = slotData
+        });
+        logs.Add(new LogEntry
         {
-          slotData.Dispose();
-        }
+          Message = $"Found storage with {totalQty} of {targetItem.Id}",
+          Level = Level.Info,
+          Category = Category.Storage
+        });
+      }
+      else
+      {
+        slotData.Dispose();
       }
     }
 

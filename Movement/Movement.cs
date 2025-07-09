@@ -1,23 +1,15 @@
-
-using FishNet;
-using HarmonyLib;
 using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
-using NoLazyWorkers.Employees;
 using static NoLazyWorkers.Employees.Extensions;
-using static NoLazyWorkers.Movement.Utilities;
-using System.Collections;
-using UnityEngine;
 using ScheduleOne.DevUtilities;
-using MelonLoader;
-using NoLazyWorkers.TaskService;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.TimeManagerExtensions;
+using static NoLazyWorkers.Extensions.FishNetExtensions;
 using NoLazyWorkers.Storage;
 using static NoLazyWorkers.TaskService.Extensions;
 using static NoLazyWorkers.Debug;
+using NoLazyWorkers.Extensions;
+using UnityEngine.Pool;
 
 namespace NoLazyWorkers.Movement
 {
@@ -134,7 +126,6 @@ namespace NoLazyWorkers.Movement
   {
     public class TransferRequest
     {
-      private static readonly Stack<TransferRequest> Pool = new(16);
       public Employee Employee { get; private set; }
       public ItemInstance Item { get; private set; }
       public int Quantity { get; private set; }
@@ -144,25 +135,54 @@ namespace NoLazyWorkers.Movement
       public ITransitEntity DropOff { get; private set; }
       public List<ItemSlot> DropOffSlots { get; private set; }
 
+      private static readonly ObjectPool<TransferRequest> _pool = PoolUtility.InitializeObjectPool<TransferRequest>(
+          createFunc: () => new TransferRequest(),
+          actionOnGet: null,
+          actionOnRelease: request =>
+          {
+            request.Employee = null;
+            request.Item = null;
+            request.Quantity = 0;
+            request.InventorySlot = null;
+            request.PickUp = null;
+            request.PickupSlots?.Clear();
+            request.DropOff = null;
+            request.DropOffSlots?.Clear();
+          },
+          actionOnDestroy: null,
+          defaultCapacity: 16,
+          maxSize: 32,
+          poolName: "TransferRequest_Pool"
+      );
+
       private static bool _isInitialized;
+
+      /// <summary>
+      /// Initializes the TransferRequest pool.
+      /// </summary>
       public static void Initialize()
       {
         if (_isInitialized) return;
-        for (int i = 0; i < 32; i++)
-          Pool.Push(new TransferRequest());
         _isInitialized = true;
         Log(Level.Info, "TransferRequest pool initialized", Category.Movement);
       }
 
-      private TransferRequest() { }
-
       /// <summary>
-      /// Retrieves or creates a transfer request
+      /// Retrieves or creates a transfer request.
       /// </summary>
+      /// <param name="employee">The employee handling the request.</param>
+      /// <param name="item">The item to transfer.</param>
+      /// <param name="quantity">The quantity to transfer.</param>
+      /// <param name="inventorySlot">The employee's inventory slot.</param>
+      /// <param name="pickup">The pickup entity.</param>
+      /// <param name="pickupSlots">The pickup slots.</param>
+      /// <param name="dropOff">The drop-off entity.</param>
+      /// <param name="dropOffSlots">The drop-off slots.</param>
+      /// <returns>A configured TransferRequest.</returns>
       public static TransferRequest Get(Employee employee, ItemInstance item, int quantity, ItemSlot inventorySlot,
-              ITransitEntity pickup, List<ItemSlot> pickupSlots, ITransitEntity dropOff, List<ItemSlot> dropOffSlots)
+          ITransitEntity pickup, List<ItemSlot> pickupSlots, ITransitEntity dropOff, List<ItemSlot> dropOffSlots)
       {
-        var request = Pool.Count > 0 ? Pool.Pop() : new TransferRequest();
+        var request = _pool.Get();
         request.Employee = employee ?? throw new ArgumentNullException(nameof(employee));
         request.Item = item ?? throw new ArgumentNullException(nameof(item));
         request.Quantity = quantity > 0 ? quantity : throw new ArgumentException("Quantity must be positive", nameof(quantity));
@@ -175,32 +195,36 @@ namespace NoLazyWorkers.Movement
         if (request.PickUp == null && request.PickupSlots.Count == 0)
           throw new ArgumentException("No valid pickup slots");
 
-        // Reserve slots using SlotManager
         foreach (var slot in request.PickupSlots.Where(s => s != null))
           SlotService.ReserveSlot(request.PickUp.GUID, slot, employee.NetworkObject, "pickup", item, quantity);
         foreach (var slot in request.DropOffSlots.Where(s => s != null))
           SlotService.ReserveSlot(request.DropOff.GUID, slot, employee.NetworkObject, "dropoff", item, quantity);
         SlotService.ReserveSlot(employee.GUID, request.InventorySlot, employee.NetworkObject, "inventory", request.Item, request.Quantity);
+#if DEBUG
+        Log(Level.Verbose, $"Retrieved TransferRequest for employee {employee.GUID}, item {item.ID}, quantity {quantity}", Category.Movement);
+#endif
         return request;
       }
 
+      /// <summary>
+      /// Releases a TransferRequest back to the pool.
+      /// </summary>
+      /// <param name="request">The request to release.</param>
       public static void Release(TransferRequest request)
       {
         if (request == null) return;
-        request.Employee = null;
-        request.Item = null;
-        request.Quantity = 0;
-        request.InventorySlot = null;
-        request.PickUp = null;
-        request.PickupSlots?.Clear();
-        request.DropOff = null;
-        request.DropOffSlots?.Clear();
-        Pool.Push(request);
+        _pool.Release(request);
+#if DEBUG
+        Log(Level.Verbose, "Released TransferRequest to pool", Category.Movement);
+#endif
       }
 
+      /// <summary>
+      /// Cleans up the TransferRequest pool.
+      /// </summary>
       public static void Cleanup()
       {
-        Pool.Clear();
+        PoolUtility.DisposeObjectPool(_pool, "TransferRequest_Pool");
         _isInitialized = false;
         Log(Level.Info, "TransferRequest pool cleaned up", Category.Movement);
       }

@@ -39,9 +39,9 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
     /// </summary>
     public class RefillStationTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagerRefillStation;
+      public TaskName Type => TaskName.PackagerRefillStation;
       public int Priority => 3;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => true;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.PlaceableStorageEntity;
@@ -234,9 +234,9 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
     /// </summary>
     public class EmptyLoadingDockTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagerEmptyLoadingDock;
+      public TaskName Type => TaskName.PackagerEmptyLoadingDock;
       public int Priority => 2;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => true;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.LoadingDock;
@@ -431,9 +431,9 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
     /// </summary>
     public class RestockSpecificShelfTaskDef : ITaskDefinition
     {
-      public TaskTypes Type => TaskTypes.PackagerRestock;
+      public TaskName Type => TaskName.PackagerRestock;
       public int Priority => 2;
-      public EmployeeTypes EmployeeType => EmployeeTypes.Handler;
+      public TaskEmployeeType EmployeeType => TaskEmployeeType.Handler;
       public bool RequiresPickup => true;
       public bool RequiresDropoff => true;
       public TransitTypes PickupType => TransitTypes.PlaceableStorageEntity;

@@ -1,13 +1,17 @@
 using System.Collections;
 using FishNet.Managing.Timing;
 using NoLazyWorkers.Storage;
+using NoLazyWorkers.TaskService;
 using ScheduleOne.Delivery;
+using ScheduleOne.Employees;
+using ScheduleOne.EntityFramework;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Property;
 using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
+using UnityEngine.Pool;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
@@ -16,6 +20,128 @@ using static NoLazyWorkers.Storage.ShelfExtensions;
 
 namespace NoLazyWorkers.Extensions
 {
+  // <summary>
+  /// Utility class for standardized pool management across services.
+  /// </summary>
+  public static class PoolUtility
+  {
+    /// <summary>
+    /// Initializes a NativeListPool with the specified factory and initial size.
+    /// </summary>
+    /// <typeparam name="T">The unmanaged type for the pool.</typeparam>
+    /// <param name="factory">Function to create a new NativeList.</param>
+    /// <param name="initialSize">Initial number of items in the pool.</param>
+    /// <param name="poolName">Name of the pool for logging.</param>
+    /// <returns>A configured NativeListPool.</returns>
+    public static NativeListPool<T> InitializeNativeListPool<T>(Func<NativeList<T>> factory, int initialSize, string poolName) where T : unmanaged
+    {
+      var pool = new NativeListPool<T>(factory, initialSize);
+#if DEBUG
+      Log(Level.Verbose, $"Initialized {poolName} with initial size {initialSize}", Category.Pooling);
+#endif
+      return pool;
+    }
+
+    /// <summary>
+    /// Disposes a NativeListPool and logs the operation.
+    /// </summary>
+    /// <typeparam name="T">The unmanaged type for the pool.</typeparam>
+    /// <param name="pool">The pool to dispose.</param>
+    /// <param name="poolName">Name of the pool for logging.</param>
+    public static void DisposeNativeListPool<T>(NativeListPool<T> pool, string poolName) where T : unmanaged
+    {
+      pool.Dispose();
+#if DEBUG
+      Log(Level.Verbose, $"Disposed {poolName}", Category.Pooling);
+#endif
+    }
+
+    /// <summary>
+    /// Initializes an ObjectPool with the specified parameters.
+    /// </summary>
+    /// <typeparam name="T">The type for the pool.</typeparam>
+    /// <param name="createFunc">Function to create a new item.</param>
+    /// <param name="actionOnGet">Action on item retrieval.</param>
+    /// <param name="actionOnRelease">Action on item release.</param>
+    /// <param name="actionOnDestroy">Action on item destruction.</param>
+    /// <param name="defaultCapacity">Default pool capacity.</param>
+    /// <param name="maxSize">Maximum pool size.</param>
+    /// <param name="poolName">Name of the pool for logging.</param>
+    /// <returns>A configured ObjectPool.</returns>
+    public static ObjectPool<T> InitializeObjectPool<T>(
+        Func<T> createFunc,
+        Action<T> actionOnGet,
+        Action<T> actionOnRelease,
+        Action<T> actionOnDestroy,
+        int defaultCapacity,
+        int maxSize,
+        string poolName) where T : class
+    {
+      var pool = new ObjectPool<T>(createFunc, actionOnGet, actionOnRelease, actionOnDestroy, false, defaultCapacity, maxSize);
+#if DEBUG
+      Log(Level.Verbose, $"Initialized {poolName} with capacity {defaultCapacity}, max size {maxSize}", Category.Pooling);
+#endif
+      return pool;
+    }
+
+
+
+    /// <summary>
+    /// Pools and reuses NativeList instances for efficient memory management.
+    /// </summary>
+    public class NativeListPool<T> where T : unmanaged
+    {
+      private readonly Queue<NativeList<T>> _pool;
+      private readonly Func<NativeList<T>> _factory;
+
+      public NativeListPool(Func<NativeList<T>> factory, int initialSize = 10)
+      {
+        _pool = new Queue<NativeList<T>>(initialSize);
+        _factory = factory;
+        for (int i = 0; i < initialSize; i++)
+          _pool.Enqueue(factory());
+      }
+
+      public NativeList<T> Get()
+      {
+        return _pool.Count > 0 ? _pool.Dequeue() : _factory();
+      }
+
+      public void Return(NativeList<T> list)
+      {
+        if (list.IsCreated)
+        {
+          list.Clear();
+          _pool.Enqueue(list);
+        }
+      }
+
+      public void Dispose()
+      {
+        while (_pool.Count > 0)
+        {
+          var list = _pool.Dequeue();
+          if (list.IsCreated) list.Dispose();
+        }
+      }
+    }
+
+
+    /// <summary>
+    /// Disposes an ObjectPool by clearing its items and logs the operation.
+    /// </summary>
+    /// <typeparam name="T">The type for the pool.</typeparam>
+    /// <param name="pool">The pool to dispose.</param>
+    /// <param name="poolName">Name of the pool for logging.</param>
+    public static void DisposeObjectPool<T>(ObjectPool<T> pool, string poolName) where T : class
+    {
+      pool.Clear();
+#if DEBUG
+      Log(Level.Verbose, $"Disposed {poolName}", Category.Pooling);
+#endif
+    }
+  }
+
   /// <summary>
   /// Provides extension methods for FishNet integration, including tick waiting and batch size calculation.
   /// </summary>
@@ -208,14 +334,14 @@ namespace NoLazyWorkers.Extensions
         case PlaceableStorageEntity storage:
           guid = storage.GUID;
           break;
-        case IStationAdapter station:
+        case BuildableItem station:
           guid = station.GUID;
           break;
         case LoadingDock dock:
           guid = dock.GUID;
           break;
-        case IEmployeeAdapter employee:
-          guid = employee.Guid;
+        case Employee employee:
+          guid = employee.GUID;
           break;
         default:
           return default;
@@ -229,11 +355,11 @@ namespace NoLazyWorkers.Extensions
       {
         case PlaceableStorageEntity storage:
           return storage.ParentProperty;
-        case IStationAdapter station:
+        case BuildableItem station:
           return station.ParentProperty;
         case LoadingDock dock:
           return dock.ParentProperty;
-        case IEmployeeAdapter employee:
+        case Employee employee:
           return employee.AssignedProperty;
         default:
           return null;
@@ -250,11 +376,11 @@ namespace NoLazyWorkers.Extensions
                  configs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
                  ? StorageType.SpecificShelf
                  : StorageType.AnyShelf;
-        case IStationAdapter:
+        case BuildableItem:
           return StorageType.Station;
         case LoadingDock:
           return StorageType.LoadingDock;
-        case IEmployeeAdapter:
+        case Employee:
           return StorageType.Employee;
         default:
           return default;

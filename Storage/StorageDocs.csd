@@ -1,0 +1,952 @@
+/// <summary>
+/// Manages storage operations, including initialization, cleanup, and slot operations for items in a networked environment.
+/// </summary>
+public static class StorageManager
+{
+    /// <summary>
+    /// Initializes the SlotService, setting up necessary resources.
+    /// </summary>
+    public static void Initialize()
+
+    /// <summary>
+    /// Cleans up resources used by the SlotService.
+    /// </summary>
+    public static void Cleanup()
+
+    /// <summary>
+    /// Clears the cache for a specific entity identified by its GUID within a property.
+    /// </summary>
+    /// <param name="property">The property containing the entity.</param>
+    /// <param name="guid">The GUID of the entity to clear from cache.</param>
+    public static void ClearEntityCache(Property property, Guid guid)
+
+    /// <summary>
+    /// Reserves a slot for an item with a specified locker and reason.
+    /// </summary>
+    /// <param name="entityGuid">The GUID of the entity containing the slot.</param>
+    /// <param name="slot">The slot to reserve.</param>
+    /// <param name="locker">The network object locking the slot.</param>
+    /// <param name="lockReason">The reason for locking the slot.</param>
+    /// <param name="item">The item to reserve (optional).</param>
+    /// <param name="quantity">The quantity to reserve (optional).</param>
+    /// <returns>True if the slot was reserved successfully, false otherwise.</returns>
+    public static bool ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)
+
+    /// <summary>
+    /// Releases a previously reserved slot.
+    /// </summary>
+    /// <param name="slot">The slot to release.</param>
+    public static void ReleaseSlot(ItemSlot slot)
+
+    /// <summary>
+    /// Finds storage containing the specified item with the required quantity.
+    /// </summary>
+    /// <param name="property">The property to search in.</param>
+    /// <param name="item">The item to find.</param>
+    /// <param name="needed">The quantity needed.</param>
+    /// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
+    /// <returns>An enumerator yielding the storage result.</returns>
+    public static IEnumerator FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)
+
+    /// <summary>
+    /// Updates the storage cache for a specific entity and its slots.
+    /// </summary>
+    /// <param name="property">The property to update the cache for.</param>
+    /// <param name="entityGuid">The GUID of the entity.</param>
+    /// <param name="slots">The list of slots to update.</param>
+    /// <param name="storageType">The type of storage.</param>
+    /// <returns>An enumerator for asynchronous cache update.</returns>
+    public static IEnumerator UpdateStorageCache(Property property, Guid entityGuid, List<ItemSlot> slots, StorageType storageType)
+
+    /// <summary>
+    /// Finds delivery destinations for an item with the specified quantity.
+    /// </summary>
+    /// <param name="property">The property to search within.</param>
+    /// <param name="item">The item to deliver.</param>
+    /// <param name="quantity">The quantity to deliver.</param>
+    /// <param name="sourceGuid">The GUID of the source entity.</param>
+    /// <returns>An enumerator yielding a list of DeliveryDestinationBurst objects.</returns>
+    public static IEnumerator FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid)
+
+    /// <summary>
+    /// Finds available slots for storing an item with the specified quantity.
+    /// </summary>
+    /// <param name="property">The property to search within.</param>
+    /// <param name="entityGuid">The GUID of the entity containing the slots.</param>
+    /// <param name="slots">The list of slots to check.</param>
+    /// <param name="item">The item to store.</param>
+    /// <param name="quantity">The quantity to store.</param>
+    /// <returns>An enumerator yielding a list of tuples containing available slots and their capacities.</returns>
+    public static IEnumerator FindAvailableSlots(Property property, Guid entityGuid, List<ItemSlot> slots, ItemInstance item, int quantity)
+
+    /// <summary>
+    /// Executes a list of slot operations (insert or remove) for items.
+    /// </summary>
+    /// <param name="property">The property to perform operations within.</param>
+    /// <param name="operations">The list of operations to execute.</param>
+    /// <returns>An enumerator yielding a list of boolean results indicating success for each operation.</returns>
+    public static IEnumerator ExecuteSlotOperations(Property property, List<(Guid EntityGuid, ItemSlot Slot, ItemInstance Item, int Quantity, bool IsInsert, NetworkObject Locker, string LockReason)> operations)
+
+}
+
+public static class Extensions
+{
+    [BurstCompile]
+    public struct SlotUpdate
+
+    /// <summary>
+    /// Represents a slot operation with details about the entity, slot, item, and locking information.
+    /// </summary>
+    public struct SlotOperation
+
+    /// <summary>
+    /// Represents the result of checking a slot's availability.
+    /// </summary>
+    public struct SlotResult
+
+    /// <summary>
+    /// Contains data for a slot operation, including slot and item details.
+    /// </summary>
+    public struct OperationData
+
+    /// <summary>
+    /// Represents the result of a slot operation.
+    /// </summary>
+    public struct SlotOperationResult
+
+    /// <summary>
+    /// Represents a reservation for a slot.
+    /// </summary>
+    public struct SlotReservation
+
+    /// <summary>
+    /// Represents station data optimized for Burst compilation.
+    /// </summary>
+    [BurstCompile]
+    public struct StationData : IEquatable<StationData>
+    {
+        /// <summary>
+        /// Initializes a StationData instance from a station adapter.
+        /// </summary>
+        /// <param name="station">The station adapter to initialize from.</param>
+        public StationData(IStationAdapter station)
+
+        /// <summary>
+        /// Converts the StationData to an IStationAdapter.
+        /// </summary>
+        /// <returns>The corresponding IStationAdapter.</returns>
+        public IStationAdapter ToStationAdapter()
+
+        /// <summary>
+        /// Disposes of all native collections and clears pools.
+        /// </summary>
+        public void Dispose()
+
+        /// <summary>
+        /// Checks equality with another StationData instance.
+        /// </summary>
+        /// <param name="other">The StationData to compare with.</param>
+        /// <returns>True if equal, false otherwise.</returns>
+        public readonly bool Equals(StationData other)
+
+    }
+
+    /// <summary>
+    /// Represents storage data for a storage entity.
+    /// </summary>
+    [BurstCompile]
+    public struct StorageData
+    {
+        /// <summary>
+        /// Initializes a StorageData instance from a storage entity.
+        /// </summary>
+        /// <param name="shelf">The storage entity to initialize from.</param>
+        public StorageData(PlaceableStorageEntity shelf)
+
+        /// <summary>
+        /// Converts the StorageData to a PlaceableStorageEntity.
+        /// </summary>
+        /// <returns>The corresponding PlaceableStorageEntity.</returns>
+        public PlaceableStorageEntity ToPlaceableStorageEntity()
+
+        /// <summary>
+        /// Disposes of all native collections and clears pools.
+        /// </summary>
+        public void Dispose()
+
+    }
+
+    public struct StorageKey : IEquatable<StorageKey>
+    {
+        public StorageKey(Guid guid, StorageType type)
+
+        public bool Equals(StorageKey other)
+
+        public override bool Equals(object obj)
+
+        public override int GetHashCode()
+
+    }
+
+    /// <summary>
+    /// Stores item data, including ID, packaging, quality, and quantity.
+    /// </summary>
+    [BurstCompile]
+    public struct ItemData : IEquatable<ItemData>
+    {
+        public ItemData(ItemInstance item)
+
+        public ItemData(string id, string packagingId, EQualityBurst? quality, int quantity, int stackLimit)
+
+        public bool Equals(ItemData other)
+
+        public override bool Equals(object obj)
+
+        public override int GetHashCode()
+
+        public ItemInstance CreateItemInstance()
+
+        [BurstCompile]
+        internal readonly bool AdvCanStackWithBurst(ItemData targetItem, bool allowTargetHigherQuality = false, bool checkQuantities = false)
+
+        [BurstCompile]
+        private readonly bool ArePackagingsCompatible(ItemData targetItem)
+
+    }
+
+    public readonly struct ItemKey : IEquatable<ItemKey>
+    {
+        public ItemKey(ItemInstance item)
+
+        public ItemKey(ItemData itemKey)
+
+        internal new string ToString()
+
+        public bool Equals(ItemKey other)
+
+        public override bool Equals(object obj)
+
+        public override int GetHashCode()
+
+    }
+
+    [BurstCompile]
+    public struct SlotData : IEquatable<SlotData>
+    {
+        public SlotData(Guid guid, ItemSlot slot, StorageType type)
+
+        public bool Equals(SlotData other)
+
+        public override bool Equals(object obj)
+
+        public override int GetHashCode()
+
+    }
+
+    /// <summary>
+    /// Represents a key for identifying a slot within an entity.
+    /// </summary>
+    public struct SlotKey : IEquatable<SlotKey>
+    {
+        /// <summary>
+        /// Initializes a SlotKey with an entity GUID and slot index.
+        /// </summary>
+        /// <param name="entityGuid">The GUID of the entity.</param>
+        /// <param name="slotIndex">The index of the slot.</param>
+        public SlotKey(Guid entityGuid, int slotIndex)
+
+        /// <summary>
+        /// Checks equality with another SlotKey.
+        /// </summary>
+        /// <param name="other">The SlotKey to compare with.</param>
+        /// <returns>True if equal, false otherwise.</returns>
+        public bool Equals(SlotKey other)
+
+        public override bool Equals(object obj)
+
+        /// <summary>
+        /// Gets the hash code for the SlotKey.
+        /// </summary>
+        /// <returns>The hash code.</returns>
+        public override int GetHashCode()
+
+        /// <summary>
+        /// Retrieves the ItemSlot associated with this SlotKey.
+        /// </summary>
+        /// <param name="property">The property containing the slot.</param>
+        /// <returns>The ItemSlot associated with the key.</returns>
+        /// <exception cref="KeyNotFoundException">Thrown if the slot is not found.</exception>
+        internal ItemSlot GetItemSlotFromKey(Property property)
+
+    }
+
+    /// <summary>
+    /// Represents a storage result optimized for Burst compilation.
+    /// </summary>
+    [BurstCompile]
+    public struct StorageResultBurst
+    {
+        /// <summary>
+        /// Converts the Burst-optimized result to a managed StorageResult.
+        /// </summary>
+        /// <returns>The managed StorageResult.</returns>
+        public StorageResult GetResult()
+
+    }
+
+    /// <summary>
+    /// Represents a storage result with shelf and slot details.
+    /// </summary>
+    public struct StorageResult
+
+    /// <summary>
+    /// Represents a delivery destination optimized for Burst compilation.
+    /// </summary>
+    [BurstCompile]
+    public struct DeliveryDestinationBurst
+    {
+        /// <summary>
+        /// Converts the Burst-optimized result to a managed DeliveryDestination.
+        /// </summary>
+        /// <returns>The managed DeliveryDestination.</returns>
+        public DeliveryDestination GetResult()
+
+    }
+
+    /// <summary>
+    /// Represents a delivery destination with entity and slot details.
+    /// </summary>
+    public struct DeliveryDestination
+
+}
+
+public static class ManagedDictionaries
+{
+    internal static readonly Dictionary<Property, CacheService> CacheServices = new();
+    public static Dictionary<int, Property> IdToProperty = new();
+    public static Dictionary<Property, Dictionary<Guid, StorageConfiguration>> StorageConfigs = new();
+    public static Dictionary<Property, Dictionary<Guid, PlaceableStorageEntity>> Storages = new();
+    public static Dictionary<Property, Dictionary<Guid, LoadingDock>> LoadingDocks = new();
+    public static Dictionary<Property, Dictionary<Guid, IStationAdapter>> IStations = new();
+    public static Dictionary<Property, Dictionary<Guid, IEmployeeAdapter>> IEmployees = new();
+    public static Dictionary<Guid, JObject> PendingConfigData = new();
+}
+
+/// <summary>
+/// Manages object pools for various data types used in storage operations.
+/// </summary>
+private class PoolManager
+{
+    /// <summary>
+    /// Initializes a new instance of the PoolManager.
+    /// </summary>
+    private PoolManager()
+
+    /// <summary>
+    /// Creates an object pool for a specified type with a default capacity.
+    /// </summary>
+    /// <param name="defaultCapacity">The default capacity of the pool.</param>
+    /// <returns>An ObjectPool for the specified type.</returns>
+    private ObjectPool<T> CreatePool<T>(int defaultCapacity) where T : class, new()
+
+    /// <summary>
+    /// Clears all object pools.
+    /// </summary>
+    public void Cleanup()
+
+}
+
+/// <summary>
+/// Manages caching for storage-related data and operations.
+/// </summary>
+internal class CacheService : IDisposable
+{
+    internal readonly ObjectPool<List<StorageResultBurst>> _storageResultPool;
+    internal readonly ObjectPool<List<DeliveryDestinationBurst>> _deliveryResultPool;
+    internal NativeParallelHashMap<SlotKey, (int PropertyId, StorageType Type, int SlotIndex)> _slotCache;
+    internal NativeParallelHashMap<StorageKey, NativeList<SlotData>> _storageSlotsCache;
+    internal NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> _itemToSlotIndices;
+    internal NativeList<StorageKey> _anyShelfKeys;
+    internal NativeParallelHashSet<ItemKey> _notFoundItems;
+    internal NativeParallelHashMap<Guid, StorageType> _ownerToStorageType;
+    internal NativeParallelHashSet<ItemKey> _noDropOffCache;
+    internal NativeParallelHashSet<StationData> StationData;
+    internal NativeList<SlotUpdate> _pendingSlotUpdates;
+    internal NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> _shelfSearchCache;
+    internal NativeParallelHashMap<ItemKey, NativeList<StorageKey>> _itemToStorageCache;
+    internal NativeParallelHashMap<StorageKey, int> _storagePropertyMap;
+
+    /// <summary>
+    /// Initializes a new instance of the CacheService for a property.
+    /// </summary>
+    /// <param name="property">The property to associate with the cache service.</param>
+    /// <exception cref="ArgumentNullException">Thrown if the property is null.</exception>
+    public CacheService(Property property)
+
+    /// <summary>
+    /// Activates the cache service, enabling update processing.
+    /// </summary>
+    public void Activate()
+
+    /// <summary>
+    /// Deactivates the cache service, stopping update processing.
+    /// </summary>
+    public void Deactivate()
+
+    /// <summary>
+    /// Disposes of all native collections and clears pools.
+    /// </summary>
+    public void Dispose()
+
+    /// <summary>
+    /// Cleans up pending updates and event subscriptions.
+    /// </summary>
+    private void Cleanup()
+
+    private IEnumerator ProcessPendingSlotUpdates()
+
+    /// <summary>
+    /// Retrieves or creates a CacheService for a given property.
+    /// </summary>
+    /// <param name="property">The property to associate with the cache service.</param>
+    /// <returns>The CacheService instance, or null if not on server.</returns>
+    public static CacheService GetOrCreateCacheService(Property property)
+
+    /// <summary>
+    /// Updates the storage cache for a slot in a Burst-compatible manner.
+    /// </summary>
+    /// <param name="index">The index of the slot to process.</param>
+    /// <param name="inputs">The array of slot data.</param>
+    /// <param name="key">The storage key.</param>
+    /// <param name="propertyId">The ID of the property.</param>
+    /// <param name="storageSlotsCache">The cache of storage slots.</param>
+    /// <param name="anyShelfKeys">The list of any shelf keys.</param>
+    /// <param name="notFoundItems">The set of items not found.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    internal void UpdateStorageCacheBurst(
+            int index,
+            NativeArray<SlotUpdate> inputs,
+            NativeList<SlotData> outputs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices,
+            NativeList<StorageKey> anyShelfKeys,
+            NativeParallelHashSet<ItemKey> notFoundItems,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Retrieves loading dock keys from the cache.
+    /// </summary>
+    /// <returns>A list of loading dock storage keys.</returns>
+    internal NativeList<StorageKey> GetLoadingDockKeys()
+
+    /// <summary>
+    /// Checks if an item is marked as not found in the cache.
+    /// </summary>
+    /// <param name="cacheKey">The key of the item to check.</param>
+    /// <returns>True if the item is marked as not found, false otherwise.</returns>
+    internal bool IsItemNotFound(ItemKey cacheKey)
+
+    /// <summary>
+    /// Clears the cache for a specific entity.
+    /// </summary>
+    /// <param name="guid">The GUID of the entity to clear from cache.</param>
+    public void ClearCacheForEntity(Guid guid)
+
+    /// <summary>
+    /// Initializes caches for property data asynchronously.
+    /// </summary>
+    /// <returns>An enumerator for asynchronous cache initialization.</returns>
+    private IEnumerator InitializePropertyDataCaches()
+
+    /// <summary>
+    /// Processes a slot cache item in a Burst-compatible manner.
+    /// </summary>
+    /// <param name="index">The index of the slot to process.</param>
+    /// <param name="inputs">The array of slot key data.</param>
+    /// <param name="outputs">The list to store cache entries.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    private void ProcessSlotCacheItemBurst(
+            int index,
+            NativeArray<SlotKeyData> inputs,
+            NativeList<SlotCacheEntry> outputs,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Processes results of slot cache item processing.
+    /// </summary>
+    /// <param name="results">The list of slot cache entries.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    private void ProcessSlotCacheItemResults(
+            NativeList<SlotCacheEntry> results,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Represents data for a slot key used in cache initialization.
+    /// </summary>
+    [BurstCompile]
+    public struct SlotKeyData
+
+    /// <summary>
+    /// Represents a cache entry for a slot.
+    /// </summary>
+    [BurstCompile]
+    public struct SlotCacheEntry
+
+    /// <summary>
+    /// Attempts to retrieve slots for a storage key from the cache.
+    /// </summary>
+    /// <param name="key">The storage key to retrieve slots for.</param>
+    /// <param name="slots">The retrieved slots, if any.</param>
+    /// <returns>True if slots were found, false otherwise.</returns>
+    [BurstCompile]
+    internal bool TryGetSlots(StorageKey key, out NativeList<SlotData> slots)
+
+    /// <summary>
+    /// Marks an item as not found in the cache.
+    /// </summary>
+    /// <param name="cacheKey">The key of the item to mark as not found.</param>
+    public void AddItemNotFound(ItemKey cacheKey)
+
+    /// <summary>
+    /// Clears an item from the not found cache.
+    /// </summary>
+    /// <param name="item">The item to clear from the not found cache.</param>
+    [BurstCompile]
+    public void ClearItemNotFoundCache(ItemKey item)
+
+    /// <summary>
+    /// Adds an item to the no drop-off cache.
+    /// </summary>
+    /// <param name="item">The item to add to the no drop-off cache.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void AddNoDropOffCache(ItemKey item, NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Removes an item from the no drop-off cache.
+    /// </summary>
+    /// <param name="item">The item to remove from the no drop-off cache.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void RemoveNoDropOffCache(ItemKey item, NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Clears zero quantity entries from the shelf search cache.
+    /// </summary>
+    /// <param name="shelf">The storage entity to process.</param>
+    /// <param name="items">The array of items to clear.</param>
+    /// <returns>An enumerator for asynchronous cache update.</returns>
+    public IEnumerator ClearZeroQuantityEntries(PlaceableStorageEntity shelf, ItemInstance[] items)
+
+    /// <summary>
+    /// Clears a zero quantity entry from the shelf search cache in a Burst-compatible manner.
+    /// </summary>
+    /// <param name="index">The index of the item to process.</param>
+    /// <param name="inputs">The array of item keys.</param>
+    /// <param name="shelfSearchCache">The shelf search cache.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    /// <param name="shelfGuid">The GUID of the shelf.</param>
+    [BurstCompile]
+    private void ClearZeroQuantityEntriesBurst(
+            int index,
+            NativeArray<ItemKey> inputs,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices,
+            NativeList<LogEntry> logs,
+            Guid shelfGuid)
+
+    /// <summary>
+    /// Removes entries from the shelf search cache.
+    /// </summary>
+    /// <param name="cacheKeys">The list of item keys to remove.</param>
+    /// <returns>An enumerator for asynchronous cache update.</returns>
+    internal IEnumerator RemoveShelfSearchCacheEntries(List<ItemKey> cacheKeys)
+
+    /// <summary>
+    /// Removes a shelf search cache entry in a Burst-compatible manner.
+    /// </summary>
+    /// <param name="index">The index of the item to process.</param>
+    /// <param name="inputs">The array of item keys.</param>
+    /// <param name="shelfSearchCache">The shelf search cache.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    private void RemoveShelfSearchCacheEntriesBurst(
+            int index,
+            NativeArray<ItemKey> inputs,
+            NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Registers an item slot in the cache.
+    /// </summary>
+    /// <param name="slot">The item slot to register.</param>
+    /// <param name="storageKey">The storage key associated with the slot.</param>
+    internal void RegisterItemSlot(ItemSlot slot, StorageKey storageKey)
+
+    /// <summary>
+    /// Unregisters an item slot from the cache.
+    /// </summary>
+    /// <param name="slot">The item slot to unregister.</param>
+    /// <param name="storageKey">The storage key associated with the slot.</param>
+    internal void UnregisterItemSlot(ItemSlot slot, StorageKey storageKey)
+
+    internal static class CacheServicePatches
+    {
+        /// <summary>
+        /// Applies patches to the Property class for cache management.
+        /// </summary>
+        [HarmonyPatch(typeof(Property))]
+        public class PropertyPatch
+        {
+            /// <summary>
+            /// Activates the cache service after a property is set as owned.
+            /// </summary>
+            [HarmonyPostfix]
+            [HarmonyPatch("SetOwned")]
+            public static void SetOwnedPostfix(Property __instance)
+
+        }
+
+        /// <summary>
+        /// Applies patches to the LoadingDock class for cache updates.
+        /// </summary>
+        [HarmonyPatch(typeof(LoadingDock))]
+        public class LoadingDockPatch
+        {
+            /// <summary>
+            /// Updates the cache when a loading dock's occupant is set.
+            /// </summary>
+            /// <param name="__instance">The loading dock instance.</param>
+            /// <param name="occupant">The vehicle occupying the loading dock.</param>
+            [HarmonyPostfix]
+            [HarmonyPatch("SetOccupant")]
+            public static void SetOccupant_Postfix(LoadingDock __instance, LandVehicle occupant)
+
+        }
+
+        /// <summary>
+        /// Applies patches to the GridItem class for storage initialization and cleanup.
+        /// </summary>
+        [HarmonyPatch(typeof(GridItem))]
+        public class GridItemPatch
+        {
+            /// <summary>
+            /// Initializes storage for a grid item if applicable.
+            /// </summary>
+            /// <param name="__instance">The grid item instance.</param>
+            /// <param name="instance">The item instance to initialize.</param>
+            /// <param name="grid">The grid the item is placed on.</param>
+            /// <param name="originCoordinate">The origin coordinate of the item.</param>
+            /// <param name="rotation">The rotation of the item.</param>
+            /// <param name="id">The ID of the item.</param>
+            /// <returns>True if initialization should proceed, false otherwise.</returns>
+            [HarmonyPrefix]
+            [HarmonyPatch("InitializeGridItem", new Type[] { typeof(ItemInstance), typeof(Grid), typeof(Vector2), typeof(int), typeof(string) })]
+            public static bool InitializeGridItemPrefix(GridItem __instance, ItemInstance instance, Grid grid, Vector2 originCoordinate, int rotation, string id)
+
+            /// <summary>
+            /// Cleans up cache entries when a grid item is destroyed.
+            /// </summary>
+            /// <param name="__instance">The grid item instance.</param>
+            /// <param name="callOnServer">Whether to call the destroy on the server.</param>
+            [HarmonyPostfix]
+            [HarmonyPatch("DestroyItem")]
+            public static void DestroyItemPostfix(GridItem __instance, bool callOnServer = true)
+
+        }
+
+        /// <summary>
+        /// Applies patches to the ItemSlot class for cache updates on slot changes.
+        /// </summary>
+        [HarmonyPatch(typeof(ItemSlot))]
+        public class ItemSlotPatch
+        {
+            /// <summary>
+            /// Updates cache when an item slot's quantity changes.
+            /// </summary>
+            /// <param name="__instance">The item slot instance.</param>
+            /// <param name="change">The quantity change.</param>
+            /// <param name="_internal">Whether the change is internal.</param>
+            [HarmonyPostfix]
+            [HarmonyPatch("ChangeQuantity")]
+            public static void ChangeQuantityPostfix(ItemSlot __instance, int change, bool _internal)
+
+            /// <summary>
+            /// Updates cache when an item is set in a slot.
+            /// </summary>
+            /// <param name="__instance">The item slot instance.</param>
+            /// <param name="instance">The item instance to set.</param>
+            /// <param name="_internal">Whether the change is internal.</param>
+            [HarmonyPostfix]
+            [HarmonyPatch("SetStoredItem")]
+            public static void SetStoredItemPostfix(ItemSlot __instance, ItemInstance instance, bool _internal)
+
+            /// <summary>
+            /// Updates cache when an item is cleared from a slot.
+            /// </summary>
+            /// <param name="__instance">The item slot instance.</param>
+            /// <param name="_internal">Whether the change is internal.</param>
+            [HarmonyPostfix]
+            [HarmonyPatch("ClearStoredInstance")]
+            public static void ClearStoredInstancePostfix(ItemSlot __instance, bool _internal)
+
+        }
+
+    }
+
+    /// <summary>
+    /// Finds items in storage that match the target item and required quantity.
+    /// </summary>
+    /// <param name="index">The index of the storage key to process.</param>
+    /// <param name="inputs">The array of storage keys.</param>
+    /// <param name="outputs">The list to store results.</param>
+    /// <param name="targetItem">The target item to find.</param>
+    /// <param name="needed">The required quantity.</param>
+    /// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    /// <param name="storageSlotsCache">The cache of storage slots.</param>
+    [BurstCompile]
+    public void FindItem(
+            int index,
+            NativeArray<StorageKey> inputs,
+            NativeList<StorageResultBurst> outputs,
+            ItemData targetItem,
+            int needed,
+            bool allowTargetHigherQuality,
+            NativeList<LogEntry> logs,
+            NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+            NativeParallelHashMap<ItemKey, NativeList<(StorageKey, NativeList<int>)>> itemToSlotIndices)
+
+    /// <summary>
+    /// Processes results of item search and updates caches.
+    /// </summary>
+    /// <param name="results">The list of storage results.</param>
+    /// <param name="shelfSearchCache">The cache for shelf search results.</param>
+    /// <param name="filteredStorageKeys">The cache for filtered storage keys.</param>
+    /// <param name="storagePropertyMap">The map of storage keys to property IDs.</param>
+    /// <param name="propertyId">The ID of the property.</param>
+    /// <param name="targetItem">The target item data.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void FindItemResults(
+            NativeList<StorageResultBurst> results,
+            NativeParallelHashMap<ItemKey, (StorageKey, int, NativeList<SlotData>)> shelfSearchCache,
+            NativeParallelHashMap<ItemKey, NativeList<StorageKey>> filteredStorageKeys,
+            NativeParallelHashMap<StorageKey, int> storagePropertyMap,
+            int propertyId,
+            ItemData targetItem,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Updates the station refill list in a Burst-compatible manner.
+    /// </summary>
+    /// <param name="index">The index of the station to process.</param>
+    /// <param name="inputs">The array of station data.</param>
+    /// <param name="item">The item to add to the refill list.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void UpdateStationRefillListBurst(
+                    int index,
+                    NativeArray<(Guid, NativeList<ItemKey>)> inputs,
+                    ItemKey item,
+                    NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Finds delivery destinations for an item.
+    /// </summary>
+    /// <param name="index">The index of the input to process.</param>
+    /// <param name="inputs">The array of storage keys and station flags.</param>
+    /// <param name="outputs">The list to store results.</param>
+    /// <param name="quantity">The quantity to deliver.</param>
+    /// <param name="sourceGuid">The GUID of the source entity.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    /// <param name="storageSlotsCache">The cache of storage slots.</param>
+    /// <param name="remainingQty">The remaining quantity to allocate.</param>
+    [BurstCompile]
+    public void FindDeliveryDestinationBurst(
+                int index,
+                NativeArray<(StorageKey Key, bool IsStation)> inputs,
+                NativeList<DeliveryDestinationBurst> outputs,
+                int quantity,
+                Guid sourceGuid,
+                NativeList<LogEntry> logs,
+                NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+                ref int remainingQty)
+
+    /// <summary>
+    /// Processes delivery destination results.
+    /// </summary>
+    /// <param name="destinations">The list of delivery destinations.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void FindDeliveryDestinationResults(
+            NativeList<DeliveryDestinationBurst> destinations,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Finds available slots for an item.
+    /// </summary>
+    /// <param name="index">The index of the slot to process.</param>
+    /// <param name="inputs">The array of slot data.</param>
+    /// <param name="outputs">The list to store results.</param>
+    /// <param name="item">The item to store.</param>
+    /// <param name="quantity">The quantity to store.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void FindAvailableSlotsBurst(
+                int index,
+                NativeArray<SlotData> inputs,
+                NativeList<SlotResult> outputs,
+                ItemData item,
+                int quantity,
+                NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Processes slot availability results.
+    /// </summary>
+    /// <param name="results">The list of slot results.</param>
+    /// <param name="slots">The list of item slots.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void FindAvailableSlotsBurstResults(
+                NativeList<SlotResult> results,
+                List<ItemSlot> slots,
+                NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Processes slot operations (insert/remove).
+    /// </summary>
+    /// <param name="index">The index of the operation to process.</param>
+    /// <param name="inputs">The array of operation data.</param>
+    /// <param name="outputs">The list to store results.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void ProcessSlotOperationsBurst(
+                int index,
+                NativeArray<OperationData> inputs,
+                NativeList<SlotOperationResult> outputs,
+                NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Processes results of slot operations and updates the operation list.
+    /// </summary>
+    /// <param name="results">The list of slot operation results.</param>
+    /// <param name="operations">The list of slot operations.</param>
+    /// <param name="opList">The list to store processed operations.</param>
+    /// <param name="networkObjectCache">The cache of network objects.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    [BurstCompile]
+    public void ProcessOperationResults(
+            NativeList<SlotOperationResult> results,
+            List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)> operations,
+            List<SlotOperation> opList,
+            List<NetworkObject> networkObjectCache,
+            NativeList<LogEntry> logs)
+
+    /// <summary>
+    /// Processes pending slot updates for a storage entity.
+    /// </summary>
+    /// <param name="index">The index of the update to process.</param>
+    /// <param name="inputs">The array of pending updates.</param>
+    /// <param name="outputs">The list to store processed updates.</param>
+    /// <param name="logs">The list to store log entries.</param>
+    /// <param name="storageSlotsCache">The cache of storage slots.</param>
+    /// <param name="itemToStorageCache">The cache mapping items to storage keys.</param>
+    /// <param name="anyShelfKeys">The list of any shelf keys.</param>
+    [BurstCompile]
+    private static void ProcessPendingUpdate(
+        int index,
+        NativeArray<(StorageKey, NativeList<SlotData>)> inputs,
+        NativeList<(StorageKey, NativeList<SlotData>)> outputs,
+        NativeList<LogEntry> logs,
+        NativeParallelHashMap<StorageKey, NativeList<SlotData>> storageSlotsCache,
+        NativeParallelHashMap<ItemKey, NativeList<StorageKey>> itemToStorageCache,
+        NativeList<StorageKey> anyShelfKeys)
+
+    /// <summary>
+    /// Processes results of pending slot updates.
+    /// </summary>
+    /// <param name="results">The list of processed updates.</param>
+    [BurstCompile]
+    private static void ProcessPendingUpdateResults(NativeList<(StorageKey, NativeList<SlotData>)> results)
+
+}
+
+/// <summary>
+/// Manages slot operations and reservations in a networked environment.
+/// </summary>
+internal class SlotService
+{
+    /// <summary>
+    /// Initializes the StorageManager, setting up necessary services if running on the server.
+    /// </summary>
+    public static void Initialize()
+
+    /// <summary>
+    /// Cleans up resources and resets the StorageManager state.
+    /// </summary>
+    public static void Cleanup()
+
+    /// <summary>
+    /// Reserves a slot for an item with specified locking details.
+    /// </summary>
+    /// <param name="entityGuid">The GUID of the entity containing the slot.</param>
+    /// <param name="slot">The slot to reserve.</param>
+    /// <param name="locker">The network object locking the slot.</param>
+    /// <param name="lockReason">The reason for locking the slot.</param>
+    /// <param name="item">The item to reserve (optional).</param>
+    /// <param name="quantity">The quantity to reserve (optional).</param>
+    /// <returns>True if the slot was reserved successfully, false otherwise.</returns>
+    internal static bool ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)
+
+    /// <summary>
+    /// Releases a previously reserved slot.
+    /// </summary>
+    /// <param name="slot">The slot to release.</param>
+    internal static void ReleaseSlot(ItemSlot slot)
+
+    internal static class SlotProcessingUtility
+    {
+        /// <summary>
+        /// Determines the capacity of a slot for a given item.
+        /// </summary>
+        /// <param name="slot">The slot data to check.</param>
+        /// <param name="item">The item data to store.</param>
+        /// <returns>The available capacity for the item in the slot.</returns>
+        [BurstCompile]
+        public static int GetCapacityForItem(SlotData slot, ItemData item)
+
+        /// <summary>
+        /// Checks if an item can be inserted into a slot.
+        /// </summary>
+        /// <param name="slot">The slot data to check.</param>
+        /// <param name="item">The item data to insert.</param>
+        /// <param name="quantity">The quantity to insert.</param>
+        /// <returns>True if the item can be inserted, false otherwise.</returns>
+        [BurstCompile]
+        public static bool CanInsert(SlotData slot, ItemData item, int quantity)
+
+        /// <summary>
+        /// Checks if an item can be removed from a slot.
+        /// </summary>
+        /// <param name="slot">The slot data to check.</param>
+        /// <param name="item">The item data to remove.</param>
+        /// <param name="quantity">The quantity to remove.</param>
+        /// <returns>True if the item can be removed, false otherwise.</returns>
+        [BurstCompile]
+        public static bool CanRemove(SlotData slot, ItemData item, int quantity)
+
+    }
+
+    [HarmonyPatch(typeof(ItemSlot))]
+    internal class ItemSlotPatch
+    {
+        [HarmonyPrefix]
+        [HarmonyPatch("ApplyLock", new Type[] { typeof(NetworkObject), typeof(string), typeof(bool) })]
+        static bool ApplyLockPrefix(ItemSlot __instance, NetworkObject lockOwner, string lockReason, bool _internal, ref ItemSlotLock ___ActiveLock)
+
+    }
+
+}

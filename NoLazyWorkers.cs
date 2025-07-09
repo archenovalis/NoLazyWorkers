@@ -41,6 +41,7 @@ using Unity.Burst;
 using static NoLazyWorkers.Debug;
 using ScheduleOne.UI.MainMenu;
 using NoLazyWorkers.Extensions;
+using static NoLazyWorkers.Extensions.PoolUtility;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -89,6 +90,12 @@ namespace NoLazyWorkers
     /// </summary>
     public static class Deferred
     {
+      private static readonly NativeListPool<LogEntry> _logPool = new NativeListPool<LogEntry>(() => new NativeList<LogEntry>(100, Allocator.TempJob));
+
+      public static NativeListPool<LogEntry> GetLogPool()
+      {
+        return _logPool;
+      }
       public static IEnumerator ProcessLogs(NativeList<LogEntry> logs)
       {
         var outputs = new List<FixedString64Bytes>();
@@ -100,7 +107,7 @@ namespace NoLazyWorkers
               for (int i = start; i < start + count; i++)
               {
                 var log = logs[i];
-                Log(Level.Info, log.ToString(), Category.Storage);
+                Log(log.Level, log.Message.ToString(), log.Category);
               }
             },
             nonBurstResultsDelegate: null,
@@ -149,12 +156,13 @@ namespace NoLazyWorkers
       General,
       Tasks,
       Stacktrace,
-      Performance
+      Performance,
+      Pooling
     }
     public static bool AnyEmployee;
     public static Level CurrentLevel { get; set; } = (Level)DebugLogs.Level;
 
-    private static readonly Dictionary<Category, Func<bool>> CategoryEnabled = new()
+    internal static readonly Dictionary<Category, Func<bool>> CategoryEnabled = new()
     {
         { Category.Core, () => DebugLogs.Core },
         // services
@@ -187,7 +195,7 @@ namespace NoLazyWorkers
         { Category.None, () => true } // Always enabled if All is true
     };
 
-    private static readonly Dictionary<Category, bool> CachedCategoryEnabled = new();
+    internal static readonly Dictionary<Category, bool> CachedCategoryEnabled = new();
     public static void Log(Level level, string message, params Category[] categories)
     {
       if (!DebugLogs.Enabled || level > CurrentLevel)
