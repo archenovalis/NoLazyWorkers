@@ -24,8 +24,10 @@ using static NoLazyWorkers.Extensions.PoolUtility;
 namespace NoLazyWorkers.TaskService
 {
     /// <summary>
-    /// Configures a task's processing steps using a fluent builder pattern.
+    /// Builds a task with configurable delegates for setup, entity selection, validation, and task creation.
     /// </summary>
+    /// <typeparam name="TSetupOutput">The type of setup output, must be a struct and IDisposable.</typeparam>
+    /// <typeparam name="TValidationSetupOutput">The type of validation setup output, must be a struct and IDisposable.</typeparam>
     public class TaskBuilder<TSetupOutput, TValidationSetupOutput>
         where TSetupOutput : struct, IDisposable
         where TValidationSetupOutput : struct, IDisposable
@@ -37,6 +39,10 @@ namespace NoLazyWorkers.TaskService
         private Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> _validateEntityDelegate;
         private Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> _createTaskDelegate;
 
+        /// <summary>
+        /// Initializes a new instance of the TaskBuilder with the specified task type.
+        /// </summary>
+        /// <param name="taskType">The type of task to build.</param>
         public TaskBuilder(TaskName taskType)
         {
             _taskType = taskType;
@@ -47,6 +53,11 @@ namespace NoLazyWorkers.TaskService
             _createTaskDelegate = (index, results, outputs) => { };
         }
 
+        /// <summary>
+        /// Configures the setup delegate for the task.
+        /// </summary>
+        /// <param name="setupDelegate">Delegate to handle setup logic.</param>
+        /// <returns>This TaskBuilder instance for method chaining.</returns>
         public TaskBuilder<TSetupOutput, TValidationSetupOutput> WithSetup(
             Action<int, int, int[], List<TSetupOutput>> setupDelegate)
         {
@@ -54,6 +65,11 @@ namespace NoLazyWorkers.TaskService
             return this;
         }
 
+        /// <summary>
+        /// Configures the entity selection delegate for the task.
+        /// </summary>
+        /// <param name="selectEntitiesDelegate">Delegate to select entities.</param>
+        /// <returns>This TaskBuilder instance for method chaining.</returns>
         public TaskBuilder<TSetupOutput, TValidationSetupOutput> WithSelectEntities(
             Action<NativeArray<int>, NativeList<Guid>> selectEntitiesDelegate)
         {
@@ -61,6 +77,11 @@ namespace NoLazyWorkers.TaskService
             return this;
         }
 
+        /// <summary>
+        /// Configures the validation setup delegate for the task.
+        /// </summary>
+        /// <param name="validationSetupDelegate">Delegate to handle validation setup.</param>
+        /// <returns>This TaskBuilder instance for method chaining.</returns>
         public TaskBuilder<TSetupOutput, TValidationSetupOutput> WithValidationSetup(
             Action<int, int, Guid[], List<TValidationSetupOutput>> validationSetupDelegate)
         {
@@ -68,6 +89,11 @@ namespace NoLazyWorkers.TaskService
             return this;
         }
 
+        /// <summary>
+        /// Configures the entity validation delegate for the task.
+        /// </summary>
+        /// <param name="validateEntityDelegate">Delegate to validate entities.</param>
+        /// <returns>This TaskBuilder instance for method chaining.</returns>
         public TaskBuilder<TSetupOutput, TValidationSetupOutput> WithValidateEntity(
             Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> validateEntityDelegate)
         {
@@ -75,6 +101,11 @@ namespace NoLazyWorkers.TaskService
             return this;
         }
 
+        /// <summary>
+        /// Configures the task creation delegate.
+        /// </summary>
+        /// <param name="createTaskDelegate">Delegate to create tasks.</param>
+        /// <returns>This TaskBuilder instance for method chaining.</returns>
         public TaskBuilder<TSetupOutput, TValidationSetupOutput> WithCreateTask(
             Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> createTaskDelegate)
         {
@@ -89,11 +120,11 @@ namespace NoLazyWorkers.TaskService
         public Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate => _createTaskDelegate;
     }
 
-    /// <summary>
-    /// Defines task-related enums and Job-compatible structs.
-    /// </summary>
     public static class Extensions
     {
+        /// <summary>
+        /// Defines the types of tasks that can be performed.
+        /// </summary>
         public enum TaskName
         {
             DeliverInventory,
@@ -105,6 +136,9 @@ namespace NoLazyWorkers.TaskService
             SimpleExample
         }
 
+        /// <summary>
+        /// Defines the types of employees that can perform tasks.
+        /// </summary>
         public enum TaskEmployeeType
         {
             Any,
@@ -115,6 +149,9 @@ namespace NoLazyWorkers.TaskService
             Cleaner
         }
 
+        /// <summary>
+        /// Defines the types of entities involved in tasks.
+        /// </summary>
         public enum TaskEntityType
         {
             Employee,
@@ -126,7 +163,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Empty struct for default generic type arguments.
+        /// Empty struct implementing IDisposable for use as a placeholder.
         /// </summary>
         [BurstCompile]
         public struct Empty : IDisposable
@@ -135,7 +172,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Represents a task with its properties and resource management.
+        /// Describes a task with relevant metadata and resources.
         /// </summary>
         [BurstCompile]
         public struct TaskDescriptor
@@ -155,6 +192,24 @@ namespace NoLazyWorkers.TaskService
             public FixedString32Bytes PropertyName;
             public float CreationTime;
 
+            /// <summary>
+            /// Creates a new TaskDescriptor with the specified parameters.
+            /// </summary>
+            /// <param name="entityGuid">The GUID of the entity associated with the task.</param>
+            /// <param name="type">The type of task.</param>
+            /// <param name="actionId">The action identifier.</param>
+            /// <param name="employeeType">The type of employee required.</param>
+            /// <param name="priority">The priority of the task.</param>
+            /// <param name="propertyName">The name of the property.</param>
+            /// <param name="item">The item data for the task.</param>
+            /// <param name="quantity">The quantity of the item.</param>
+            /// <param name="pickupGuid">The GUID of the pickup location.</param>
+            /// <param name="pickupSlotIndices">Indices of pickup slots.</param>
+            /// <param name="dropoffGuid">The GUID of the dropoff location.</param>
+            /// <param name="dropoffSlotIndices">Indices of dropoff slots.</param>
+            /// <param name="creationTime">The time the task was created.</param>
+            /// <param name="logs">The log collection for recording task creation.</param>
+            /// <returns>A new TaskDescriptor instance.</returns>
             public static TaskDescriptor Create(
                 Guid entityGuid, TaskName type, int actionId, TaskEmployeeType employeeType, int priority,
                 string propertyName, ItemData item, int quantity,
@@ -189,6 +244,9 @@ namespace NoLazyWorkers.TaskService
                 return descriptor;
             }
 
+            /// <summary>
+            /// Disposes of the task's native arrays.
+            /// </summary>
             public void Dispose()
             {
                 if (PickupSlotIndices.IsCreated) PickupSlotIndices.Dispose();
@@ -197,20 +255,21 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Key for tracking tasks by type and entity.
+        /// Represents a key for tasks based on type and entity GUID.
         /// </summary>
         [BurstCompile]
         public struct TaskTypeEntityKey : IEquatable<TaskTypeEntityKey>
         {
             public TaskName Type;
             public Guid EntityGuid;
+
             public bool Equals(TaskTypeEntityKey other) => EntityGuid == other.EntityGuid && Type == other.Type;
             public override bool Equals(object obj) => obj is TaskTypeEntityKey other && Equals(other);
             public override int GetHashCode() => HashCode.Combine(EntityGuid, Type);
         }
 
         /// <summary>
-        /// Stores validation results for entities.
+        /// Holds validation results for an entity.
         /// </summary>
         [BurstCompile]
         public struct ValidationResultData
@@ -224,7 +283,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Represents the result of task creation.
+        /// Represents the result of a task execution.
         /// </summary>
         [BurstCompile]
         public struct TaskResult
@@ -233,6 +292,12 @@ namespace NoLazyWorkers.TaskService
             public bool Success;
             public FixedString128Bytes FailureReason;
 
+            /// <summary>
+            /// Initializes a new TaskResult instance.
+            /// </summary>
+            /// <param name="task">The task descriptor.</param>
+            /// <param name="success">Whether the task was successful.</param>
+            /// <param name="failureReason">The reason for failure, if applicable.</param>
             public TaskResult(TaskDescriptor task, bool success, FixedString128Bytes failureReason = default)
             {
                 Task = task;
@@ -242,7 +307,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Data for disabled entities, including reasons and required items.
+        /// Represents data for a disabled entity.
         /// </summary>
         [BurstCompile]
         public struct DisabledEntityData
@@ -252,6 +317,9 @@ namespace NoLazyWorkers.TaskService
             public NativeList<ItemData> RequiredItems;
             public bool AnyItem;
 
+            /// <summary>
+            /// Defines reasons for disabling an entity.
+            /// </summary>
             public enum DisabledReasonType
             {
                 MissingItem,
@@ -259,6 +327,9 @@ namespace NoLazyWorkers.TaskService
             }
         }
 
+        /// <summary>
+        /// Defines quality levels for tasks or items.
+        /// </summary>
         public enum EQualityBurst
         {
             Trash,
@@ -271,29 +342,54 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Defines the interface for tasks, including execution and validation.
+    /// Defines the interface for tasks with basic properties and execution methods.
     /// </summary>
     public interface ITask
     {
         TaskName Type { get; }
         StorageType[] SupportedEntityTypes { get; }
         bool IsValidState(int state);
+
+        /// <summary>
+        /// Executes the task for the specified employee.
+        /// </summary>
+        /// <param name="employee">The employee executing the task.</param>
+        /// <param name="task">The task descriptor.</param>
+        /// <param name="options">Execution options.</param>
+        /// <returns>An IEnumerator for coroutine execution.</returns>
         IEnumerator ExecuteCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options);
+
+        /// <summary>
+        /// Handles follow-up actions after task execution.
+        /// </summary>
+        /// <param name="employee">The employee performing the follow-up.</param>
+        /// <param name="task">The task descriptor.</param>
+        /// <param name="options">Execution options.</param>
+        /// <returns>An IEnumerator for coroutine execution.</returns>
         IEnumerator FollowUpCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options);
     }
 
     /// <summary>
-    /// Defines a generic task interface with processing delegates.
+    /// Generic interface for tasks with setup and validation delegates.
     /// </summary>
+    /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+    /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
     public interface ITask<TSetupOutput, TValidationSetupOutput> : ITask
         where TSetupOutput : struct, IDisposable
         where TValidationSetupOutput : struct, IDisposable
     {
         Action<int, int, int[], List<TSetupOutput>> SetupDelegate { get; }
-        Action<NativeArray<int>, NativeList<Guid>> SelectEntitiesDelegate { get; }
+        Action<int, NativeList<Guid>> SelectEntitiesDelegate { get; }
         Action<int, int, Guid[], List<TValidationSetupOutput>> ValidationSetupDelegate { get; }
         Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> ValidateEntityDelegate { get; }
         Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate { get; }
+
+        /// <summary>
+        /// Configures a task processor with the task's delegates.
+        /// </summary>
+        /// <typeparam name="TProcessorSetupOutput">The processor's setup output type.</typeparam>
+        /// <typeparam name="TProcessorValidationSetupOutput">The processor's validation setup output type.</typeparam>
+        /// <param name="processor">The task processor to configure.</param>
         void ConfigureProcessor<TProcessorSetupOutput, TProcessorValidationSetupOutput>(
             ref TaskProcessor<TProcessorSetupOutput, TProcessorValidationSetupOutput> processor)
             where TProcessorSetupOutput : struct, IDisposable
@@ -301,8 +397,10 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Base class for tasks, providing default implementations.
+    /// Abstract base class for tasks with generic setup and validation outputs.
     /// </summary>
+    /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+    /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
     public abstract class BaseTask<TSetupOutput, TValidationSetupOutput> : ITask<TSetupOutput, TValidationSetupOutput>
         where TSetupOutput : struct, IDisposable
         where TValidationSetupOutput : struct, IDisposable
@@ -313,11 +411,18 @@ namespace NoLazyWorkers.TaskService
         public abstract IEnumerator ExecuteCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options);
         public abstract IEnumerator FollowUpCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options);
         public abstract Action<int, int, int[], List<TSetupOutput>> SetupDelegate { get; }
-        public abstract Action<NativeArray<int>, NativeList<Guid>> SelectEntitiesDelegate { get; }
+        public abstract Action<int, NativeList<Guid>> SelectEntitiesDelegate { get; }
         public abstract Action<int, int, Guid[], List<TValidationSetupOutput>> ValidationSetupDelegate { get; }
         public abstract Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> ValidateEntityDelegate { get; }
         public abstract Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate { get; }
 
+        /// <summary>
+        /// Configures a task processor with the task's delegates, ensuring type compatibility.
+        /// </summary>
+        /// <typeparam name="TProcessorSetupOutput">The processor's setup output type.</typeparam>
+        /// <typeparam name="TProcessorValidationSetupOutput">The processor's validation setup output type.</typeparam>
+        /// <param name="processor">The task processor to configure.</param>
+        /// <exception cref="ArgumentException">Thrown if the processor types do not match the task types.</exception>
         public virtual void ConfigureProcessor<TProcessorSetupOutput, TProcessorValidationSetupOutput>(
             ref TaskProcessor<TProcessorSetupOutput, TProcessorValidationSetupOutput> processor)
             where TProcessorSetupOutput : struct, IDisposable
@@ -340,8 +445,10 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Disables entities based on validation results in a Burst-compatible manner.
+    /// Handles disabling entities based on validation results.
     /// </summary>
+    /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+    /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
     [BurstCompile]
     public struct DisableEntitiesBurst<TSetupOutput, TValidationSetupOutput>
         where TSetupOutput : struct, IDisposable
@@ -351,6 +458,10 @@ namespace NoLazyWorkers.TaskService
         public NativeParallelHashMap<Guid, DisabledEntityData> DisabledEntities;
         public NativeList<LogEntry> Logs;
 
+        /// <summary>
+        /// Initializes a new instance of DisableEntitiesBurst.
+        /// </summary>
+        /// <param name="task">The task providing context for disabling entities.</param>
         public DisableEntitiesBurst(ITask<TSetupOutput, TValidationSetupOutput> task)
         {
             _task = task;
@@ -358,6 +469,12 @@ namespace NoLazyWorkers.TaskService
             Logs = default;
         }
 
+        /// <summary>
+        /// Disables entities based on validation results.
+        /// </summary>
+        /// <param name="index">The index of the validation result.</param>
+        /// <param name="results">The validation results.</param>
+        /// <param name="outputs">The list of disabled entity data.</param>
         public void Execute(int index, NativeArray<ValidationResultData> results, NativeList<DisabledEntityData> outputs)
         {
             var result = results[index];
@@ -385,20 +502,27 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Processes tasks through a five-step pipeline (Setup, Select, ValidateSetup, Validate, Create).
+    /// Processes tasks with setup, entity selection, validation, and task creation delegates.
     /// </summary>
+    /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+    /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
     public class TaskProcessor<TSetupOutput, TValidationSetupOutput>
-    where TSetupOutput : struct, IDisposable
-    where TValidationSetupOutput : struct, IDisposable
+        where TSetupOutput : struct, IDisposable
+        where TValidationSetupOutput : struct, IDisposable
     {
         public ITask Task;
         public Action<int, int, int[], List<TSetupOutput>> SetupDelegate;
-        public Action<NativeArray<int>, NativeList<Guid>> SelectEntitiesDelegate;
+        public Action<int, NativeList<Guid>> SelectEntitiesDelegate;
         public Action<int, int, Guid[], List<TValidationSetupOutput>> ValidationSetupDelegate;
         public Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> ValidateEntityDelegate;
         public Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate;
         public Action<int, NativeArray<ValidationResultData>, NativeList<DisabledEntityData>> DisableEntityDelegate;
 
+        /// <summary>
+        /// Initializes a new TaskProcessor with the specified task.
+        /// </summary>
+        /// <param name="task">The task to process.</param>
+        /// <exception cref="ArgumentException">Thrown if the task does not implement the required generic interface.</exception>
         public TaskProcessor(ITask task)
         {
             Task = task;
@@ -408,7 +532,6 @@ namespace NoLazyWorkers.TaskService
             ValidateEntityDelegate = null;
             CreateTaskDelegate = null;
             DisableEntityDelegate = null;
-
             if (task is ITask<TSetupOutput, TValidationSetupOutput> genericTask)
             {
                 var _this = this;
@@ -434,15 +557,20 @@ namespace NoLazyWorkers.TaskService
                 Log(Level.Warning, $"ValidateEntityDelegate is not set for task {taskType}", Category.Tasks);
             if (CreateTaskDelegate == null)
                 Log(Level.Warning, $"CreateTaskDelegate is not set for task {taskType}", Category.Tasks);
-            // ValidationSetupDelegate and DisableEntityDelegate are optional
         }
     }
 
     /// <summary>
-    /// Utility methods for selecting entities by type.
+    /// Provides utility methods for selecting entities by type.
     /// </summary>
     public static class TaskUtilities
     {
+        /// <summary>
+        /// Selects entities of a specific type and adds their GUIDs to the output list.
+        /// </summary>
+        /// <typeparam name="T">The type of entity to select.</typeparam>
+        /// <param name="property">The property containing the entities.</param>
+        /// <param name="output">The list to store the entity GUIDs.</param>
         public static void SelectEntitiesByType<T>(Property property, NativeList<Guid> output)
             where T : class
         {
@@ -465,13 +593,16 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Manages disabled entities and their reasons.
+    /// Manages disabled entities and their associated data.
     /// </summary>
     public class EntityDisableService
     {
         internal NativeParallelHashMap<Guid, DisabledEntityData> _disabledEntities;
         private readonly NativeListPool<DisabledEntityData> _outputPool;
 
+        /// <summary>
+        /// Initializes a new EntityDisableService.
+        /// </summary>
         public EntityDisableService()
         {
             _disabledEntities = new NativeParallelHashMap<Guid, DisabledEntityData>(100, Allocator.Persistent);
@@ -479,90 +610,97 @@ namespace NoLazyWorkers.TaskService
             Log(Level.Info, "Initialized EntityDisableService", Category.Tasks);
         }
 
+        /// <summary>
+        /// Adds a disabled entity with specified parameters.
+        /// </summary>
+        /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+        /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
+        /// <param name="entityGuid">The GUID of the entity to disable.</param>
+        /// <param name="actionId">The action identifier.</param>
+        /// <param name="reasonType">The reason for disabling the entity.</param>
+        /// <param name="requiredItems">The required items for the entity.</param>
+        /// <param name="anyItem">Whether any item is acceptable.</param>
+        /// <param name="property">The property containing the entity.</param>
+        /// <param name="taskType">The type of task.</param>
+        /// <returns>An IEnumerator for coroutine execution.</returns>
         public IEnumerator AddDisabledEntity<TSetupOutput, TValidationSetupOutput>(
             Guid entityGuid, int actionId, DisabledEntityData.DisabledReasonType reasonType,
             NativeList<ItemData> requiredItems, bool anyItem, Property property, TaskName taskType)
             where TSetupOutput : unmanaged, IDisposable
             where TValidationSetupOutput : unmanaged, IDisposable
         {
-            using (var scope = new DisposableScope())
+            using var scope = new DisposableScope();
+            var logs = scope.Add(GetLogPool().Get());
+            var outputs = scope.Add(_outputPool.Get());
+            var selectedEntities = scope.Add(new NativeList<Guid>(1, Allocator.TempJob) { [0] = entityGuid });
+            var validationResults = scope.Add(new NativeList<ValidationResultData>(1, Allocator.TempJob));
+            var results = scope.Add(new NativeArray<ValidationResultData>(1, Allocator.TempJob));
+            var taskRegistry = TaskServiceManager.GetRegistry(property);
+            var task = taskRegistry.GetTask(taskType) as ITask<TSetupOutput, TValidationSetupOutput>;
+            if (task == null)
             {
-                var logs = scope.Add(GetLogPool().Get());
-                var outputs = scope.Add(_outputPool.Get());
-                var selectedEntities = scope.Add(new NativeList<Guid>(1, Allocator.TempJob) { [0] = entityGuid });
-                var validationResults = scope.Add(new NativeList<ValidationResultData>(1, Allocator.TempJob));
-                var results = scope.Add(new NativeArray<ValidationResultData>(1, Allocator.TempJob));
-
-                var taskRegistry = TaskServiceManager.GetRegistry(property);
-                var task = taskRegistry.GetTask(taskType) as ITask<TSetupOutput, TValidationSetupOutput>;
-                if (task == null)
-                {
-                    Log(Level.Error, $"Task type {taskType} not registered", Category.Tasks);
-                    yield return ProcessLogs(logs);
-                    yield break;
-                }
-
-                var processor = new TaskProcessor<TSetupOutput, TValidationSetupOutput>(task);
-                var setupOutputs = new List<TSetupOutput>();
-                var setupInputs = new[] { 0 };
-                Log(Level.Info, $"Executing setup for disabling entity {entityGuid}, task {taskType}", Category.Tasks);
-                yield return SmartExecution.Execute<int, TSetupOutput>(
-                    uniqueId: $"{property.name}_{taskType}_Disable_Setup",
-                    itemCount: 1,
-                    nonBurstDelegate: processor.SetupDelegate,
-                    nonBurstResultsDelegate: null,
-                    inputs: setupInputs,
-                    outputs: setupOutputs,
-                    options: default
-                );
-
-                var selectJob = new SelectEntitiesBurst<TSetupOutput, TValidationSetupOutput>
-                {
-                    Logs = logs,
-                    SelectEntitiesDelegate = processor.SelectEntitiesDelegate
-                };
-                yield return SmartExecution.ExecuteBurst<int, Guid>(
-                    uniqueId: $"{property.name}_{taskType}_Disable_SelectEntities",
-                    burstDelegate: selectJob.Execute
-                );
-
-                var validationSetupOutputs = new List<TValidationSetupOutput>();
-                var validationSetupInputs = selectedEntities.ToArray();
-                if (processor.ValidationSetupDelegate != null && selectedEntities.Length > 0)
-                {
-                    Log(Level.Info, $"Executing validation setup for disabling entity {entityGuid}, task {taskType}", Category.Tasks);
-                    yield return SmartExecution.Execute<Guid, TValidationSetupOutput>(
-                        uniqueId: $"{property.name}_{taskType}_Disable_ValidationSetup",
-                        itemCount: selectedEntities.Length,
-                        nonBurstDelegate: processor.ValidationSetupDelegate
-                    );
-                }
-
-                var validateJob = new ValidateEntitiesBurst<TSetupOutput, TValidationSetupOutput>
-                {
-                    Logs = logs,
-                    ValidateEntityDelegate = processor.ValidateEntityDelegate
-                };
-                yield return SmartExecution.ExecuteBurstFor<Guid, ValidationResultData>(
-                    uniqueId: $"{property.name}_{taskType}_Disable_ValidateEntities",
-                    itemCount: selectedEntities.Length,
-                    burstForDelegate: validateJob.Execute
-                );
-
-                yield return SmartExecution.ExecuteBurstFor<ValidationResultData, DisabledEntityData>(
-                    uniqueId: $"{property.name}_{taskType}_Disable_Entities",
-                    itemCount: validationResults.Length,
-                    burstForDelegate: processor.DisableEntityDelegate,
-                    burstResultsDelegate: null,
-                    inputs: results,
-                    outputs: outputs,
-                    options: default
-                );
-
+                Log(Level.Error, $"Task type {taskType} not registered", Category.Tasks);
                 yield return ProcessLogs(logs);
+                yield break;
             }
+            var processor = new TaskProcessor<TSetupOutput, TValidationSetupOutput>(task);
+            var setupOutputs = new List<TSetupOutput>();
+            var setupInputs = new[] { 0 };
+            Log(Level.Info, $"Executing setup for disabling entity {entityGuid}, task {taskType}", Category.Tasks);
+            yield return SmartExecution.Execute<int, TSetupOutput>(
+                uniqueId: $"{property.name}_{taskType}_Disable_Setup",
+                itemCount: 1,
+                nonBurstDelegate: processor.SetupDelegate,
+                nonBurstResultsDelegate: null,
+                inputs: setupInputs,
+                outputs: setupOutputs,
+                options: default
+            );
+            var selectJob = new SelectEntitiesBurst<TSetupOutput, TValidationSetupOutput>
+            {
+                Logs = logs,
+                SelectEntitiesDelegate = processor.SelectEntitiesDelegate
+            };
+            yield return SmartExecution.ExecuteBurst<int, Guid>(
+                uniqueId: $"{property.name}_{taskType}_Disable_SelectEntities",
+                burstDelegate: selectJob.Execute
+            );
+            var validationSetupOutputs = new List<TValidationSetupOutput>();
+            var validationSetupInputs = selectedEntities.ToArray();
+            if (processor.ValidationSetupDelegate != null && selectedEntities.Length > 0)
+            {
+                Log(Level.Info, $"Executing validation setup for disabling entity {entityGuid}, task {taskType}", Category.Tasks);
+                yield return SmartExecution.Execute<Guid, TValidationSetupOutput>(
+                    uniqueId: $"{property.name}_{taskType}_Disable_ValidationSetup",
+                    itemCount: selectedEntities.Length,
+                    nonBurstDelegate: processor.ValidationSetupDelegate
+                );
+            }
+            var validateJob = new ValidateEntitiesBurst<TSetupOutput, TValidationSetupOutput>
+            {
+                Logs = logs,
+                ValidateEntityDelegate = processor.ValidateEntityDelegate
+            };
+            yield return SmartExecution.ExecuteBurstFor<Guid, ValidationResultData>(
+                uniqueId: $"{property.name}_{taskType}_Disable_ValidateEntities",
+                itemCount: selectedEntities.Length,
+                burstForDelegate: validateJob.ExecuteFor
+            );
+            yield return SmartExecution.ExecuteBurstFor<ValidationResultData, DisabledEntityData>(
+                uniqueId: $"{property.name}_{taskType}_Disable_Entities",
+                itemCount: validationResults.Length,
+                burstForDelegate: processor.DisableEntityDelegate,
+                burstResultsDelegate: null,
+                inputs: results,
+                outputs: outputs,
+                options: default
+            );
+            yield return ProcessLogs(logs);
         }
 
+        /// <summary>
+        /// Disposes of the service's resources.
+        /// </summary>
         public void Dispose()
         {
             foreach (var data in _disabledEntities.GetValueArray(Allocator.Temp))
@@ -576,7 +714,7 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Manages task queuing and dispatching for employees.
+    /// Manages a queue of tasks prioritized by employee type and task priority.
     /// </summary>
     public class TaskQueue
     {
@@ -586,6 +724,10 @@ namespace NoLazyWorkers.TaskService
         private NativeParallelHashMap<Guid, TaskDescriptor> _activeTasks;
         public NativeParallelHashMap<TaskTypeEntityKey, bool> _activeTasksByType;
 
+        /// <summary>
+        /// Initializes a new TaskQueue with the specified capacity.
+        /// </summary>
+        /// <param name="capacity">The initial capacity for task lists.</param>
         public TaskQueue(int capacity)
         {
             _highPriorityTasks = new Dictionary<TaskEmployeeType, NativeList<TaskDescriptor>>();
@@ -601,6 +743,10 @@ namespace NoLazyWorkers.TaskService
             Log(Level.Info, $"Initialized TaskQueue with capacity {capacity}", Category.Tasks);
         }
 
+        /// <summary>
+        /// Enqueues a task into the appropriate queue based on employee type and priority.
+        /// </summary>
+        /// <param name="task">The task to enqueue.</param>
         public void Enqueue(TaskDescriptor task)
         {
             var key = new TaskTypeEntityKey { Type = task.Type, EntityGuid = task.EntityGuid };
@@ -622,6 +768,13 @@ namespace NoLazyWorkers.TaskService
             Log(Level.Info, $"Enqueued task {task.TaskId} for {task.EmployeeType}, priority {task.Priority}", Category.Tasks);
         }
 
+        /// <summary>
+        /// Selects a task for the specified employee type and GUID.
+        /// </summary>
+        /// <param name="employeeType">The type of employee.</param>
+        /// <param name="employeeGuid">The GUID of the employee.</param>
+        /// <param name="task">The selected task, if available.</param>
+        /// <returns>True if a task was selected, false otherwise.</returns>
         public bool SelectTask(TaskEmployeeType employeeType, Guid employeeGuid, out TaskDescriptor task)
         {
             task = default;
@@ -651,6 +804,10 @@ namespace NoLazyWorkers.TaskService
             return false;
         }
 
+        /// <summary>
+        /// Completes a task and removes it from the queue.
+        /// </summary>
+        /// <param name="taskId">The ID of the task to complete.</param>
         public void CompleteTask(Guid taskId)
         {
             if (_activeTasks.TryGetValue(taskId, out var task))
@@ -663,12 +820,20 @@ namespace NoLazyWorkers.TaskService
             }
         }
 
+        /// <summary>
+        /// Disposes of all task lists and resources.
+        /// </summary>
         public void Dispose()
         {
             foreach (var list in _highPriorityTasks.Values.Concat(_normalPriorityTasks.Values).Append(_anyEmployeeTasks))
             {
                 for (int i = 0; i < list.Length; i++)
+                {
+#if DEBUG
+                    Log(Level.Verbose, $"Disposing task {list[i].TaskId}", Category.Tasks);
+#endif
                     list[i].Dispose();
+                }
                 list.Dispose();
             }
             if (_activeTasks.IsCreated)
@@ -680,7 +845,7 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Manages task creation and assignment for a property.
+    /// Manages task creation, queuing, and execution for a property.
     /// </summary>
     public class TaskService
     {
@@ -699,9 +864,10 @@ namespace NoLazyWorkers.TaskService
         private Coroutine _validationCoroutine;
 
         /// <summary>
-        /// Initializes a new instance of the TaskService for the specified property.
+        /// Initializes a new TaskService for the specified property.
         /// </summary>
-        /// <param name="property">The property associated with this service.</param>
+        /// <param name="property">The property to manage tasks for.</param>
+        /// <exception cref="ArgumentNullException">Thrown if property is null.</exception>
         public TaskService(Property property)
         {
             _property = property ?? throw new ArgumentNullException(nameof(property));
@@ -722,7 +888,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Manages disposable native collections for Job-compatible code.
+        /// Manages disposable resources for task processing.
         /// </summary>
         internal struct DisposableScope : IDisposable
         {
@@ -734,6 +900,10 @@ namespace NoLazyWorkers.TaskService
             private NativeList<NativeArray<ValidationResultData>> _validationArrayDisposables;
             private NativeList<NativeList<Guid>> _guidListDisposables;
 
+            /// <summary>
+            /// Initializes a new DisposableScope with the specified capacity.
+            /// </summary>
+            /// <param name="initialCapacity">The initial capacity for disposable lists.</param>
             public DisposableScope(int initialCapacity = 10)
             {
                 _logDisposables = new NativeList<NativeList<LogEntry>>(initialCapacity, Allocator.TempJob);
@@ -750,43 +920,40 @@ namespace NoLazyWorkers.TaskService
                 _logDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeList<TaskResult> Add(NativeList<TaskResult> disposable)
             {
                 _taskResultDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeList<ValidationResultData> Add(NativeList<ValidationResultData> disposable)
             {
                 _validationResultDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeList<DisabledEntityData> Add(NativeList<DisabledEntityData> disposable)
             {
                 _disabledEntityDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeArray<int> Add(NativeArray<int> disposable)
             {
                 _intArrayDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeArray<ValidationResultData> Add(NativeArray<ValidationResultData> disposable)
             {
                 _validationArrayDisposables.Add(disposable);
                 return disposable;
             }
-
             public NativeList<Guid> Add(NativeList<Guid> disposable)
             {
                 _guidListDisposables.Add(disposable);
                 return disposable;
             }
 
+            /// <summary>
+            /// Disposes of all managed resources.
+            /// </summary>
             public void Dispose()
             {
                 foreach (var disposable in _logDisposables)
@@ -794,10 +961,10 @@ namespace NoLazyWorkers.TaskService
                         GetLogPool().Return(disposable);
                 foreach (var disposable in _taskResultDisposables)
                     if (disposable.IsCreated)
-                        GetTaskResultPool().Return(disposable); // Use pool for TaskResult
+                        GetTaskResultPool().Return(disposable);
                 foreach (var disposable in _validationResultDisposables)
                     if (disposable.IsCreated)
-                        GetValidationResultPool().Return(disposable); // Use pool for ValidationResultData
+                        GetValidationResultPool().Return(disposable);
                 foreach (var disposable in _disabledEntityDisposables)
                     if (disposable.IsCreated)
                         disposable.Dispose();
@@ -823,7 +990,6 @@ namespace NoLazyWorkers.TaskService
             {
                 return GetTaskResultPool();
             }
-
             private static NativeListPool<ValidationResultData> GetValidationResultPool()
             {
                 return GetValidationResultPool();
@@ -831,9 +997,9 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Retrieves the TaskResult pool for use in DisposableScope.
+        /// Retrieves the task result pool.
         /// </summary>
-        /// <returns>The NativeListPool for TaskResult.</returns>
+        /// <returns>The task result pool.</returns>
         public NativeListPool<TaskResult> GetTaskResultPool()
         {
 #if DEBUG
@@ -843,9 +1009,9 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Retrieves the ValidationResultData pool for use in DisposableScope.
+        /// Retrieves the validation result pool.
         /// </summary>
-        /// <returns>The NativeListPool for ValidationResultData.</returns>
+        /// <returns>The validation result pool.</returns>
         public NativeListPool<ValidationResultData> GetValidationResultPool()
         {
 #if DEBUG
@@ -855,19 +1021,27 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Selects entities in a Burst-compatible manner.
+        /// Processes entities and creates tasks in a burst-compatible manner.
         /// </summary>
+        /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+        /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
+        [SmartExecute]
         [BurstCompile]
         public struct SelectEntitiesBurst<TSetupOutput, TValidationSetupOutput>
             where TSetupOutput : struct, IDisposable
             where TValidationSetupOutput : struct, IDisposable
         {
-            public Action<NativeArray<int>, NativeList<Guid>> SelectEntitiesDelegate;
+            public Action<int, NativeList<Guid>> SelectEntitiesDelegate;
             public NativeList<LogEntry> Logs;
 
-            public void Execute(NativeArray<int> inputs, NativeList<Guid> outputs)
+            /// <summary>
+            /// Executes the entity selection delegate.
+            /// </summary>
+            /// <param name="input">The input.</param>
+            /// <param name="outputs">The output list of GUIDs.</param>
+            public void Execute(int input, NativeList<Guid> outputs)
             {
-                SelectEntitiesDelegate(inputs, outputs);
+                SelectEntitiesDelegate(input, outputs);
                 Logs.Add(new LogEntry
                 {
                     Message = $"Selected {outputs.Length} entities",
@@ -878,8 +1052,11 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Validates entities in a Burst-compatible manner.
+        /// Validates entities in a burst-compatible manner.
         /// </summary>
+        /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+        /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
+        [SmartExecute]
         [BurstCompile]
         public struct ValidateEntitiesBurst<TSetupOutput, TValidationSetupOutput>
             where TSetupOutput : struct, IDisposable
@@ -888,7 +1065,13 @@ namespace NoLazyWorkers.TaskService
             public Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> ValidateEntityDelegate;
             public NativeList<LogEntry> Logs;
 
-            public void Execute(int index, NativeArray<Guid> inputs, NativeList<ValidationResultData> outputs)
+            /// <summary>
+            /// Executes the entity validation delegate.
+            /// </summary>
+            /// <param name="index">The index of the entity.</param>
+            /// <param name="inputs">The input array of GUIDs.</param>
+            /// <param name="outputs">The output list of validation results.</param>
+            public void ExecuteFor(int index, NativeArray<Guid> inputs, NativeList<ValidationResultData> outputs)
             {
                 ValidateEntityDelegate(index, inputs, outputs);
                 Logs.Add(new LogEntry
@@ -901,8 +1084,11 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Creates tasks in a Burst-compatible manner.
+        /// Creates tasks in a burst-compatible manner.
         /// </summary>
+        /// <typeparam name="TSetupOutput">The type of setup output.</typeparam>
+        /// <typeparam name="TValidationSetupOutput">The type of validation setup output.</typeparam>
+        [SmartExecute]
         [BurstCompile]
         public struct CreateTasksBurst<TSetupOutput, TValidationSetupOutput>
             where TSetupOutput : struct, IDisposable
@@ -911,7 +1097,13 @@ namespace NoLazyWorkers.TaskService
             public Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate;
             public NativeList<LogEntry> Logs;
 
-            public void Execute(int index, NativeArray<ValidationResultData> inputs, NativeList<TaskResult> outputs)
+            /// <summary>
+            /// Executes the task creation delegate.
+            /// </summary>
+            /// <param name="index">The index of the validation result.</param>
+            /// <param name="inputs">The input array of validation results.</param>
+            /// <param name="outputs">The output list of task results.</param>
+            public void ExecuteFor(int index, NativeArray<ValidationResultData> inputs, NativeList<TaskResult> outputs)
             {
                 CreateTaskDelegate(index, inputs, outputs);
                 Logs.Add(new LogEntry
@@ -933,48 +1125,44 @@ namespace NoLazyWorkers.TaskService
                 if (!_isProcessing)
                 {
                     _isProcessing = true;
-                    using (var scope = new DisposableScope())
+                    using var scope = new DisposableScope();
+                    var logs = scope.Add(_logPool.Get());
+                    var taskResults = scope.Add(_taskResultPool.Get());
+                    try
                     {
-                        var logs = scope.Add(_logPool.Get());
-                        var taskResults = scope.Add(_taskResultPool.Get());
-                        try
+                        foreach (var task in _taskRegistry.AllTasks)
                         {
-                            foreach (var task in _taskRegistry.AllTasks)
+#if DEBUG
+                            Log(Level.Verbose, $"Processing tasks for type {task.Type}", Category.Tasks);
+#endif
+                            var selectedEntities = scope.Add(new NativeList<Guid>(Allocator.TempJob));
+                            foreach (var entityType in task.SupportedEntityTypes)
+                            {
+                                if (entityType == StorageType.Employee && ManagedDictionaries.IEmployees.TryGetValue(_property, out var employees))
+                                    foreach (var kvp in employees)
+                                        selectedEntities.Add(kvp.Key);
+                                else if (entityType == StorageType.Station && ManagedDictionaries.IStations.TryGetValue(_property, out var stations))
+                                    foreach (var kvp in stations)
+                                        selectedEntities.Add(kvp.Key);
+                                else if (entityType == StorageType.AnyShelf && ManagedDictionaries.Storages.TryGetValue(_property, out var storages))
+                                    foreach (var kvp in storages)
+                                        selectedEntities.Add(kvp.Key);
+                            }
+                            if (selectedEntities.Length == 0)
                             {
 #if DEBUG
-                                Log(Level.Verbose, $"Processing tasks for type {task.Type}", Category.Tasks);
+                                Log(Level.Verbose, $"No entities found for task type {task.Type}", Category.Tasks);
 #endif
-                                var selectedEntities = scope.Add(new NativeList<Guid>(Allocator.TempJob));
-                                foreach (var entityType in task.SupportedEntityTypes)
-                                {
-                                    if (entityType == StorageType.Employee && ManagedDictionaries.IEmployees.TryGetValue(_property, out var employees))
-                                        foreach (var kvp in employees)
-                                            selectedEntities.Add(kvp.Key);
-                                    else if (entityType == StorageType.Station && ManagedDictionaries.IStations.TryGetValue(_property, out var stations))
-                                        foreach (var kvp in stations)
-                                            selectedEntities.Add(kvp.Key);
-                                    else if (entityType == StorageType.AnyShelf && ManagedDictionaries.Storages.TryGetValue(_property, out var storages))
-                                        foreach (var kvp in storages)
-                                            selectedEntities.Add(kvp.Key);
-                                }
-
-                                if (selectedEntities.Length == 0)
-                                {
-#if DEBUG
-                                    Log(Level.Verbose, $"No entities found for task type {task.Type}", Category.Tasks);
-#endif
-                                    continue;
-                                }
-
-                                yield return CreateTaskGeneric<Empty, Empty>(Guid.Empty, Guid.Empty, _property, task, logs, taskResults, selectedEntities, scope.Add(_validationResultPool.Get()));
+                                continue;
                             }
-                            yield return ProcessLogs(logs);
+                            yield return CreateTaskGeneric<Empty, Empty>(Guid.Empty, Guid.Empty, _property, task, logs, taskResults, selectedEntities, scope.Add(_validationResultPool.Get()));
                         }
-                        finally
-                        {
-                            _logPool.Return(logs);
-                            _taskResultPool.Return(taskResults);
-                        }
+                        yield return ProcessLogs(logs);
+                    }
+                    finally
+                    {
+                        _logPool.Return(logs);
+                        _taskResultPool.Return(taskResults);
                     }
                     _isProcessing = false;
                 }
@@ -983,8 +1171,10 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Attempts to get a task for an employee.
+        /// Attempts to get a task for the specified employee.
         /// </summary>
+        /// <param name="employee">The employee to get a task for.</param>
+        /// <returns>An IEnumerator yielding a tuple of (bool, TaskDescriptor, ITask).</returns>
         public IEnumerator TryGetTaskAsync(Employee employee)
         {
             if (employee.AssignedProperty != _property)
@@ -993,7 +1183,6 @@ namespace NoLazyWorkers.TaskService
                 yield return new ValueTask<(bool, TaskDescriptor, ITask)>((false, default, null));
                 yield break;
             }
-
             if (_taskQueue.SelectTask(Enum.Parse<TaskEmployeeType>(employee.Type.ToString()), employee.GUID, out var task))
             {
                 var taskImpl = _taskRegistry.GetTask(task.Type);
@@ -1010,78 +1199,78 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Creates tasks for a specific employee and entity or all tasks.
+        /// Creates tasks for the specified property, task type, and optional employee or entity GUIDs.
         /// </summary>
+        /// <param name="property">The property to create tasks for.</param>
+        /// <param name="taskType">The type of task, if specified.</param>
+        /// <param name="employeeGuid">The GUID of the employee, if specified.</param>
+        /// <param name="entityGuid">The GUID of the entity, if specified.</param>
+        /// <returns>An IEnumerator for coroutine execution.</returns>
         public IEnumerator CreateTaskAsync(
             Property property,
             TaskName? taskType = null,
             Guid? employeeGuid = null,
             Guid? entityGuid = null)
         {
-            using (var scope = new DisposableScope())
+            using var scope = new DisposableScope();
+            var logs = scope.Add(_logPool.Get());
+            var taskResults = scope.Add(_taskResultPool.Get());
+            var validationResults = scope.Add(_validationResultPool.Get());
+            try
             {
-                var logs = scope.Add(_logPool.Get());
-                var taskResults = scope.Add(_taskResultPool.Get());
-                var validationResults = scope.Add(_validationResultPool.Get());
-
-                try
+                IEnumerable<ITask> tasks = taskType.HasValue
+                    ? new[] { _taskRegistry.GetTask(taskType.Value) }
+                    : _taskRegistry.AllTasks;
+                foreach (var task in tasks)
                 {
-                    IEnumerable<ITask> tasks = taskType.HasValue
-                        ? new[] { _taskRegistry.GetTask(taskType.Value) }
-                        : _taskRegistry.AllTasks;
-                    foreach (var task in tasks)
+                    if (task == null)
                     {
-                        if (task == null)
-                        {
-                            Log(Level.Error, $"Task type {taskType} not registered", Category.Tasks);
-                            continue;
-                        }
-#if DEBUG
-                        Log(Level.Verbose, $"Processing tasks for type {task.Type}", Category.Tasks);
-#endif
-                        var selectedEntities = scope.Add(new NativeList<Guid>(Allocator.TempJob));
-                        if (employeeGuid.HasValue && entityGuid.HasValue)
-                            selectedEntities.Add(entityGuid.Value);
-                        else
-                            foreach (var entityType in task.SupportedEntityTypes)
-                            {
-                                if (entityType == StorageType.Employee && ManagedDictionaries.IEmployees.TryGetValue(property, out var employees))
-                                {
-                                    foreach (var kvp in employees)
-                                        if (!employeeGuid.HasValue || kvp.Key == employeeGuid.Value)
-                                            selectedEntities.Add(kvp.Key);
-                                }
-                                else if (entityType == StorageType.Station && ManagedDictionaries.IStations.TryGetValue(property, out var stations))
-                                {
-                                    foreach (var kvp in stations)
-                                        if (!entityGuid.HasValue || kvp.Key == entityGuid.Value)
-                                            selectedEntities.Add(kvp.Key);
-                                }
-                                else if (entityType == StorageType.AnyShelf && ManagedDictionaries.Storages.TryGetValue(property, out var storages))
-                                {
-                                    foreach (var kvp in storages)
-                                        if (!entityGuid.HasValue || kvp.Key == entityGuid.Value)
-                                            selectedEntities.Add(kvp.Key);
-                                }
-                            }
-
-                        if (selectedEntities.Length == 0)
-                        {
-#if DEBUG
-                            Log(Level.Verbose, $"No entities found for task type {task.Type}", Category.Tasks);
-#endif
-                            continue;
-                        }
-
-                        yield return CreateTaskGeneric<Empty, Empty>(employeeGuid ?? Guid.Empty, entityGuid ?? Guid.Empty, property, task, logs, taskResults, selectedEntities, validationResults);
+                        Log(Level.Error, $"Task type {taskType} not registered", Category.Tasks);
+                        continue;
                     }
-                    yield return ProcessLogs(logs);
+#if DEBUG
+                    Log(Level.Verbose, $"Processing tasks for type {task.Type}", Category.Tasks);
+#endif
+                    var selectedEntities = scope.Add(new NativeList<Guid>(Allocator.TempJob));
+                    if (employeeGuid.HasValue && entityGuid.HasValue)
+                        selectedEntities.Add(entityGuid.Value);
+                    else
+                        foreach (var entityType in task.SupportedEntityTypes)
+                        {
+                            if (entityType == StorageType.Employee && ManagedDictionaries.IEmployees.TryGetValue(property, out var employees))
+                            {
+                                foreach (var kvp in employees)
+                                    if (!employeeGuid.HasValue || kvp.Key == employeeGuid.Value)
+                                        selectedEntities.Add(kvp.Key);
+                            }
+                            else if (entityType == StorageType.Station && ManagedDictionaries.IStations.TryGetValue(property, out var stations))
+                            {
+                                foreach (var kvp in stations)
+                                    if (!entityGuid.HasValue || kvp.Key == entityGuid.Value)
+                                        selectedEntities.Add(kvp.Key);
+                            }
+                            else if (entityType == StorageType.AnyShelf && ManagedDictionaries.Storages.TryGetValue(property, out var storages))
+                            {
+                                foreach (var kvp in storages)
+                                    if (!entityGuid.HasValue || kvp.Key == entityGuid.Value)
+                                        selectedEntities.Add(kvp.Key);
+                            }
+                        }
+                    if (selectedEntities.Length == 0)
+                    {
+#if DEBUG
+                        Log(Level.Verbose, $"No entities found for task type {task.Type}", Category.Tasks);
+#endif
+                        continue;
+                    }
+                    yield return CreateTaskGeneric<Empty, Empty>(employeeGuid ?? Guid.Empty, entityGuid ?? Guid.Empty, property, task, logs, taskResults, selectedEntities, validationResults);
                 }
-                finally
-                {
-                    _logPool.Return(logs);
-                    _taskResultPool.Return(taskResults);
-                }
+                yield return ProcessLogs(logs);
+            }
+            finally
+            {
+                _logPool.Return(logs);
+                _taskResultPool.Return(taskResults);
             }
         }
 
@@ -1100,91 +1289,88 @@ namespace NoLazyWorkers.TaskService
                 Log(Level.Error, $"Task {task.Type} does not support generic type {typeof(TSetupOutput)}", Category.Tasks);
                 yield break;
             }
-
-            using (var scope = new DisposableScope())
+            using var scope = new DisposableScope();
+            var processor = new TaskProcessor<TSetupOutput, TValidationSetupOutput>(task);
+            var setupOutputs = new List<TSetupOutput>();
+            var setupInputs = new[] { 0 };
+            Log(Level.Info, $"Executing setup for task {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
+            yield return SmartExecution.Execute<int, TSetupOutput>(
+                uniqueId: $"{property.name}_{task.Type}_Setup",
+                itemCount: 1,
+                nonBurstDelegate: processor.SetupDelegate
+            );
+            var selectJob = new SelectEntitiesBurst<TSetupOutput, TValidationSetupOutput>
             {
-                var processor = new TaskProcessor<TSetupOutput, TValidationSetupOutput>(task);
-                var setupOutputs = new List<TSetupOutput>();
-                var setupInputs = new[] { 0 };
-                Log(Level.Info, $"Executing setup for task {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
-                yield return SmartExecution.Execute<int, TSetupOutput>(
-                    uniqueId: $"{property.name}_{task.Type}_Setup",
-                    itemCount: 1,
-                    nonBurstDelegate: processor.SetupDelegate
-                );
-
-                var selectJob = new SelectEntitiesBurst<TSetupOutput, TValidationSetupOutput>
-                {
-                    Logs = logs,
-                    SelectEntitiesDelegate = processor.SelectEntitiesDelegate
-                };
-                yield return SmartExecution.ExecuteBurst<int, Guid>(
-                    uniqueId: $"{property.name}_{task.Type}_SelectEntities",
-                    burstDelegate: selectJob.Execute
-                );
-
-                var validationSetupOutputs = new List<TValidationSetupOutput>();
-                var validationSetupInputs = entityGuids.ToArray();
-                if (processor.ValidationSetupDelegate != null && entityGuids.Length > 0)
-                {
-                    Log(Level.Info, $"Executing validation setup for task {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
-                    yield return SmartExecution.Execute<Guid, TValidationSetupOutput>(
-                        uniqueId: $"{property.name}_{task.Type}_ValidationSetup",
-                        itemCount: entityGuids.Length,
-                        nonBurstDelegate: processor.ValidationSetupDelegate
-                    );
-                }
-
-                var results = scope.Add(new NativeArray<ValidationResultData>(entityGuids.Length, Allocator.TempJob));
-                var validateJob = new ValidateEntitiesBurst<TSetupOutput, TValidationSetupOutput>
-                {
-                    Logs = logs,
-                    ValidateEntityDelegate = processor.ValidateEntityDelegate
-                };
-                yield return SmartExecution.ExecuteBurstFor<Guid, ValidationResultData>(
-                    uniqueId: $"{property.name}_{task.Type}_ValidateEntities",
+                Logs = logs,
+                SelectEntitiesDelegate = processor.SelectEntitiesDelegate
+            };
+            yield return SmartExecution.ExecuteBurst<int, Guid>(
+                uniqueId: $"{property.name}_{task.Type}_SelectEntities",
+                burstDelegate: selectJob.Execute
+            );
+            var validationSetupOutputs = new List<TValidationSetupOutput>();
+            var validationSetupInputs = entityGuids.ToArray();
+            if (processor.ValidationSetupDelegate != null && entityGuids.Length > 0)
+            {
+                Log(Level.Info, $"Executing validation setup for task {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
+                yield return SmartExecution.Execute<Guid, TValidationSetupOutput>(
+                    uniqueId: $"{property.name}_{task.Type}_ValidationSetup",
                     itemCount: entityGuids.Length,
-                    burstForDelegate: validateJob.Execute
-                );
-
-                var createJob = new CreateTasksBurst<TSetupOutput, TValidationSetupOutput>
-                {
-                    Logs = logs,
-                    CreateTaskDelegate = processor.CreateTaskDelegate
-                };
-                yield return SmartExecution.ExecuteBurstFor<ValidationResultData, TaskResult>(
-                    uniqueId: $"{property.name}_{task.Type}_CreateTasks",
-                    itemCount: validationResults.Length,
-                    burstForDelegate: createJob.Execute,
-                    nonBurstResultsDelegate: outputs =>
-                    {
-                        Log(Level.Info, $"Enqueuing {outputs.Count} tasks for type {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
-                        for (int i = 0; i < outputs.Count; i++)
-                        {
-                            if (employeeGuid != Guid.Empty)
-                            {
-                                if (!_employeeSpecificTasks.ContainsKey(employeeGuid))
-                                    _employeeSpecificTasks.Add(employeeGuid, new NativeList<TaskDescriptor>(Allocator.Persistent));
-                                _employeeSpecificTasks[employeeGuid].Add(outputs[i].Task);
-                            }
-                            _taskQueue.Enqueue(outputs[i].Task);
-                        }
-                    }
+                    nonBurstDelegate: processor.ValidationSetupDelegate
                 );
             }
+            var results = scope.Add(new NativeArray<ValidationResultData>(entityGuids.Length, Allocator.TempJob));
+            var validateJob = new ValidateEntitiesBurst<TSetupOutput, TValidationSetupOutput>
+            {
+                Logs = logs,
+                ValidateEntityDelegate = processor.ValidateEntityDelegate
+            };
+            yield return SmartExecution.ExecuteBurstFor<Guid, ValidationResultData>(
+                uniqueId: $"{property.name}_{task.Type}_ValidateEntities",
+                itemCount: entityGuids.Length,
+                burstForDelegate: validateJob.ExecuteFor
+            );
+            var createJob = new CreateTasksBurst<TSetupOutput, TValidationSetupOutput>
+            {
+                Logs = logs,
+                CreateTaskDelegate = processor.CreateTaskDelegate
+            };
+            yield return SmartExecution.ExecuteBurstFor<ValidationResultData, TaskResult>(
+                uniqueId: $"{property.name}_{task.Type}_CreateTasks",
+                itemCount: validationResults.Length,
+                burstForDelegate: createJob.ExecuteFor,
+                nonBurstResultsDelegate: outputs =>
+                {
+                    Log(Level.Info, $"Enqueuing {outputs.Count} tasks for type {task.Type}{(employeeGuid != Guid.Empty ? $" for employee {employeeGuid}" : "")}", Category.Tasks);
+                    for (int i = 0; i < outputs.Count; i++)
+                    {
+                        Log(Level.Info, $"Enqueuing task {outputs[i].Task.TaskId}", Category.Tasks);
+                        if (employeeGuid != Guid.Empty)
+                        {
+                            if (!_employeeSpecificTasks.ContainsKey(employeeGuid))
+                                _employeeSpecificTasks.Add(employeeGuid, new NativeList<TaskDescriptor>(Allocator.Persistent));
+                            _employeeSpecificTasks[employeeGuid].Add(outputs[i].Task);
+                        }
+                        _taskQueue.Enqueue(outputs[i].Task);
+                    }
+                }
+            );
         }
 
         /// <summary>
-        /// Completes a task and removes it from the queue.
+        /// Completes the specified task.
         /// </summary>
+        /// <param name="task">The task to complete.</param>
         public void CompleteTask(TaskDescriptor task)
         {
             _taskQueue.CompleteTask(task.TaskId);
         }
 
         /// <summary>
-        /// Retrieves an employee-specific task, if available.
+        /// Retrieves an employee-specific task.
         /// </summary>
+        /// <param name="employeeGuid">The GUID of the employee.</param>
+        /// <returns>The task descriptor, or default if none exists.</returns>
         public TaskDescriptor GetEmployeeSpecificTask(Guid employeeGuid)
         {
             if (_employeeSpecificTasks.TryGetValue(employeeGuid, out var tasks) && tasks.Length > 0)
@@ -1203,7 +1389,7 @@ namespace NoLazyWorkers.TaskService
         }
 
         /// <summary>
-        /// Disposes of all resources used by the TaskService.
+        /// Disposes of the service's resources.
         /// </summary>
         public void Dispose()
         {
@@ -1223,13 +1409,18 @@ namespace NoLazyWorkers.TaskService
     }
 
     /// <summary>
-    /// Manages TaskService and TaskRegistry instances for properties.
+    /// Manages task services and registries for properties.
     /// </summary>
     public static class TaskServiceManager
     {
         private static readonly Dictionary<Property, TaskService> _services = new();
         private static readonly Dictionary<Property, TaskRegistry> _registries = new();
 
+        /// <summary>
+        /// Gets or creates a task service for the specified property.
+        /// </summary>
+        /// <param name="property">The property to get or create a service for.</param>
+        /// <returns>The task service for the property.</returns>
         public static TaskService GetOrCreateService(Property property)
         {
             if (!_services.TryGetValue(property, out var service))
@@ -1243,6 +1434,11 @@ namespace NoLazyWorkers.TaskService
             return service;
         }
 
+        /// <summary>
+        /// Gets the task registry for the specified property.
+        /// </summary>
+        /// <param name="property">The property to get the registry for.</param>
+        /// <returns>The task registry for the property.</returns>
         public static TaskRegistry GetRegistry(Property property)
         {
             if (!_registries.ContainsKey(property))
@@ -1253,6 +1449,9 @@ namespace NoLazyWorkers.TaskService
             return _registries[property];
         }
 
+        /// <summary>
+        /// Disposes of all services and registries.
+        /// </summary>
         public static void Cleanup()
         {
             foreach (var service in _services.Values)
@@ -1265,17 +1464,26 @@ namespace NoLazyWorkers.TaskService
         }
     }
 
+    /// <summary>
+    /// Registers and manages tasks.
+    /// </summary>
     public partial class TaskRegistry
     {
         private readonly List<ITask> tasks = new();
-
         public IEnumerable<ITask> AllTasks => tasks;
 
+        /// <summary>
+        /// Initializes the task registry.
+        /// </summary>
         public void Initialize()
         {
             // This method will be extended by the generated code
         }
 
+        /// <summary>
+        /// Registers a task.
+        /// </summary>
+        /// <param name="task">The task to register.</param>
         public void Register(ITask task)
         {
             if (!tasks.Contains(task))
@@ -1285,6 +1493,11 @@ namespace NoLazyWorkers.TaskService
             }
         }
 
+        /// <summary>
+        /// Registers an external task type.
+        /// </summary>
+        /// <param name="taskType">The type of the task.</param>
+        /// <param name="taskTypeEnum">The task name enum value.</param>
         public void RegisterExternal(Type taskType, TaskName taskTypeEnum)
         {
             if (!typeof(ITask).IsAssignableFrom(taskType))
@@ -1311,11 +1524,19 @@ namespace NoLazyWorkers.TaskService
             }
         }
 
+        /// <summary>
+        /// Gets a task by its type.
+        /// </summary>
+        /// <param name="type">The type of the task.</param>
+        /// <returns>The task, or null if not found.</returns>
         public ITask GetTask(TaskName type)
         {
             return tasks.FirstOrDefault(t => t.Type == type);
         }
 
+        /// <summary>
+        /// Disposes of the task registry.
+        /// </summary>
         public void Dispose()
         {
             tasks.Clear();
@@ -1323,24 +1544,37 @@ namespace NoLazyWorkers.TaskService
         }
     }
 
+    /// <summary>
+    /// Attribute to mark classes as entity tasks for source generation.
+    /// </summary>
     [AttributeUsage(AttributeTargets.Class)]
     public class EntityTaskAttribute : Attribute
     {
     }
 
+    /// <summary>
+    /// Generates source code for task registration.
+    /// </summary>
     [Generator]
     public class TaskTypeSourceGenerator : ISourceGenerator
     {
+        /// <summary>
+        /// Initializes the source generator.
+        /// </summary>
+        /// <param name="context">The generator initialization context.</param>
         public void Initialize(GeneratorInitializationContext context)
         {
             context.RegisterForSyntaxNotifications(() => new TaskTypeSyntaxReceiver());
         }
 
+        /// <summary>
+        /// Generates source code for task registration based on syntax analysis.
+        /// </summary>
+        /// <param name="context">The generator execution context.</param>
         public void Execute(GeneratorExecutionContext context)
         {
             if (!(context.SyntaxReceiver is TaskTypeSyntaxReceiver receiver))
                 return;
-
             var compilation = context.Compilation;
             var taskTypeAttributeSymbol = compilation.GetTypeByMetadataName("NoLazyWorkers.TaskService.EntityTaskAttribute");
             if (taskTypeAttributeSymbol == null)
@@ -1352,7 +1586,6 @@ namespace NoLazyWorkers.TaskService
                     null));
                 return;
             }
-
             var taskRegistrations = new StringBuilder();
             taskRegistrations.AppendLine("using System;");
             taskRegistrations.AppendLine("using UnityEngine;");
@@ -1367,20 +1600,16 @@ namespace NoLazyWorkers.TaskService
             taskRegistrations.AppendLine("        {");
             taskRegistrations.AppendLine("            // Auto-generated task registrations");
             taskRegistrations.AppendLine("            Log(Level.Info, \"Initializing TaskRegistry with auto-registered tasks\", Category.Tasks);");
-
             foreach (var classDeclaration in receiver.CandidateClasses)
             {
                 var semanticModel = compilation.GetSemanticModel(classDeclaration.SyntaxTree);
                 var classSymbol = semanticModel.GetDeclaredSymbol(classDeclaration) as INamedTypeSymbol;
                 if (classSymbol == null)
                     continue;
-
                 var entityTaskAttribute = classSymbol.GetAttributes()
                     .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, taskTypeAttributeSymbol));
                 if (entityTaskAttribute == null)
                     continue;
-
-                // Validate ITask implementation
                 if (!classSymbol.AllInterfaces.Any(i => i.ToString().StartsWith("NoLazyWorkers.TaskService.ITask")))
                 {
                     context.ReportDiagnostic(Diagnostic.Create(
@@ -1390,8 +1619,6 @@ namespace NoLazyWorkers.TaskService
                         classDeclaration.GetLocation()));
                     continue;
                 }
-
-                // Validate ITask.Type property
                 var taskTypeProperty = classSymbol.GetMembers("Type")
                     .OfType<IPropertySymbol>()
                     .FirstOrDefault(p => p.Type.ToString() == "NoLazyWorkers.TaskService.Extensions.TaskName");
@@ -1404,17 +1631,13 @@ namespace NoLazyWorkers.TaskService
                         classDeclaration.GetLocation()));
                     continue;
                 }
-
-                // Register the task
                 taskRegistrations.AppendLine($"                // Register task {classSymbol.Name}");
                 taskRegistrations.AppendLine($"                Register(new {classSymbol.ToDisplayString()}());");
                 taskRegistrations.AppendLine($"                Log(Level.Info, $\"Registered task type {classSymbol.Name} ({classSymbol.ToDisplayString()})\", Category.Tasks);");
             }
-
             taskRegistrations.AppendLine("        }");
             taskRegistrations.AppendLine("    }");
             taskRegistrations.AppendLine("}");
-
             context.AddSource("TaskRegistry.g.cs", taskRegistrations.ToString());
         }
 

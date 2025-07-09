@@ -194,11 +194,7 @@ namespace NoLazyWorkers.Storage
         yield return SmartExecution.ExecuteBurstFor<StorageKey, StorageResultBurst>(
             uniqueId: nameof(FindStorageWithItem),
             itemCount: storageKeys.Length,
-            burstForDelegate: (i, inputs, outputs) => cacheService.FindItem(i, inputs, outputs, itemData, needed, allowTargetHigherQuality, logs, cacheService._storageSlotsCache, cacheService._itemToSlotIndices),
-            burstResultsDelegate: null,
-            inputs: storageKeys.AsArray(),
-            outputs: results,
-            options: default
+            burstForDelegate: (i, inputs, outputs) => cacheService.FindItem(i, inputs, outputs, itemData, needed, allowTargetHigherQuality, logs, cacheService._storageSlotsCache, cacheService._itemToSlotIndices)
         );
 
         if (results.Length > 0 && results[0].SlotData.Length > 0)
@@ -354,14 +350,10 @@ namespace NoLazyWorkers.Storage
           yield break;
         }
         // Update station refill lists in a Burst job
-        yield return SmartExecution.ExecuteBurstFor<(Guid, NativeList<ItemKey>), ItemKey>(
+        yield return SmartExecution.ExecuteBurstFor<(Guid, NativeList<ItemKey>), Empty>(
             uniqueId: nameof(FindDeliveryDestination) + "_RefillList",
             itemCount: stationInputs.Length,
-            burstForDelegate: (index, inputs, outputs) => cacheService.UpdateStationRefillListBurst(index, inputs, itemKey, logs),
-            burstResultsDelegate: null,
-            inputs: stationInputs.AsArray(),
-            outputs: default,
-            options: default
+            burstForDelegate: (index, inputs, outputs) => cacheService.UpdateStationRefillListBurst(index, inputs, itemKey, logs)
         );
         int remainingQty = quantity;
         yield return SmartExecution.ExecuteBurstFor<(StorageKey, bool), DeliveryDestinationBurst>(
@@ -370,8 +362,7 @@ namespace NoLazyWorkers.Storage
             burstForDelegate: (i, inputs, outputs) => cacheService.FindDeliveryDestinationBurst(i, inputs, outputs, quantity, sourceGuid, logs, cacheService._storageSlotsCache, ref remainingQty),
             burstResultsDelegate: (results) => cacheService.FindDeliveryDestinationResults(results, logs),
             inputs: inputs.AsArray(),
-            outputs: destinations,
-            options: default
+            outputs: destinations
         );
         if (destinations.Length == 0)
         {
@@ -441,8 +432,7 @@ namespace NoLazyWorkers.Storage
             burstForDelegate: (index, inputs, outputs) => cacheService.FindAvailableSlotsBurst(index, inputs, outputs, new ItemData(item), quantity, logs),
             burstResultsDelegate: (results) => cacheService.FindAvailableSlotsBurstResults(results, slots, logs),
             inputs: slotData,
-            outputs: results,
-            options: default
+            outputs: results
         );
         List<(ItemSlot, int)> managedResult = [.. results.Select(r => (slots[r.SlotIndex], r.Capacity))];
         yield return managedResult;
@@ -504,8 +494,7 @@ namespace NoLazyWorkers.Storage
             burstForDelegate: (index, inputs, outputs) => cacheService.ProcessSlotOperationsBurst(index, inputs, outputs, logs),
             burstResultsDelegate: (results) => cacheService.ProcessOperationResults(results, operations, opList, SlotService.NetworkObjectCache, logs),
             inputs: opData,
-            outputs: results,
-            options: default
+            outputs: results
         );
         List<bool> managedResult = [.. results.Select(r => r.IsValid)];
         yield return managedResult;
@@ -1777,9 +1766,7 @@ namespace NoLazyWorkers.Storage
             itemCount: items.Length,
             burstForDelegate: (index, inputs, outputs) => ClearZeroQuantityEntriesBurst(index, inputs, _itemToSlotIndices, logs, shelf.GUID),
             burstResultsDelegate: null,
-            inputs: itemKeys,
-            outputs: default,
-            options: default
+            inputs: itemKeys
         );
         yield return ProcessLogs(logs);
       }
@@ -1848,14 +1835,10 @@ namespace NoLazyWorkers.Storage
       var logs = new NativeList<LogEntry>(cacheKeys.Count, Allocator.TempJob);
       try
       {
-        yield return SmartExecution.ExecuteBurstFor<ItemKey, ItemKey>(
+        yield return SmartExecution.ExecuteBurstFor<ItemKey, Empty>(
             uniqueId: nameof(RemoveShelfSearchCacheEntries),
             itemCount: cacheKeys.Count,
-            burstForDelegate: (index, inputs, outputs) => RemoveShelfSearchCacheEntriesBurst(index, inputs, _shelfSearchCache, logs),
-            burstResultsDelegate: null,
-            inputs: itemKeys,
-            outputs: default,
-            options: default
+            burstForDelegate: (index, inputs, outputs) => RemoveShelfSearchCacheEntriesBurst(index, inputs, _shelfSearchCache, logs)
         );
         yield return ProcessLogs(logs);
       }
@@ -1941,7 +1924,7 @@ namespace NoLazyWorkers.Storage
       public NativeList<Guid> KeysToRemove;
       public NativeList<LogEntry> Logs;
 
-      public void Execute(NativeArray<SlotUpdate> inputs, NativeList<Empty> _)
+      public void Execute(SlotUpdate input, NativeList<Empty> _)
       {
         KeysToRemove.Clear();
         var enumerator = DisabledEntities.GetEnumerator();
@@ -1956,7 +1939,7 @@ namespace NoLazyWorkers.Storage
             bool anyItemAvailable = false;
             for (int i = 0; i < data.RequiredItems.Length; i++)
             {
-              if (data.RequiredItems[i].Equals(inputs[0].SlotData.Item) && inputs[0].SlotData.Quantity > 0)
+              if (data.RequiredItems[i].Equals(input.SlotData.Item) && input.SlotData.Quantity > 0)
                 anyItemAvailable = true;
               else
                 allItemsAvailable = false;

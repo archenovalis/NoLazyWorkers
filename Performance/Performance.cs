@@ -18,6 +18,10 @@ using Object = UnityEngine.Object;
 
 namespace NoLazyWorkers.Performance
 {
+  internal class SmartExecuteAttribute : Attribute
+  {
+  }
+
   /// <summary>
   /// Defines types of jobs for scheduling in the performance system.
   /// </summary>
@@ -1442,21 +1446,21 @@ namespace NoLazyWorkers.Performance
     }
 
     /// <summary>
-    /// Executes a Burst-compiled job for a single item using a simplified delegate without index parameters.
+    /// Executes a single-item Burst-compiled job with simplified input handling.
     /// </summary>
-    /// <param name="uniqueId">Unique identifier for the job, used for metrics tracking.</param>
-    /// <param name="burstDelegate">Burst-compiled delegate to process a single item.</param>
-    /// <param name="burstResultsDelegate">Optional Burst-compiled delegate to process results.</param>
-    /// <param name="inputs">Input data as a NativeArray. Must be created and disposed by the caller.</param>
-    /// <param name="outputs">Output data as a NativeList. Must be created and disposed by the caller.</param>
-    /// <param name="nonBurstResultsDelegate">Optional non-Burst delegate to process results if Burst is not used.</param>
-    /// <param name="options">Execution options, such as batch size or job type preferences.</param>
-    /// <returns>An IEnumerator for coroutine execution, yielding to spread load across frames.</returns>
+    /// <param name="uniqueId">Unique identifier for the job, used for metrics and profiling.</param>
+    /// <param name="burstDelegate">Delegate to process the single input, outputting to a NativeList.</param>
+    /// <param name="input">Single input item to process.</param>
+    /// <param name="outputs">Optional NativeList for outputs; created if not provided.</param>
+    /// <param name="burstResultsDelegate">Optional delegate for processing results in Burst.</param>
+    /// <param name="nonBurstResultsDelegate">Optional delegate for processing results without Burst.</param>
+    /// <param name="options">Execution options, e.g., visibility settings.</param>
+    /// <returns>An IEnumerator for coroutine execution, allowing frame distribution.</returns>
     [BurstCompile]
     public static IEnumerator ExecuteBurst<TInput, TOutput>(
         string uniqueId,
-        Action<NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
-        NativeArray<TInput> inputs = default,
+        Action<TInput, NativeList<TOutput>> burstDelegate,
+        TInput input = default,
         NativeList<TOutput> outputs = default,
         Action<NativeList<TOutput>> burstResultsDelegate = null,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
@@ -1470,16 +1474,28 @@ namespace NoLazyWorkers.Performance
         yield break;
       }
 
-      // Wrap the simplified delegate into the standard range-based delegate
-      Action<int, int, NativeArray<TInput>, NativeList<TOutput>> wrappedDelegate = (start, end, inArray, outList) =>
+      // Convert single input to NativeArray for job wrapper compatibility
+      NativeArray<TInput> inputs = new NativeArray<TInput>(1, Allocator.TempJob);
+      try
       {
-        burstDelegate(inArray, outList);
+        inputs[0] = input;
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> wrappedDelegate = (start, end, inArray, outList) =>
+        {
+          burstDelegate(inArray[0], outList);
+          Log(Level.Verbose, $"Executed single-item delegate for {uniqueId}", Category.Performance);
+        };
+        yield return ExecuteBurstInternal(uniqueId, wrappedDelegate, burstResultsDelegate, inputs, outputs, nonBurstResultsDelegate, options);
+      }
+      finally
+      {
+        if (inputs.IsCreated)
+        {
+          inputs.Dispose();
 #if DEBUG
-        Log(Level.Verbose, $"Executed single-item delegate for {uniqueId}", Category.Performance);
+          Log(Level.Verbose, $"Cleaned up input NativeArray for {uniqueId}", Category.Performance);
 #endif
-      };
-
-      yield return ExecuteBurstInternal(uniqueId, wrappedDelegate, burstResultsDelegate, inputs, outputs, nonBurstResultsDelegate, options);
+        }
+      }
     }
 
     /// <summary>
