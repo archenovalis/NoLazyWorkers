@@ -759,7 +759,7 @@ namespace NoLazyWorkers.Storage
       {
         if (config.Mode == StorageMode.None)
           return;
-        var storageKey = new StorageKey
+        var storageKey = new EntityKey
         {
           Guid = storage.GUID,
           Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf
@@ -933,7 +933,7 @@ namespace NoLazyWorkers.Storage
       {
         if (config.Mode == StorageMode.None)
           return;
-        var storageKey = new StorageKey
+        var storageKey = new EntityKey
         {
           Guid = Storage.GUID,
           Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf

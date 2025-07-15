@@ -15,6 +15,7 @@ using HarmonyLib;
 using ScheduleOne.UI.MainMenu;
 using UnityEngine.Jobs;
 using Object = UnityEngine.Object;
+using static NoLazyWorkers.Debug.Deferred;
 
 namespace NoLazyWorkers.Performance
 {
@@ -132,9 +133,10 @@ namespace NoLazyWorkers.Performance
       where TInput : unmanaged
       where TOutput : unmanaged
   {
-    public FunctionPointer<Action<int, int, NativeArray<TInput>, NativeList<TOutput>>> Delegate;
+    public FunctionPointer<Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>>> Delegate;
     public NativeArray<TInput> Inputs;
     public NativeList<TOutput> Outputs;
+    public NativeList<LogEntry> Logs;
     public int StartIndex;
     public int Count;
 
@@ -144,11 +146,11 @@ namespace NoLazyWorkers.Performance
     public void Execute()
     {
       var stopwatch = Stopwatch.StartNew();
-      Delegate.Invoke(StartIndex, StartIndex + Count, Inputs, Outputs);
+      Delegate.Invoke(StartIndex, StartIndex + Count, Inputs, Outputs, Logs);
 #if DEBUG
       if (stopwatch.ElapsedMilliseconds > SmartExecution.MAX_FRAME_TIME_MS)
       {
-        Log(Level.Verbose, $"DelegateJob exceeded frame time ({stopwatch.ElapsedMilliseconds:F3}ms)", Category.Performance);
+        Logs.Add(new LogEntry() { Level = Level.Verbose, Message = $"DelegateJob exceeded frame time ({stopwatch.ElapsedMilliseconds:F3}ms)", Category = Category.Performance });
       }
 #endif
     }
@@ -192,9 +194,10 @@ namespace NoLazyWorkers.Performance
       where TInput : unmanaged
       where TOutput : unmanaged
   {
-    [ReadOnly] public FunctionPointer<Action<int, NativeArray<TInput>, NativeList<TOutput>>> Delegate;
+    [ReadOnly] public FunctionPointer<Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>>> Delegate;
     [ReadOnly] public NativeArray<TInput> Inputs;
     public NativeList<TOutput> Outputs;
+    public NativeList<LogEntry> Logs;
     public int StartIndex;
 
     /// <summary>
@@ -203,7 +206,7 @@ namespace NoLazyWorkers.Performance
     /// <param name="index">The index of the item to process.</param>
     public void Execute(int index)
     {
-      Delegate.Invoke(index + StartIndex, Inputs, Outputs);
+      Delegate.Invoke(index + StartIndex, Inputs, Outputs, Logs);
     }
   }
 
@@ -213,9 +216,10 @@ namespace NoLazyWorkers.Performance
   [BurstCompile]
   internal struct DelegateParallelForTransformJob : IJobParallelForTransform
   {
-    [ReadOnly] public FunctionPointer<Action<int, TransformAccess>> Delegate;
+    [ReadOnly] public FunctionPointer<Action<int, TransformAccess, NativeList<LogEntry>>> Delegate;
     public int StartIndex;
     public int BatchSize;
+    public NativeList<LogEntry> Logs;
 
     /// <summary>
     /// Executes the transform job for a specific index.
@@ -224,7 +228,7 @@ namespace NoLazyWorkers.Performance
     /// <param name="transform">The transform to process.</param>
     public void Execute(int index, TransformAccess transform)
     {
-      Delegate.Invoke(index + StartIndex, transform);
+      Delegate.Invoke(index + StartIndex, transform, Logs);
     }
   }
 
@@ -238,9 +242,9 @@ namespace NoLazyWorkers.Performance
       where TInput : unmanaged
       where TOutput : unmanaged
   {
-    private readonly FunctionPointer<Action<int, int, NativeArray<TInput>, NativeList<TOutput>>> _delegateIJob;
-    private readonly FunctionPointer<Action<int, NativeArray<TInput>, NativeList<TOutput>>> _delegateFor;
-    private readonly FunctionPointer<Action<int, TransformAccess>> _delegateTransform;
+    private readonly FunctionPointer<Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>>> _delegateIJob;
+    private readonly FunctionPointer<Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>>> _delegateFor;
+    private readonly FunctionPointer<Action<int, TransformAccess, NativeList<LogEntry>>> _delegateTransform;
     private readonly NativeArray<TInput> _inputs;
     private readonly NativeList<TOutput> _outputs;
     private readonly TransformAccessArray _transforms;
@@ -250,9 +254,9 @@ namespace NoLazyWorkers.Performance
     private readonly JobType _jobType;
 
     public DelegateJobWrapper(
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateIJob,
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateFor,
-        Action<int, TransformAccess> transformDelegate,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateIJob,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateFor,
+        Action<int, TransformAccess, NativeList<LogEntry>> transformDelegate,
         NativeArray<TInput> inputs,
         NativeList<TOutput> outputs,
         TransformAccessArray transforms,
@@ -849,9 +853,10 @@ namespace NoLazyWorkers.Performance
       _stopwatchOverheadMs = stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency;
       var testData = new NativeArray<int>(10, Allocator.TempJob);
       var testOutputs = new NativeList<int>(10, Allocator.TempJob);
+      var logs = new NativeList<LogEntry>(10, Allocator.TempJob);
       try
       {
-        Action<int, int, NativeArray<int>, NativeList<int>> testDelegate = (start, end, inputs, outputs) =>
+        Action<int, int, NativeArray<int>, NativeList<int>, NativeList<LogEntry>> testDelegate = (start, end, inputs, outputs, logs) =>
         {
           for (int i = start; i < end; i++) outputs.Add(inputs[i] + 1);
         };
@@ -1238,7 +1243,7 @@ namespace NoLazyWorkers.Performance
           {
             for (int i = 0; i < tempOutputs.Count; i++) nativeOutputs.Add(tempOutputs[i]);
             var jobWrapper = new DelegateJobWrapper<TOutput, int>(
-                (start, end, inArray, outList) => burstResultsDelegate(tempOutputs),
+                (start, end, inArray, outList, Logs) => burstResultsDelegate(tempOutputs),
                 null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
             yield return MainThreadImpactTracker.TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), tempOutputs.Count);
           }
@@ -1459,10 +1464,11 @@ namespace NoLazyWorkers.Performance
     [BurstCompile]
     public static IEnumerator ExecuteBurst<TInput, TOutput>(
         string uniqueId,
-        Action<TInput, NativeList<TOutput>> burstDelegate,
+        Action<TInput, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
         TInput input = default,
         NativeList<TOutput> outputs = default,
-        Action<NativeList<TOutput>> burstResultsDelegate = null,
+        NativeList<LogEntry> logs = default,
+        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TInput : unmanaged
@@ -1479,12 +1485,12 @@ namespace NoLazyWorkers.Performance
       try
       {
         inputs[0] = input;
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> wrappedDelegate = (start, end, inArray, outList) =>
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> wrappedDelegate = (start, end, inArray, outList, logs) =>
         {
-          burstDelegate(inArray[0], outList);
+          burstDelegate(inArray[0], outList, logs);
           Log(Level.Verbose, $"Executed single-item delegate for {uniqueId}", Category.Performance);
         };
-        yield return ExecuteBurstInternal(uniqueId, wrappedDelegate, burstResultsDelegate, inputs, outputs, nonBurstResultsDelegate, options);
+        yield return ExecuteBurstInternal(uniqueId, wrappedDelegate, burstResultsDelegate, inputs, outputs, logs, nonBurstResultsDelegate, options);
       }
       finally
       {
@@ -1513,10 +1519,11 @@ namespace NoLazyWorkers.Performance
     /// <returns>An enumerator for the execution coroutine.</returns>
     private static IEnumerator ExecuteBurstInternal<TInput, TOutput>(
         string uniqueId,
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
-        Action<NativeList<TOutput>> burstResultsDelegate,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
+        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate,
         NativeArray<TInput> inputs = default,
         NativeList<TOutput> outputs = default,
+        NativeList<LogEntry> logs = default,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TInput : unmanaged
@@ -1548,6 +1555,7 @@ namespace NoLazyWorkers.Performance
             burstDelegateIJob: burstDelegate,
             inputs: inputs,
             outputs: nativeOutputs,
+            logs: logs,
             options: options,
             executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
             {
@@ -1564,14 +1572,14 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (single item, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
 #endif
-                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, logs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
               }
               else if (isHighFps)
               {
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via MainThread (single item, highFps={isHighFps})", Category.Performance);
 #endif
-                Metrics.TrackExecution(mainThreadKey, () => burstDelegate(0, 1, inputs, nativeOutputs), batchSize);
+                Metrics.TrackExecution(mainThreadKey, () => burstDelegate(0, 1, inputs, nativeOutputs, logs), batchSize);
                 return null;
               }
               else
@@ -1598,7 +1606,7 @@ namespace NoLazyWorkers.Performance
             Log(Level.Verbose, $"Processing {uniqueId} results via IJob (jobOverhead={jobOverhead:F3}ms, resultsCost={resultsCost:F3}ms)", Category.Performance);
 #endif
             var jobWrapper = new DelegateJobWrapper<TOutput, int>(
-                (start, end, inArray, outList) => burstResultsDelegate(nativeOutputs),
+                (start, end, inArray, outList, logs) => burstResultsDelegate(nativeOutputs, logs),
                 null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
             yield return MainThreadImpactTracker.TrackJobWithStopwatch(resultsJobKey, () => jobWrapper.Schedule(), nativeOutputs.Length);
           }
@@ -1618,7 +1626,7 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
                 Log(Level.Verbose, $"Converted List<TOutput> to NativeList<TOutput> for {uniqueId} results (count={managedOutputs.Count})", Category.Performance);
 #endif
-                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs);
+                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs, logs);
               }
               finally
               {
@@ -1658,10 +1666,11 @@ namespace NoLazyWorkers.Performance
     public static IEnumerator ExecuteBurstFor<TInput, TOutput>(
         string uniqueId,
         int itemCount,
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstForDelegate,
         NativeArray<TInput> inputs = default,
         NativeList<TOutput> outputs = default,
-        Action<NativeList<TOutput>> burstResultsDelegate = null,
+        NativeList<LogEntry> logs = default,
+        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default)
         where TInput : unmanaged
@@ -1682,9 +1691,9 @@ namespace NoLazyWorkers.Performance
           for (int i = 0; i < outputs.Length; i++) nativeOutputs.Add(outputs[i]);
         }
 
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate = (start, end, inArray, outList) =>
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate = (start, end, inArray, outList, Logs) =>
         {
-          for (int i = start; i < end; i++) burstForDelegate(i, inArray, outList);
+          for (int i = start; i < end; i++) burstForDelegate(i, inArray, outList, Logs);
         };
 
         string jobKey = $"{uniqueId}_IJob";
@@ -1699,6 +1708,7 @@ namespace NoLazyWorkers.Performance
             burstDelegateFor: burstForDelegate,
             inputs: inputs,
             outputs: nativeOutputs,
+            logs: logs,
             options: options,
             executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
             {
@@ -1724,7 +1734,7 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (batchSize={batchSize}, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
 #endif
-                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+                return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstCoroutine(burstDelegate, inputs, nativeOutputs, logs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
               }
               else if (mainThreadBatchCost <= MAX_FRAME_TIME_MS && isHighFps)
               {
@@ -1733,7 +1743,7 @@ namespace NoLazyWorkers.Performance
 #endif
                 Metrics.TrackExecution(mainThreadKey, () =>
                         {
-                          for (int j = batchStart; j < batchStart + batchSize; j++) burstForDelegate(j, inputs, nativeOutputs);
+                          for (int j = batchStart; j < batchStart + batchSize; j++) burstForDelegate(j, inputs, nativeOutputs, logs);
                         }, batchSize);
                 return null;
               }
@@ -1761,7 +1771,7 @@ namespace NoLazyWorkers.Performance
             Log(Level.Verbose, $"Processing {uniqueId} results via IJob (jobOverhead={jobOverhead:F3}ms, resultsCost={resultsCost:F3}ms)", Category.Performance);
 #endif
             var jobWrapper = new DelegateJobWrapper<TOutput, int>(
-                (start, end, inArray, outList) => burstResultsDelegate(nativeOutputs),
+                (start, end, inArray, outList, logs) => burstResultsDelegate(nativeOutputs, logs),
                 null, null, nativeOutputs, default, default, 0, 1, 1, JobType.IJob);
             yield return MainThreadImpactTracker.TrackJobWithStopwatch($"{uniqueId}_ResultsJob", () => jobWrapper.Schedule(), nativeOutputs.Length);
           }
@@ -1781,7 +1791,7 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
                 Log(Level.Verbose, $"Converted List<TOutput> to NativeList<TOutput> for {uniqueId} results (count={managedOutputs.Count})", Category.Performance);
 #endif
-                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs);
+                resultsDelegate = (_) => burstResultsDelegate(tempNativeOutputs, logs);
               }
               finally
               {
@@ -1818,9 +1828,10 @@ namespace NoLazyWorkers.Performance
     public static IEnumerator ExecuteTransforms<TInput>(
         string uniqueId,
         TransformAccessArray transforms,
-        Action<int, TransformAccess> burstTransformDelegate,
-        Action<int, Transform> burstMainThreadTransformDelegate,
+        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate,
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate,
         NativeArray<TInput> inputs = default,
+        NativeList<LogEntry> logs = default,
         SmartExecutionOptions options = default)
         where TInput : unmanaged
     {
@@ -1838,6 +1849,7 @@ namespace NoLazyWorkers.Performance
           burstMainThreadTransformDelegate: burstMainThreadTransformDelegate,
           inputs: inputs,
           outputs: default,
+          logs: default,
           options: options,
           executeAction: (batchStart, batchSize, jobType, mainThreadCost, coroutineCost, jobOverhead, isHighFps) =>
           {
@@ -1858,7 +1870,7 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
               Log(Level.Verbose, $"Executing {uniqueId} via Coroutine (batchSize={batchSize}, coroutineCost={coroutineCost:F3}ms)", Category.Performance);
 #endif
-              return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstTransformCoroutine(burstMainThreadTransformDelegate, transforms, batchStart, batchSize, options.IsPlayerVisible), batchSize);
+              return Metrics.TrackExecutionCoroutine(coroutineKey, RunBurstTransformCoroutine(burstMainThreadTransformDelegate, transforms, logs, batchStart, batchSize, options.IsPlayerVisible), batchSize);
             }
             else if (mainThreadBatchCost <= MAX_FRAME_TIME_MS && isHighFps)
             {
@@ -1868,7 +1880,7 @@ namespace NoLazyWorkers.Performance
               Metrics.TrackExecution(mainThreadKey, () =>
                     {
                       for (int j = batchStart; j < batchStart + batchSize; j++)
-                        burstMainThreadTransformDelegate(j, transforms[j].transform);
+                        burstMainThreadTransformDelegate(j, transforms[j].transform, logs);
                     }, batchSize);
               return null;
             }
@@ -1903,12 +1915,13 @@ namespace NoLazyWorkers.Performance
         string uniqueId,
         int itemCount,
         int batchSize,
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateIJob = null,
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstDelegateFor = null,
-        Action<int, TransformAccess> burstTransformDelegate = null,
-        Action<int, Transform> burstMainThreadTransformDelegate = null,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateIJob = null,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateFor = null,
+        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate = null,
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate = null,
         NativeArray<TInput> inputs = default,
         NativeList<TOutput> outputs = default,
+        NativeList<LogEntry> logs = default,
         TransformAccessArray transforms = default,
         SmartExecutionOptions options = default,
         Func<int, int, JobType, float, float, float, bool, IEnumerator> executeAction = null)
@@ -1931,9 +1944,9 @@ namespace NoLazyWorkers.Performance
       if (!_baselineEstablished.ContainsKey(uniqueId) || isFirstRun)
       {
         if (transforms.isCreated)
-          yield return EstablishBaselineTransform(uniqueId, transforms, burstTransformDelegate, burstMainThreadTransformDelegate, inputs, batchSize, options.IsPlayerVisible);
+          yield return EstablishBaselineTransform(uniqueId, transforms, burstTransformDelegate, burstMainThreadTransformDelegate, inputs, logs, batchSize, options.IsPlayerVisible);
         else
-          yield return EstablishBaselineBurst(uniqueId, burstDelegateIJob, burstDelegateFor, inputs, outputs, null, batchSize, options.IsPlayerVisible);
+          yield return EstablishBaselineBurst(uniqueId, burstDelegateIJob, burstDelegateFor, inputs, outputs, logs, null, batchSize, options.IsPlayerVisible);
       }
       float mainThreadCost = MainThreadImpactTracker.GetAverageItemImpact(mainThreadKey);
       float coroutineCost = MainThreadImpactTracker.GetCoroutineCost(coroutineKey);
@@ -2010,9 +2023,10 @@ namespace NoLazyWorkers.Performance
     /// <param name="isPlayerVisible">Whether the operation affects player-visible elements (determines yield type).</param>
     /// <returns>Coroutine that yields to spread load across frames.</returns>
     private static IEnumerator RunBurstCoroutine<TInput, TOutput>(
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
         NativeArray<TInput> inputs,
         NativeList<TOutput> outputs,
+        NativeList<LogEntry> logs,
         int startIndex,
         int count,
         bool isPlayerVisible)
@@ -2041,7 +2055,7 @@ namespace NoLazyWorkers.Performance
 #if DEBUG
         Log(Level.Verbose, $"Processing batch {i / subBatchSize + 1} for {key} (startIndex={i}, batchSize={currentSubBatchSize})", Category.Performance);
 #endif
-        burstDelegate(i, i + currentSubBatchSize, inputs, outputs);
+        burstDelegate(i, i + currentSubBatchSize, inputs, outputs, logs);
 
         if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
         {
@@ -2064,8 +2078,9 @@ namespace NoLazyWorkers.Performance
     /// <param name="isPlayerVisible">Whether the execution is networked.</param>
     /// <returns>An enumerator for the coroutine.</returns>
     private static IEnumerator RunBurstTransformCoroutine(
-        Action<int, Transform> burstMainThreadTransformDelegate,
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate,
         TransformAccessArray transforms,
+        NativeList<LogEntry> logs,
         int startIndex,
         int count,
         bool isPlayerVisible)
@@ -2077,7 +2092,7 @@ namespace NoLazyWorkers.Performance
       {
         int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
         for (int j = i; j < i + currentSubBatchSize; j++)
-          burstMainThreadTransformDelegate(j, transforms[j].transform);
+          burstMainThreadTransformDelegate(j, transforms[j].transform, logs);
         if (stopwatch.ElapsedMilliseconds >= MAX_FRAME_TIME_MS)
         {
           yield return isPlayerVisible ? AwaitNextFishNetTickAsync(0f) : null;
@@ -2170,6 +2185,7 @@ namespace NoLazyWorkers.Performance
       string testId = "InitialBaselineTest";
       var testInputs = new NativeArray<int>(10, Allocator.TempJob);
       var testJobOutputs = new NativeList<int>(10, Allocator.TempJob);
+      var logs = new NativeList<LogEntry>(10, Allocator.TempJob);
       var testTransforms = new TransformAccessArray(10);
       var tempGameObjects = new GameObject[10];
 
@@ -2184,18 +2200,18 @@ namespace NoLazyWorkers.Performance
           testTransforms.Add(tempGameObjects[i].transform);
         }
 
-        Action<int, int, NativeArray<int>, NativeList<int>> burstDelegate = (start, end, inputs, outputs) =>
+        Action<int, int, NativeArray<int>, NativeList<int>, NativeList<LogEntry>> burstDelegate = (start, end, inputs, outputs, logs) =>
         {
           for (int i = start; i < end; i++)
             outputs.Add(inputs[i] * 2);
         };
 
-        Action<int, TransformAccess> burstTransformDelegate = (index, transform) =>
+        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate = (index, transform, logs) =>
         {
           transform.position += Vector3.one * 0.01f;
         };
 
-        Action<int, Transform> burstMainThreadTransformDelegate = (index, transform) =>
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate = (index, transform, logs) =>
         {
           transform.position += Vector3.one * 0.01f;
         };
@@ -2208,10 +2224,10 @@ namespace NoLazyWorkers.Performance
         float transformJobTime = 0.0f;
 
         // Test generic data processing
-        Metrics.TrackExecution($"{testId}_MainThread", () => burstDelegate(0, testInputs.Length, testInputs, testJobOutputs), testInputs.Length);
+        Metrics.TrackExecution($"{testId}_MainThread", () => burstDelegate(0, testInputs.Length, testInputs, testJobOutputs, logs), testInputs.Length);
         mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
 
-        yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(burstDelegate, testInputs, default, 0, testInputs.Length, false), testInputs.Length);
+        yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(burstDelegate, testInputs, default, logs, 0, testInputs.Length, false), testInputs.Length);
         coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
 
         var jobWrapper = new DelegateJobWrapper<int, int>(burstDelegate, null, null, testInputs, testJobOutputs, default, 0, testInputs.Length, testInputs.Length, JobType.IJob);
@@ -2222,11 +2238,11 @@ namespace NoLazyWorkers.Performance
         Metrics.TrackExecution($"{testId}_TransformMainThread", () =>
         {
           for (int i = 0; i < testTransforms.length; i++)
-            burstMainThreadTransformDelegate(i, testTransforms[i].transform);
+            burstMainThreadTransformDelegate(i, testTransforms[i].transform, logs);
         }, testTransforms.length);
         transformMainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_TransformMainThread");
 
-        yield return Metrics.TrackExecutionCoroutine($"{testId}_TransformCoroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, 0, testTransforms.length, false), testTransforms.length);
+        yield return Metrics.TrackExecutionCoroutine($"{testId}_TransformCoroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, logs, 0, testTransforms.length, false), testTransforms.length);
         transformCoroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_TransformCoroutine");
 
         var transformJobWrapper = new DelegateJobWrapper<int, int>(null, null, burstTransformDelegate, testInputs, default, testTransforms, 0, testTransforms.length, testTransforms.length, JobType.IJobParallelForTransform);
@@ -2276,10 +2292,11 @@ namespace NoLazyWorkers.Performance
     /// <returns>An enumerator for the baseline coroutine.</returns>
     private static IEnumerator EstablishBaselineBurst<TInput, TOutput>(
         string uniqueId,
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> burstDelegate,
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate,
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstForDelegate,
         NativeArray<TInput> inputs,
         NativeList<TOutput> jobOutputs,
+        NativeList<LogEntry> logs,
         List<TOutput> coroutineOutputs,
         int batchSize,
         bool isPlayerVisible)
@@ -2300,12 +2317,12 @@ namespace NoLazyWorkers.Performance
             testInputs[i] = (TInput)(object)i;
         }
 
-        Action<int, int, NativeArray<TInput>, NativeList<TOutput>> testBurstDelegate = burstDelegate ?? ((start, end, inputs, _) =>
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> testBurstDelegate = burstDelegate ?? ((start, end, inputs, _, logs) =>
         {
           for (int i = start; i < end; i++) { }
         });
 
-        Action<int, NativeArray<TInput>, NativeList<TOutput>> testBurstForDelegate = burstForDelegate ?? ((index, inputs, _) => { });
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> testBurstForDelegate = burstForDelegate ?? ((index, inputs, _, logs) => { });
 
         float mainThreadTime = 0.0f;
         float coroutineCostMs = 0.0f;
@@ -2326,7 +2343,7 @@ namespace NoLazyWorkers.Performance
           int executionCount = _executionCount.AddOrUpdate(testId, 1, (_, count) => count + 1);
           if (executionCount % 4 == 0)
           {
-            Metrics.TrackExecution($"{testId}_MainThread", () => testBurstDelegate(0, testInputs.Length, testInputs, testJobOutputs), testInputs.Length);
+            Metrics.TrackExecution($"{testId}_MainThread", () => testBurstDelegate(0, testInputs.Length, testInputs, testJobOutputs, logs), testInputs.Length);
             mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: MainThread iteration {executionCount}, time={mainThreadTime:F3}ms", Category.Performance);
@@ -2352,7 +2369,7 @@ namespace NoLazyWorkers.Performance
           }
           else
           {
-            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(testBurstDelegate, testInputs, default, 0, testInputs.Length, isPlayerVisible), testInputs.Length);
+            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstCoroutine(testBurstDelegate, testInputs, default, logs, 0, testInputs.Length, isPlayerVisible), testInputs.Length);
             coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: Coroutine iteration {executionCount}, time={coroutineCostMs:F3}ms", Category.Performance);
@@ -2409,9 +2426,10 @@ namespace NoLazyWorkers.Performance
     private static IEnumerator EstablishBaselineTransform<TInput>(
         string uniqueId,
         TransformAccessArray transforms,
-        Action<int, TransformAccess> burstTransformDelegate,
-        Action<int, Transform> burstMainThreadTransformDelegate,
+        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate,
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate,
         NativeArray<TInput> inputs,
+        NativeList<LogEntry> logs,
         int batchSize,
         bool isPlayerVisible)
         where TInput : unmanaged
@@ -2449,7 +2467,7 @@ namespace NoLazyWorkers.Performance
             Metrics.TrackExecution($"{testId}_MainThread", () =>
             {
               for (int i = 0; i < testItemCount; i++)
-                burstMainThreadTransformDelegate(i, testTransforms[i].transform);
+                burstMainThreadTransformDelegate(i, testTransforms[i].transform, logs);
             }, testItemCount);
             mainThreadTime = (float)Metrics.GetAvgItemTimeMs($"{testId}_MainThread");
 #if DEBUG
@@ -2467,7 +2485,7 @@ namespace NoLazyWorkers.Performance
           }
           else
           {
-            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, 0, testItemCount, isPlayerVisible), testItemCount);
+            yield return Metrics.TrackExecutionCoroutine($"{testId}_Coroutine", RunBurstTransformCoroutine(burstMainThreadTransformDelegate, testTransforms, logs, 0, testItemCount, isPlayerVisible), testItemCount);
             coroutineCostMs = (float)Metrics.GetAvgItemTimeMs($"{testId}_Coroutine");
 #if DEBUG
             Log(Level.Verbose, $"Baseline test {testId}: Coroutine iteration {executionCount}, time={coroutineCostMs:F3}ms", Category.Performance);

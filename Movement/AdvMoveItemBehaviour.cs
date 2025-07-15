@@ -71,9 +71,9 @@ namespace NoLazyWorkers.Movement
     private CacheService _cacheManager;
     private readonly Queue<PrioritizedRoute> _routeQueue = new();
     private PrioritizedRoute? _currentRoute;
-    private Action<Employee, EmployeeData, Status> _callback;
+    private Action<Employee, EmployeeInfo, Status> _callback;
     private Stopwatch _travelStopwatch;
-    private EmployeeData _stateData;
+    private EmployeeInfo _stateData;
     private Coroutine _currentCoroutine;
     private static readonly Dictionary<Guid, List<TransitRoute>> InventoryRoutes = new();
     private PauseState _pauseState = new();
@@ -89,7 +89,7 @@ namespace NoLazyWorkers.Movement
     /// Routes are processed in groups from the same pickup source, with items picked up once and delivered
     /// to destinations sorted by distance using TransitDistanceCache.
     /// </summary>
-    public void Initialize(List<PrioritizedRoute> routes, EmployeeData stateData = null, Action<Employee, EmployeeData, Status> callback = null)
+    public void Initialize(List<PrioritizedRoute> routes, EmployeeInfo stateData = null, Action<Employee, EmployeeInfo, Status> callback = null)
     {
       Log(Level.Verbose, $"AdvMoveItemBeh.Initialize: {Employee.fullName} Initialize", Category.Movement);
       if (!FishNetExtensions.IsServer)

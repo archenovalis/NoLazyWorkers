@@ -36,6 +36,248 @@ public static class Deferred
 
 When implementing Burst-compiled delegates for `SmartExecution.ExecuteBurst` or `ExecuteBurstFor`, developers must decide whether to encapsulate logic in a struct or use a direct method. This choice impacts performance, modularity, and maintainability.
 
+### Guidelines
+
+- **Use Structs When**:
+  - The operation involves multiple native collections or complex state.
+  - The logic is reusable across multiple calls or coroutines.
+  - Disposal of temporary collections needs to be managed within the job.
+- **Use Direct Methods When**:
+  - The operation is simple, with minimal state (e.g., updating a single collection).
+  - The delegate has few parameters and does not require reuse.
+- **Disposal Best Practices**:
+  - Document disposal responsibilities in XML comments for structs (e.g., which collections are owned by the caller or external systems).
+  - Use try-finally blocks in coroutines to dispose temporary collections (e.g., `Allocator.TempJob`).
+  - Result delegates should use persistent since they might exist longer than 4 frames, ensure proper disposal.
+  - Transfer ownership of persistent collections (e.g., `Allocator.Persistent`) to services like `TaskService` or `DisabledEntityService`, and document this transfer.
+
+## Structs
+
+### SmartExecutionOptions
+
+Configuration options for smart execution.
+
+- **Fields**:
+  - `IsPlayerVisible`: Indicates if execution is networked, affecting yield behavior.
+
+- **Static Properties**:
+  - `Default`: Returns default options with `IsPlayerVisible = false`.
+
+## Classes
+
+### SmartExecution
+
+Manages optimized execution of jobs, coroutines, or main thread tasks with dynamic batch sizing and metrics-driven results processing.
+
+- **Static Methods**:
+  - `void Initialize()`: Initializes the smart execution system, setting up metrics and baseline data.
+  - `IEnumerator Execute<TInput, TOutput>(string uniqueId, int itemCount, Action<int, int, TInput[], List<TOutput>> nonBurstDelegate, Action<List<TOutput>> nonBurstResultsDelegate, TInput[] inputs, List<TOutput> outputs, Action<List<TOutput>> burstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes a non-Burst loop for `itemCount` items with dynamic batch sizing and optional results processing using either Burst or non-Burst delegates. Yields to spread load across frames.
+  - `IEnumerator ExecuteBurst<TInput, TOutput>(string uniqueId, Action<NativeArray<TInput>, NativeList<TOutput>> burstDelegate, NativeArray<TInput> inputs, NativeList<TOutput> outputs, Action<NativeList<TOutput>> burstResultsDelegate = null, Action<List<TOutput>> nonBurstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes a single item using a Burst-compiled job with metrics-driven results processing, supporting both Burst and non-Burst results delegates. Inputs and outputs are required.
+  - `IEnumerator ExecuteBurstFor<TInput, TOutput>(string uniqueId, int itemCount, Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate, NativeArray<TInput> inputs, NativeList<TOutput> outputs, Action<NativeList<TOutput>> burstResultsDelegate = null, Action<List<TOutput>> nonBurstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes multiple items using a Burst-compiled job (`IJobFor` or `IJobParallelFor`) with dynamic batch sizing and results processing. Inputs, outputs, and itemCount are required.
+  - `IEnumerator ExecuteTransforms<TInput>(string uniqueId, TransformAccessArray transforms, Action<int, TransformAccess> burstTransformDelegate, Action<int, Transform> burstMainThreadTransformDelegate, NativeArray<TInput> inputs = default, SmartExecutionOptions options = default)`: Executes transform operations using Burst-compiled jobs or main thread processing, with dynamic batch sizing.
+  - `void SaveBaselineData()`: Saves performance baseline data to a JSON file.
+  - `void LoadBaselineData()`: Loads performance baseline data from a JSON file.
+  - `void ResetBaselineData()`: Resets baseline performance data and clears associated files.
+
+- **Example 1: Execute (Non-Burst, Single or Multiple Items)**
+
+```csharp
+public class NonBurstSingleItemExample
+{
+  private static void ProcessNonBurst(int index, int[] inputs, List<int> outputs)
+  {
+      outputs.Add(inputs[index] * 2);
+      Debug.Log(Level.Info, $"Processed input: {inputs[index]}", Category.Tasks);
+  }
+
+  private static void ProcessNonBurstResults(List<int> outputs)
+  {
+    foreach (var output in outputs)
+    {
+      Debug.Log(Level.Info, $"Processed output: {output}", Category.Tasks);
+    }
+  }
+
+  public static IEnumerator Start()
+  {
+    int[] inputs = new int[] { 5 };
+    List<int> outputs = new List<int>();
+    yield return SmartExecution.Execute(
+      uniqueId: nameof(NonBurstSingleItemExample),
+      itemCount: inputs.count,
+      nonBurstDelegate: ProcessNonBurst,
+      nonBurstResultsDelegate: ProcessNonBurstResults,
+      inputs: inputs,
+      outputs: outputs
+    );
+    Debug.Log(Level.Info, $"Final outputs: {string.Join(", ", outputs)}", Category.Tasks);
+  }
+}
+```
+
+- **Example 2: ExecuteBurst (Single Item)**
+
+```csharp
+public class BurstSingleItemExample
+{
+  [BurstCompile]
+  private static void ProcessSingleItem(int input, NativeList<int> outputs, NativeList<LogEntry> logs)
+  {
+    outputs.Add(input * 2);
+    logs.Add(new LogEntry
+    {
+      Message = $"Processed {input}",
+      Level = Level.Info,
+      Category = Category.Tasks
+    });
+  }
+
+  [BurstCompile]
+  private static void ProcessBurstResults(NativeList<int> outputs, NativeList<LogEntry> logs)
+  {
+    if (outputs.Length > 0)
+    {
+      logs.Add(new LogEntry
+      {
+        Message = $"Processed {outputs[0]}",
+        Level = Level.Info,
+        Category = Category.Tasks
+      });
+    }
+  }
+
+  public static IEnumerator Start()
+  {
+    var input = 5;
+    var outputs = new NativeList<int>(1, Allocator.TempJob);
+    var logs = new NativeList<Deferred.LogEntry>(1, Allocator.TempJob);
+    try
+    {
+      yield return SmartExecution.ExecuteBurst(
+        uniqueId: nameof(BurstSingleItemExample),
+        burstDelegate: (input, outputs) => ProcessSingleItem(input, outputs, logs),
+        input: input,
+        outputs: outputs,
+        burstResultsDelegate: (outputs) => ProcessBurstResults(outputs, logs)
+      );
+      yield return ProcessLogs(logs);
+    }
+    finally
+    {
+      if (inputs.IsCreated) inputs.Dispose();
+      if (outputs.IsCreated) outputs.Dispose();
+      if (logs.IsCreated) logs.Dispose();
+    }
+  }
+}
+```
+
+- **Example 3: ExecuteBurstFor (Multiple Items)**
+
+```csharp
+public class BurstMultipleItemsExample
+{
+  [BurstCompile]
+  private static void ProcessMultipleItems(int index, NativeArray<int> inputs, NativeList<int> outputs, NativeList<LogEntry> logs)
+  {
+    outputs.Add(inputs[index] + 10);
+    logs.Add(new LogEntry
+    {
+      Message = $"Processed index={index}, first few: {string.Join(", ", outputs.Take(5))}",
+      Level = Level.Info,
+      Category = Category.Tasks
+    });
+  }
+
+  private static void ProcessNonBurstResults(List<int> outputs)
+  {
+    Log(Level.Info, $"Processed {outputs.Count} items, first few: {string.Join(", ", outputs.Take(5))}", Category.Tasks);
+  }
+
+  public static IEnumerator Start()
+  {
+    var inputs = new NativeArray<int>(100, Allocator.TempJob);
+    var outputs = new NativeList<int>(100, Allocator.TempJob);
+    var logs = new NativeList<Deferred.LogEntry>(100, Allocator.TempJob);
+    try
+    {
+      for (int i = 0; i < 100; i++)
+      {
+        inputs[i] = i;
+      }
+      yield return SmartExecution.ExecuteBurstFor(
+        uniqueId: nameof(BurstMultipleItemsExample),
+        itemCount: 100,
+        burstForDelegate: (index, inputs, outputs) => ProcessMultipleItems(index, inputs, outputs, logs),
+        inputs: inputs,
+        outputs: outputs,
+        nonBurstResultsDelegate: ProcessNonBurstResults
+      );
+      yield return ProcessLogs(logs);
+    }
+    finally
+    {
+      if (inputs.IsCreated) inputs.Dispose();
+      if (outputs.IsCreated) outputs.Dispose();
+      if (logs.IsCreated) logs.Dispose();
+    }
+  }
+}
+```
+
+- **Example 4: ExecuteTransforms (Transform Operations)**
+
+```csharp
+public class TransformExample
+{
+  [BurstCompile]
+  private static void ProcessTransform(int index, TransformAccess transform)
+  {
+    transform.position += Vector3.up * 0.1f;
+  }
+
+  [BurstCompile]
+  private static void ProcessMainThreadTransform(int index, Transform transform)
+  {
+    transform.position += Vector3.up * 0.1f;
+  }
+
+public static IEnumerator Start()
+  {
+    TransformAccessArray transforms = default;
+    GameObject[] gameObjects = null;
+    try
+    {
+      int transformCount = 10;
+      transforms = new TransformAccessArray(transformCount);
+      gameObjects = new GameObject[transformCount];
+      for (int i = 0; i < transformCount; i++)
+      {
+        gameObjects[i] = new GameObject($"TestObject_{i}");
+        transforms.Add(gameObjects[i].transform);
+      }
+      yield return SmartExecution.ExecuteTransforms<int>(
+        uniqueId: nameof(TransformExample),
+        transforms: transforms,
+        burstTransformDelegate: ProcessTransform,
+        burstMainThreadTransformDelegate: ProcessMainThreadTransform
+      );
+    }
+    finally
+    {
+      if (transforms.isCreated) transforms.Dispose();
+      if (gameObjects != null)
+      {
+        foreach (var go in gameObjects)
+        {
+          if (go != null) UnityEngine.Object.Destroy(go);
+        }
+      }
+    }
+  }
+}
+```
+
 ### When to Use a Struct
 
 - **Use Case**: Complex operations requiring multiple fields, reusable logic across multiple calls, or operations that manage native collections (e.g., `NativeList<T>`, `NativeArray<T>`).
@@ -209,250 +451,6 @@ public static IEnumerator UpdateStationRefillList(Guid stationGuid, NativeList<I
     if (inputs.IsCreated) inputs.Dispose();
     if (outputs.IsCreated) outputs.Dispose();
     if (logs.IsCreated) logs.Dispose();
-  }
-}
-```
-
-### Guidelines
-
-- **Use Structs When**:
-  - The operation involves multiple native collections or complex state.
-  - The logic is reusable across multiple calls or coroutines.
-  - Disposal of temporary collections needs to be managed within the job.
-- **Use Direct Methods When**:
-  - The operation is simple, with minimal state (e.g., updating a single collection).
-  - The delegate has few parameters and does not require reuse.
-- **Disposal Best Practices**:
-  - Document disposal responsibilities in XML comments for structs (e.g., which collections are owned by the caller or external systems).
-  - Use try-finally blocks in coroutines to dispose temporary collections (e.g., `Allocator.TempJob`).
-  - Transfer ownership of persistent collections (e.g., `Allocator.Persistent`) to services like `TaskService` or `DisabledEntityService`, and document this transfer.
-
-## Structs
-
-### SmartExecutionOptions
-
-Configuration options for smart execution.
-
-- **Fields**:
-  - `IsPlayerVisible`: Indicates if execution is networked, affecting yield behavior.
-
-- **Static Properties**:
-  - `Default`: Returns default options with `IsPlayerVisible = false`.
-
-## Classes
-
-### SmartExecution
-
-Manages optimized execution of jobs, coroutines, or main thread tasks with dynamic batch sizing and metrics-driven results processing.
-
-- **Static Methods**:
-  - `void Initialize()`: Initializes the smart execution system, setting up metrics and baseline data.
-  - `IEnumerator Execute<TInput, TOutput>(string uniqueId, int itemCount, Action<int, int, TInput[], List<TOutput>> nonBurstDelegate, Action<List<TOutput>> nonBurstResultsDelegate, TInput[] inputs, List<TOutput> outputs, Action<List<TOutput>> burstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes a non-Burst loop for `itemCount` items with dynamic batch sizing and optional results processing using either Burst or non-Burst delegates. Yields to spread load across frames.
-  - `IEnumerator ExecuteBurst<TInput, TOutput>(string uniqueId, Action<NativeArray<TInput>, NativeList<TOutput>> burstDelegate, NativeArray<TInput> inputs, NativeList<TOutput> outputs, Action<NativeList<TOutput>> burstResultsDelegate = null, Action<List<TOutput>> nonBurstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes a single item using a Burst-compiled job with metrics-driven results processing, supporting both Burst and non-Burst results delegates. Inputs and outputs are required.
-  - `IEnumerator ExecuteBurstFor<TInput, TOutput>(string uniqueId, int itemCount, Action<int, NativeArray<TInput>, NativeList<TOutput>> burstForDelegate, NativeArray<TInput> inputs, NativeList<TOutput> outputs, Action<NativeList<TOutput>> burstResultsDelegate = null, Action<List<TOutput>> nonBurstResultsDelegate = null, SmartExecutionOptions options = default)`: Executes multiple items using a Burst-compiled job (`IJobFor` or `IJobParallelFor`) with dynamic batch sizing and results processing. Inputs, outputs, and itemCount are required.
-  - `IEnumerator ExecuteTransforms<TInput>(string uniqueId, TransformAccessArray transforms, Action<int, TransformAccess> burstTransformDelegate, Action<int, Transform> burstMainThreadTransformDelegate, NativeArray<TInput> inputs = default, SmartExecutionOptions options = default)`: Executes transform operations using Burst-compiled jobs or main thread processing, with dynamic batch sizing.
-  - `void SaveBaselineData()`: Saves performance baseline data to a JSON file.
-  - `void LoadBaselineData()`: Loads performance baseline data from a JSON file.
-  - `void ResetBaselineData()`: Resets baseline performance data and clears associated files.
-
-- **Example 1: Execute (Non-Burst, Single Item)**
-
-```csharp
-public class NonBurstSingleItemExample
-{
-  private static void ProcessNonBurst(int start, int count, int[] inputs, List<int> outputs)
-  {
-    for (int i = start; i < start + count; i++)
-    {
-      outputs.Add(inputs[i] * 2);
-    }
-  }
-
-  private static void ProcessNonBurstResults(List<int> outputs)
-  {
-    if (outputs.Count > 0)
-    {
-      Debug.Log(Level.Info, $"Processed output: {outputs[0]}", Category.Tasks);
-    }
-  }
-
-  public static IEnumerator Start()
-  {
-    int[] inputs = new int[] { 5 };
-    List<int> outputs = new List<int>();
-    yield return SmartExecution.Execute(
-      uniqueId: nameof(NonBurstSingleItemExample),
-      itemCount: 1,
-      nonBurstDelegate: ProcessNonBurst,
-      nonBurstResultsDelegate: ProcessNonBurstResults,
-      inputs: inputs,
-      outputs: outputs
-    );
-    Debug.Log(Level.Info, $"Final outputs: {string.Join(", ", outputs)}", Category.Tasks);
-  }
-}
-```
-
-- **Example 2: ExecuteBurst (Single Item)**
-
-```csharp
-public class BurstSingleItemExample
-{
-  [BurstCompile]
-  private static void ProcessSingleItem(NativeArray<int> inputs, NativeList<int> outputs, NativeList<LogEntry> logs)
-  {
-    outputs.Add(inputs[0] * 2);
-    logs.Add(new LogEntry
-    {
-      Message = $"Processed {inputs[0]}",
-      Level = Level.Info,
-      Category = Category.Tasks
-    });
-  }
-
-  [BurstCompile]
-  private static void ProcessBurstResults(NativeList<int> outputs, NativeList<LogEntry> logs)
-  {
-    if (outputs.Length > 0)
-    {
-      logs.Add(new LogEntry
-      {
-        Message = $"Processed {outputs[0]}",
-        Level = Level.Info,
-        Category = Category.Tasks
-      });
-    }
-  }
-
-  public static IEnumerator Start()
-  {
-    var inputs = new NativeArray<int>(1, Allocator.TempJob);
-    var outputs = new NativeList<int>(1, Allocator.TempJob);
-    var logs = new NativeList<Deferred.LogEntry>(1, Allocator.TempJob);
-    try
-    {
-      inputs[0] = 5;
-      yield return SmartExecution.ExecuteBurst(
-        uniqueId: nameof(BurstSingleItemExample),
-        burstDelegate: (inputs, outputs) => ProcessSingleItem(inputs, outputs, logs),
-        inputs: inputs,
-        outputs: outputs,
-        burstResultsDelegate: (outputs) => ProcessBurstResults(outputs, logs)
-      );
-      yield return ProcessLogs(logs);
-    }
-    finally
-    {
-      if (inputs.IsCreated) inputs.Dispose();
-      if (outputs.IsCreated) outputs.Dispose();
-      if (logs.IsCreated) logs.Dispose();
-    }
-  }
-}
-```
-
-- **Example 3: ExecuteBurstFor (Multiple Items)**
-
-```csharp
-public class BurstMultipleItemsExample
-{
-  [BurstCompile]
-  private static void ProcessMultipleItems(int index, NativeArray<int> inputs, NativeList<int> outputs, NativeList<LogEntry> logs)
-  {
-    outputs.Add(inputs[index] + 10);
-    logs.Add(new LogEntry
-    {
-      Message = $"Processed index={index}, first few: {string.Join(", ", outputs.Take(5))}",
-      Level = Level.Info,
-      Category = Category.Tasks
-    });
-  }
-
-  private static void ProcessNonBurstResults(List<int> outputs)
-  {
-    Log(Level.Info, $"Processed {outputs.Count} items, first few: {string.Join(", ", outputs.Take(5))}", Category.Tasks);
-  }
-
-  public static IEnumerator Start()
-  {
-    var inputs = new NativeArray<int>(100, Allocator.TempJob);
-    var outputs = new NativeList<int>(100, Allocator.TempJob);
-    var logs = new NativeList<Deferred.LogEntry>(100, Allocator.TempJob);
-    try
-    {
-      for (int i = 0; i < 100; i++)
-      {
-        inputs[i] = i;
-      }
-      yield return SmartExecution.ExecuteBurstFor(
-        uniqueId: nameof(BurstMultipleItemsExample),
-        itemCount: 100,
-        burstForDelegate: (index, inputs, outputs) => ProcessMultipleItems(index, inputs, outputs, logs),
-        inputs: inputs,
-        outputs: outputs,
-        nonBurstResultsDelegate: ProcessNonBurstResults
-      );
-      yield return ProcessLogs(logs);
-    }
-    finally
-    {
-      if (inputs.IsCreated) inputs.Dispose();
-      if (outputs.IsCreated) outputs.Dispose();
-      if (logs.IsCreated) logs.Dispose();
-    }
-  }
-}
-```
-
-- **Example 4: ExecuteTransforms (Transform Operations)**
-
-```csharp
-public class TransformExample
-{
-  [BurstCompile]
-  private static void ProcessTransform(int index, TransformAccess transform)
-  {
-    transform.position += Vector3.up * 0.1f;
-  }
-
-  [BurstCompile]
-  private static void ProcessMainThreadTransform(int index, Transform transform)
-  {
-    transform.position += Vector3.up * 0.1f;
-  }
-
-public static IEnumerator Start()
-  {
-    TransformAccessArray transforms = default;
-    GameObject[] gameObjects = null;
-    try
-    {
-      int transformCount = 10;
-      transforms = new TransformAccessArray(transformCount);
-      gameObjects = new GameObject[transformCount];
-      for (int i = 0; i < transformCount; i++)
-      {
-        gameObjects[i] = new GameObject($"TestObject_{i}");
-        transforms.Add(gameObjects[i].transform);
-      }
-      yield return SmartExecution.ExecuteTransforms<int>(
-        uniqueId: nameof(TransformExample),
-        transforms: transforms,
-        burstTransformDelegate: ProcessTransform,
-        burstMainThreadTransformDelegate: ProcessMainThreadTransform
-      );
-    }
-    finally
-    {
-      if (transforms.isCreated) transforms.Dispose();
-      if (gameObjects != null)
-      {
-        foreach (var go in gameObjects)
-        {
-          if (go != null) UnityEngine.Object.Destroy(go);
-        }
-      }
-    }
   }
 }
 ```

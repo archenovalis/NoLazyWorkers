@@ -141,7 +141,7 @@ namespace NoLazyWorkers.TaskService.EmployeeTasks
     /// </summary>
     public class DeliverInventoryExecutor : ITaskExecutor
     {
-      public async Task ExecuteAsync(Employee employee, EmployeeData state, TaskDescriptor task)
+      public async Task ExecuteAsync(Employee employee, EmployeeInfo state, TaskDescriptor task)
       {
         var stopwatch = Stopwatch.StartNew();
         Log(Level.Info, $"DeliverInventoryExecutor: Starting task {task.TaskId} for {employee.fullName}", Category.AnyEmployee);

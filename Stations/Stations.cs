@@ -8,6 +8,7 @@ using ScheduleOne.Employees;
 using static NoLazyWorkers.Storage.Extensions;
 using NoLazyWorkers.Storage;
 using Unity.Collections;
+using static NoLazyWorkers.TaskService.Extensions;
 
 namespace NoLazyWorkers.Stations
 {
@@ -33,7 +34,7 @@ namespace NoLazyWorkers.Stations
       List<ItemInstance> RefillList();
       StationData StationData { get; }
       bool CanRefill(ItemInstance item);
-      Type TypeOf { get; }
+      EntityType EntityType { get; }
       IStationState StationState { get; set; }
     }
 
@@ -53,7 +54,7 @@ namespace NoLazyWorkers.Stations
         // Initialize Station in CacheService
         var cacheService = CacheService.GetOrCreateCacheService(adapter.ParentProperty);
         cacheService.StationData.Add(new StationData(adapter));
-        var storageKey = new StorageKey { Guid = adapter.GUID, Type = StorageType.Station };
+        var storageKey = new EntityKey { Guid = adapter.GUID, StorageType = StorageType.Station };
         foreach (var slot in adapter.InsertSlots)
           cacheService.RegisterItemSlot(slot, storageKey);
         foreach (var slot in adapter.ProductSlots)

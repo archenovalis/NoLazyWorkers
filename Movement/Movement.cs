@@ -19,7 +19,7 @@ namespace NoLazyWorkers.Movement
     /// Asynchronously executes a sequence of transfer requests for an employee, handling item movement.
     /// </summary>
     /// <returns>A tuple indicating success and an error message if applicable.</returns>
-    public static async Task<(bool success, string error)> TransitAsync(Employee employee, EmployeeData state, TaskDescriptor task, List<TransferRequest> requests)
+    public static async Task<(bool success, string error)> TransitAsync(Employee employee, EmployeeInfo state, TaskDescriptor task, List<TransferRequest> requests)
     {
       if (!requests.Any())
       {

@@ -157,7 +157,8 @@ namespace NoLazyWorkers
       Tasks,
       Stacktrace,
       Performance,
-      Pooling
+      Pooling,
+      EntityState
     }
     public static bool AnyEmployee;
     public static Level CurrentLevel { get; set; } = (Level)DebugLogs.Level;

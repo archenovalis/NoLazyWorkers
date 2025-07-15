@@ -7,7 +7,6 @@ using ScheduleOne.NPCs;
 using System.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.Utilities;
 using static NoLazyWorkers.Storage.ManagedDictionaries;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Utilities;
@@ -26,7 +25,7 @@ using Unity.Collections;
 using static NoLazyWorkers.Movement.Utilities;
 using NoLazyWorkers.Movement;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.TimeManagerExtensions;
+using static NoLazyWorkers.Extensions.FishNetExtensions;
 using static NoLazyWorkers.Storage.Extensions;
 using static NoLazyWorkers.Debug;
 using UnityEngine.InputSystem.EnhancedTouch;
@@ -49,7 +48,7 @@ namespace NoLazyWorkers.Employees
     public interface IEmployeeAdapter
     {
       Guid Guid { get; }
-      NpcSubType SubType { get; }
+      EntityType EntityType { get; }
       Property AssignedProperty { get; }
       EmployeeBehaviour AdvBehaviour { get; }
       List<ItemSlot> InventorySlots { get; }
@@ -68,7 +67,7 @@ namespace NoLazyWorkers.Employees
       public object ValidationResult { get; set; }
       public float MoveDelay { get; set; }
       public float MoveElapsed { get; set; }
-      public Action<Employee, EmployeeData, Status> MoveCallback { get; set; } // Updated callback with status
+      public Action<Employee, EmployeeInfo, Status> MoveCallback { get; set; } // Updated callback with status
       public List<TransferRequest> Requests { get; set; }
       public TransferRequest CurrentRequest { get; set; }
 
@@ -122,7 +121,7 @@ namespace NoLazyWorkers.Employees
       }
     }
 
-    public class EmployeeData
+    public class EmployeeInfo
     {
       public Employee Employee { get; }
       public EmployeeBehaviour AdvBehaviour { get; }
@@ -134,7 +133,7 @@ namespace NoLazyWorkers.Employees
       public TaskService.TaskService TaskService { get; set; }
       private readonly Queue<TaskDescriptor> _followUpTasks = new();
 
-      public EmployeeData(Employee employee, EmployeeBehaviour behaviour)
+      public EmployeeInfo(Employee employee, EmployeeBehaviour behaviour)
       {
         // Initialize state with employee and behavior
         Employee = employee ?? throw new ArgumentNullException(nameof(employee));
@@ -340,7 +339,7 @@ namespace NoLazyWorkers.Employees
 
       // Add employee to CacheManager
       var _cacheManager = CacheService.GetOrCreateCacheManager(employee.AssignedProperty);
-      var storageKey = new StorageKey { Guid = employee.GUID, Type = StorageType.Employee };
+      var storageKey = new EntityKey { Guid = employee.GUID, StorageType = StorageType.Employee };
       foreach (var slot in employee.Inventory.ItemSlots)
         _cacheManager.RegisterItemSlot(slot, storageKey);
       var slotData = employee.Inventory.ItemSlots.Select(s => new SlotData
@@ -447,7 +446,7 @@ namespace NoLazyWorkers.Employees
         CurrentTime = Time.time
       };
       var validTasks = new NativeList<TaskDescriptor>(Allocator.Temp);
-      definition.Validator.Validate(definition, new EntityKey { Guid = _employee.GUID, Type = TransitTypes.Inventory }, context, _employee.AssignedProperty, validTasks);
+      definition.Validator.Validate(definition, new EntityKey { Guid = _employee.GUID, StorageType = TransitTypes.Inventory }, context, _employee.AssignedProperty, validTasks);
 
       if (validTasks.Length > 0 && validTasks[0].IsEmployeeTypeValid(_employee))
       {
