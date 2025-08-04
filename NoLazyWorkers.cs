@@ -20,7 +20,7 @@ using NoLazyWorkers.Stations;
 using NoLazyWorkers.Botanists;
 using NoLazyWorkers.Employees;
 using FluffyUnderware.DevTools.Extensions;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using FishNet.Object;
 using ScheduleOne.DevUtilities;
 using FishNet;
@@ -34,7 +34,7 @@ using ScheduleOne.NPCs;
 using NoLazyWorkers.TaskService;
 using FishNet.Managing.Timing;
 using UnityEngine.InputSystem.EnhancedTouch;
-using NoLazyWorkers.Performance;
+using NoLazyWorkers.SmartExecution;
 using static NoLazyWorkers.NoLazyUtilities;
 using Unity.Collections;
 using Unity.Burst;
@@ -42,6 +42,7 @@ using static NoLazyWorkers.Debug;
 using ScheduleOne.UI.MainMenu;
 using NoLazyWorkers.Extensions;
 using static NoLazyWorkers.Extensions.PoolUtility;
+using NoLazyWorkers.Storage;
 
 [assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -90,19 +91,19 @@ namespace NoLazyWorkers
     /// </summary>
     public static class Deferred
     {
-      private static readonly NativeListPool<LogEntry> _logPool = new NativeListPool<LogEntry>(() => new NativeList<LogEntry>(100, Allocator.TempJob));
+      private static readonly NativeListPool<LogEntry> LogPool = new NativeListPool<LogEntry>(() => new NativeList<LogEntry>(100, Allocator.TempJob));
 
       public static NativeListPool<LogEntry> GetLogPool()
       {
-        return _logPool;
+        return LogPool;
       }
       public static IEnumerator ProcessLogs(NativeList<LogEntry> logs)
       {
         var outputs = new List<FixedString64Bytes>();
-        yield return SmartExecution.Execute(
+        yield return Smart.Execute(
             uniqueId: nameof(ProcessLogs),
             itemCount: logs.Length,
-            nonBurstDelegate: (start, count, inputs, outputs) =>
+            action: (start, count, inputs, outputs) =>
             {
               for (int i = start; i < start + count; i++)
               {
@@ -110,7 +111,7 @@ namespace NoLazyWorkers
                 Log(log.Level, log.Message.ToString(), log.Category);
               }
             },
-            nonBurstResultsDelegate: null,
+            resultsAction: null,
             inputs: logs.Select(l => l).ToArray(),
             outputs: outputs,
             options: default
@@ -126,6 +127,13 @@ namespace NoLazyWorkers
         public FixedString128Bytes Message;
         public Level Level;
         public Category Category;
+
+        public LogEntry(Level level, string message, Category category)
+        {
+          Level = level;
+          Message = message;
+          Category = category;
+        }
       }
     }
 
@@ -287,9 +295,10 @@ namespace NoLazyWorkers
         Log(Level.Info, "Applied Fixer and Misc settings on main scene load.", Category.Core);
         MixingStationConfigUtilities.InitializeStaticRouteListTemplate();
         ShelfUtilities.InitializeStorageModule();
-        //TaskServiceManager.Initialize();
-        SmartExecution.Initialize();
-        StorageManager.Initialize();
+        Smart.Initialize();
+
+        ManagedDictionaries.Initialize();
+        CacheManager.CacheManager.Initialize();
         FishNetExtensions.IsServer = InstanceFinder.IsServer;
         FishNetExtensions.TimeManagerInstance = InstanceFinder.TimeManager;
       }
@@ -297,11 +306,12 @@ namespace NoLazyWorkers
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
-      SmartExecution.SaveBaselineData();
+      Smart.SaveBaselineData();
       ClearPrefabs();
-      Employees.Utilities.Cleanup();
+      Smart.Cleanup();
+      ManagedDictionaries.Cleanup();
       Settings.SettingsExtensions.Configured.Clear();
-      StorageManager.Cleanup();
+      CacheManager.CacheManager.Cleanup();
       TaskServiceManager.Cleanup();
       Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
     }

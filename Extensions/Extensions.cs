@@ -1,6 +1,6 @@
 using System.Collections;
 using FishNet.Managing.Timing;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using NoLazyWorkers.TaskService;
 using ScheduleOne.Delivery;
 using ScheduleOne.Employees;
@@ -15,8 +15,11 @@ using UnityEngine.Pool;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Storage.ShelfExtensions;
+using static NoLazyWorkers.Debug.Deferred;
+using ScheduleOne.Product;
+using NoLazyWorkers.Storage;
 
 namespace NoLazyWorkers.Extensions
 {
@@ -83,8 +86,6 @@ namespace NoLazyWorkers.Extensions
 #endif
       return pool;
     }
-
-
 
     /// <summary>
     /// Pools and reuses NativeList instances for efficient memory management.
@@ -160,10 +161,41 @@ namespace NoLazyWorkers.Extensions
     private static readonly Dictionary<TimeManager, Dictionary<double, TaskCompletionSource<bool>>> _tickAwaiters = new();
 
     /// <summary>
+    /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
+    /// </summary>
+    /// <param name="seconds">The duration to wait in seconds (default is 0).</param>
+    /// <returns>A Task that completes after the specified delay.</returns>
+    public static async Task AwaitNextTick(float seconds = 0)
+    {
+      if (seconds < 0f)
+      {
+        Log(Level.Warning, $"AwaitNextTick: Invalid delay {seconds}s, using no delay", Category.Tasks);
+        return;
+      }
+
+      if (seconds > 0f)
+      {
+        int ticksToWait = Mathf.CeilToInt(seconds * TimeManagerInstance.TickRate);
+#if DEBUG
+        Log(Level.Verbose, $"AwaitNextTick: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {TimeManagerInstance.TickRate}", Category.Tasks);
+#endif
+
+        for (int i = 0; i < ticksToWait; i++)
+        {
+          await AwaitNextTickInternal();
+        }
+      }
+      else
+      {
+        await AwaitNextTickInternal();
+      }
+    }
+
+    /// <summary>
     /// Asynchronously waits for the next FishNet TimeManager tick.
     /// </summary>
     /// <returns>A Task that completes on the next tick.</returns>
-    private static Task AwaitNextTickAsyncInternal()
+    private static Task AwaitNextTickInternal()
     {
       var tick = TimeManagerInstance.Tick;
       var awaiters = _tickAwaiters.GetOrAdd(TimeManagerInstance, _ => new Dictionary<double, TaskCompletionSource<bool>>());
@@ -186,41 +218,10 @@ namespace NoLazyWorkers.Extensions
     }
 
     /// <summary>
-    /// Asynchronously waits for the specified duration in seconds, aligned with FishNet TimeManager ticks.
-    /// </summary>
-    /// <param name="seconds">The duration to wait in seconds (default is 0).</param>
-    /// <returns>A Task that completes after the specified delay.</returns>
-    public static async Task AwaitNextFishNetTickAsync(float seconds = 0)
-    {
-      if (seconds < 0f)
-      {
-        Log(Level.Warning, $"AwaitNextTickAsync: Invalid delay {seconds}s, using no delay", Category.Tasks);
-        return;
-      }
-
-      if (seconds > 0f)
-      {
-        int ticksToWait = Mathf.CeilToInt(seconds * TimeManagerInstance.TickRate);
-#if DEBUG
-        Log(Level.Verbose, $"AwaitNextTickAsync: Waiting for {seconds}s ({ticksToWait} ticks) at tick rate {TimeManagerInstance.TickRate}", Category.Tasks);
-#endif
-
-        for (int i = 0; i < ticksToWait; i++)
-        {
-          await AwaitNextTickAsyncInternal();
-        }
-      }
-      else
-      {
-        await AwaitNextTickAsyncInternal();
-      }
-    }
-
-    /// <summary>
     /// Waits for the next FishNet TimeManager tick in a coroutine.
     /// </summary>
     /// <returns>An enumerator that yields until the next tick.</returns>
-    public static IEnumerator WaitForNextTick()
+    public static IEnumerator YieldForNextTick()
     {
       long currentTick = TimeManagerInstance.Tick;
       while (TimeManagerInstance.Tick == currentTick)
@@ -301,7 +302,31 @@ namespace NoLazyWorkers.Extensions
     }
   }
 
-  public static class NativeListExtensions
+  public static class ItemExtentions
+  {
+    public static bool AdvCanStackWith(this ItemInstance item, ItemInstance targetItem, bool allowTargetHigherQuality = false, bool checkQuantities = false)
+    {
+      var qItem = item as QualityItemInstance;
+      var qTargetItem = targetItem as QualityItemInstance;
+      if (targetItem.ID == "Any" && qItem != null && qTargetItem != null)
+        return allowTargetHigherQuality ? qItem.Quality <= qTargetItem.Quality : qItem.Quality == qTargetItem.Quality;
+
+      if (item.ID != targetItem.ID)
+        return false;
+      if (checkQuantities && item.StackLimit < targetItem.Quantity + item.Quantity)
+        return false;
+
+      if (item is ProductItemInstance pItem && targetItem is ProductItemInstance pTargetItem && !((pItem.PackagingID == "" && pTargetItem.PackagingID == "") ||
+            (pItem.PackagingID != "" && pTargetItem.PackagingID != "" && pItem.PackagingID == pTargetItem.PackagingID)))
+        return false;
+      if (qItem != null && qTargetItem != null)
+        return allowTargetHigherQuality ? qItem.Quality <= qTargetItem.Quality : qItem.Quality == qTargetItem.Quality;
+      return true;
+    }
+  }
+
+  [BurstCompile]
+  public static class NativeExtensions
   {
     /// <summary>
     /// Removes the first occurrence of the specified item from the NativeList.
@@ -321,6 +346,47 @@ namespace NoLazyWorkers.Extensions
         }
       }
       return false;
+    }
+
+    [BurstCompile]
+    public static void AddOrUpdate<TKey, TValue>(
+        this NativeParallelHashMap<TKey, TValue> map,
+        TKey key,
+        TValue value,
+        NativeList<LogEntry> logs = default)
+        where TKey : unmanaged, IEquatable<TKey>
+        where TValue : unmanaged
+    {
+      if (map.TryGetValue(key, out var existing))
+      {
+        map[key] = value;
+#if DEBUG
+        if (logs.IsCreated)
+        {
+          logs.Add(new LogEntry
+          {
+            Level = Level.Verbose,
+            Message = $"Updated value for key {key} in NativeParallelHashMap",
+            Category = Category.Performance
+          });
+        }
+#endif
+      }
+      else
+      {
+        map[key] = value;
+#if DEBUG
+        if (logs.IsCreated)
+        {
+          logs.Add(new LogEntry
+          {
+            Level = Level.Verbose,
+            Message = $"Added new value for key {key} in NativeParallelHashMap",
+            Category = Category.Performance
+          });
+        }
+#endif
+      }
     }
   }
 
@@ -372,8 +438,7 @@ namespace NoLazyWorkers.Extensions
       {
         case PlaceableStorageEntity storage:
           var property = storage.ParentProperty;
-          return ManagedDictionaries.StorageConfigs.TryGetValue(property, out var configs) &&
-                 configs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
+          return CacheService.GetOrCreateService(property).StorageConfigs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
                  ? StorageType.SpecificShelf
                  : StorageType.AnyShelf;
         case BuildableItem:

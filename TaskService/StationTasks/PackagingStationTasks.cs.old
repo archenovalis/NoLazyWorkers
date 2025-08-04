@@ -8,8 +8,8 @@ using ScheduleOne.Property;
 using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
-using static NoLazyWorkers.Storage.Utilities;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Utilities;
+using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
@@ -17,7 +17,7 @@ using static NoLazyWorkers.TaskService.Extensions;
 using ScheduleOne;
 using ScheduleOne.Product;
 using static NoLazyWorkers.TaskService.TaskRegistry;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using static NoLazyWorkers.Movement.Extensions;
 using static NoLazyWorkers.Movement.Utilities;
 using static NoLazyWorkers.TaskService.StationTasks.PackagingStationTasks.Constants;
@@ -484,7 +484,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
           deliverySlots[0].ApplyLock(packager.NetworkObject, "dropoff");
           var request = TransferRequest.Get(packager, item, task.Quantity, inventorySlot, shelf, sourceSlots, station, deliverySlots);
-          state.State.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
+          state.State.TaskContext = new TaskContext { Task = task, TransferRoutes = new List<TransferRequest> { request } };
 
           var movementResult = await TransitAsync(packager, state, task, new List<TransferRequest> { request });
           if (movementResult.Success)
@@ -802,7 +802,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           }
 
           var request = TransferRequest.Get(packager, outputSlot.ItemInstance, outputSlot.Quantity, inventorySlot, station, new List<ItemSlot> { outputSlot }, shelf, deliverySlots);
-          state.State.TaskContext = new TaskContext { Task = task, Requests = new List<TransferRequest> { request } };
+          state.State.TaskContext = new TaskContext { Task = task, TransferRoutes = new List<TransferRequest> { request } };
 
           var movementResult = await TransitAsync(packager, state, task, new List<TransferRequest> { request });
           if (movementResult.Success)

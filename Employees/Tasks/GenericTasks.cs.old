@@ -73,7 +73,7 @@ namespace NoLazyWorkers.Employees.Tasks
           return;
         }
 
-        var routes = new List<PrioritizedRoute>();
+        var routes = new List<TransferRequest>();
         var context = state.EmployeeState.TaskContext;
 
         foreach (var slot in employee.Inventory.ItemSlots.Where(s => s?.ItemInstance != null && s.Quantity > 0 && !s.IsLocked))
@@ -113,7 +113,7 @@ namespace NoLazyWorkers.Employees.Tasks
           slot.ApplyLock(employee.NetworkObject, "pickup");
 
           var request = TransferRequest.Get(employee, slot.ItemInstance, quantity, slot, null, new List<ItemSlot> { slot }, destination, deliverySlots);
-          routes.Add(Utilities.CreatePrioritizedRoute(request, 40));
+          routes.Add(Utilities.CreateTransferRequest(request, 40));
           Utilities.SetReservedSlot(employee, slot);
           DebugLogger.Log(DebugLogger.LogLevel.Info, $"ExecuteDelivery: Route for {quantity} of {slot.ItemInstance.ID} to {destination.GUID}", DebugLogger.Category.AnyEmployee);
         }

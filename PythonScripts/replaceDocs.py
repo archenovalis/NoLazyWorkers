@@ -22,10 +22,10 @@ def normalize_signature(signature: str, node_type: str) -> str:
     parts = signature.split('where')
     main_signature = parts[0].strip()
     constraints = 'where' + 'where'.join(parts[1:]) if len(parts) > 1 else ''
-    
+
     # Remove extra whitespace and newlines from main signature
     main_signature = re.sub(r'\s+', ' ', main_signature).strip()
-    
+
     # For methods and constructors, join parameter types and names (e.g., int index -> intindex)
     if node_type in ('method_declaration', 'constructor_declaration'):
         def normalize_params(match):
@@ -33,17 +33,20 @@ def normalize_signature(signature: str, node_type: str) -> str:
             param = re.sub(r'\s+', '', param)
             return param
         main_signature = re.sub(r'(\w+\s+\w+(?:<[^>]+>)?\s+\w+)', normalize_params, main_signature)
-    
+
     # Normalize main signature by removing spaces between tokens
     normalized_main = ''.join(main_signature.split())
-    
+
     # Normalize constraints by removing spaces between tokens, but preserve 'where' structure
     if constraints:
         constraints = re.sub(r'\s+', '', constraints)
         normalized = normalized_main + constraints
     else:
         normalized = normalized_main
-    
+
+    # Remove trailing `{` or `}` or both
+    normalized = re.sub(r'[{}]+$', '', normalized)
+
     return normalized
 
 def parse_doc_file(content: str) -> Dict[str, Tuple[str, str, str]]:

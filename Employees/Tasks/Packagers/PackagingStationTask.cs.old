@@ -528,7 +528,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         var station = state.EmployeeState.TaskContext.Station.TransitEntity as PackagingStation;
         var requests = state.EmployeeState.TaskContext.Requests;
 
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 100),
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(requests, 100),
             nextStep: PackagingStationSteps.CheckStation,
             onComplete: async (emp, s, status) =>
             {
@@ -836,7 +836,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         var requests = new List<TransferRequest> { request };
         state.EmployeeState.TaskContext.Requests = requests;
 
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 100),
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(requests, 100),
                 nextStep: PackagingStationSteps.End);
       }
 

@@ -1,0 +1,11 @@
+{
+  "dotnet.server.useOmnisharp": true,
+  "omnisharp.autoStart": true,
+  "omnisharp.useModernNet": false,
+  "omnisharp.loggingLevel": "trace",
+  "omnisharp.enableEditorConfigSupport": true,
+  "omnisharp.enableMsBuildLoadProjectsOnDemand": false,
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  }
+}

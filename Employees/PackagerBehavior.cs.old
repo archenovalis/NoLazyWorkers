@@ -7,11 +7,11 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using static NoLazyWorkers.Stations.Extensions;
 using static NoLazyWorkers.Employees.PackagerExtensions;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Constants;
 using NoLazyWorkers.Stations;
-using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.CacheManager.Utilities;
 using static NoLazyWorkers.Debug;
 using UnityEngine;
 
@@ -109,7 +109,7 @@ namespace NoLazyWorkers.Employees
           if (noWork)
           {
             __instance.SetWaitOutside(true);
-            state.CurrentState = EState.Idle;
+            state.CurrentAction = EmployeeAction.Idle;
             return false;
           }
 
@@ -126,11 +126,11 @@ namespace NoLazyWorkers.Employees
           {
             __instance.SubmitNoWorkReason("I am unable to work right now", "Check my status to see why I can't work.");
             __instance.SetIdle(true);
-            state.CurrentState = EState.Idle;
+            state.CurrentAction = EmployeeAction.Idle;
             return false;
           }
 
-          if (state.CurrentState != EState.Idle || __instance.PackagingBehaviour.Active)
+          if (state.CurrentAction != EmployeeAction.Idle || __instance.PackagingBehaviour.Active)
           {
             __instance.MarkIsWorking();
             return false;

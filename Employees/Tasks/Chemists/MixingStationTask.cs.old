@@ -446,7 +446,7 @@ namespace NoLazyWorkers.Employees.Tasks.Chemists
 
         state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
 
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
                 async (emp, s, status) =>
                 {
                   DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -637,7 +637,7 @@ namespace NoLazyWorkers.Employees.Tasks.Chemists
 
           state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
 
-          state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
+          state.EmployeeBeh.StartMovement(CreateTransferRequests(new List<TransferRequest> { request }, 100), MixingStationSteps.OnComplete,
                   async (emp, s, status) =>
                   {
                     DebugLogger.Log(DebugLogger.LogLevel.Info,
@@ -759,7 +759,7 @@ namespace NoLazyWorkers.Employees.Tasks.Chemists
 
         state.EmployeeState.TaskContext.Requests = new List<TransferRequest> { request };
 
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(new List<TransferRequest> { request }, 100), MixingStationSteps.End);
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(new List<TransferRequest> { request }, 100), MixingStationSteps.End);
       }
 
       // Cleans up resources and disables behavior

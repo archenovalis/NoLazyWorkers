@@ -20,7 +20,7 @@ using NoLazyWorkers.Stations;
 using NoLazyWorkers;
 using ScheduleOne;
 using ScheduleOne.Property;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using ScheduleOne.StationFramework;
 using ScheduleOne.EntityFramework;
 using static NoLazyWorkers.Debug;

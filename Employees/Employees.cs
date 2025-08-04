@@ -7,16 +7,16 @@ using ScheduleOne.NPCs;
 using System.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.ManagedDictionaries;
+using static NoLazyWorkers.CacheManager.ManagedDictionaries;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Utilities;
 using static NoLazyWorkers.Employees.Constants;
 using ScheduleOne.Property;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using FishNet.Object;
 using Random = UnityEngine.Random;
 using FishNet.Managing.Object;
-using static NoLazyWorkers.Stations.PackagingStationExtensions;
+//using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using NoLazyWorkers.TaskService;
 using static NoLazyWorkers.TaskService.Extensions;
 using static NoLazyWorkers.TaskService.TaskRegistry;
@@ -26,9 +26,12 @@ using static NoLazyWorkers.Movement.Utilities;
 using NoLazyWorkers.Movement;
 using static NoLazyWorkers.Movement.Extensions;
 using static NoLazyWorkers.Extensions.FishNetExtensions;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Debug;
 using UnityEngine.InputSystem.EnhancedTouch;
+using System.Reflection.Metadata;
+using NoLazyWorkers.Extensions;
+using NoLazyWorkers.SmartExecution;
 
 namespace NoLazyWorkers.Employees
 {
@@ -39,7 +42,7 @@ namespace NoLazyWorkers.Employees
 
     }
     // Enum for movement status in callbacks
-    public enum Status
+    public enum MovementStatus
     {
       Success, // Movement completed successfully
       Failure  // Movement failed (e.g., timeout, invalid route)
@@ -50,7 +53,7 @@ namespace NoLazyWorkers.Employees
       Guid Guid { get; }
       EntityType EntityType { get; }
       Property AssignedProperty { get; }
-      EmployeeBehaviour AdvBehaviour { get; }
+      AdvEmployeeBehaviour AdvBehaviour { get; }
       List<ItemSlot> InventorySlots { get; }
     }
 
@@ -63,31 +66,29 @@ namespace NoLazyWorkers.Employees
       public int QuantityNeeded { get; set; }
       public int QuantityWanted { get; set; }
       public IStationAdapter Station { get; set; }
-      public Status? MovementStatus { get; set; }
+      public MovementStatus? MovementStatus { get; set; }
       public object ValidationResult { get; set; }
       public float MoveDelay { get; set; }
       public float MoveElapsed { get; set; }
-      public Action<Employee, EmployeeInfo, Status> MoveCallback { get; set; } // Updated callback with status
-      public List<TransferRequest> Requests { get; set; }
+      public Action<Employee, EmployeeInfo, MovementStatus> MoveCallback { get; set; }
+      public List<TransferRequest> TransferRoutes { get; set; }
       public TransferRequest CurrentRequest { get; set; }
 
       // Releases all resources associated with the task context
       public void Cleanup(Employee employee)
       {
         // Release slot locks and transfer requests
-        if (Requests != null)
+        if (TransferRoutes != null)
         {
-          foreach (var request in Requests)
+          foreach (var request in TransferRoutes)
           {
             request.InventorySlot?.RemoveLock(employee.NetworkObject);
             request.PickupSlots?.ForEach(s => s.RemoveLock(employee.NetworkObject));
             request.DropOffSlots?.ForEach(s => s.RemoveLock(employee.NetworkObject));
             TransferRequest.Release(request);
           }
-          Requests.Clear();
+          TransferRoutes.Clear();
         }
-        // Release reserved slots
-        Utilities.ReleaseReservations(employee);
         MoveCallback = null;
         MovementStatus = null;
         Log(Level.Info, $"TaskContext.Cleanup: Released resources for {employee.fullName}", Category.EmployeeCore);
@@ -96,81 +97,44 @@ namespace NoLazyWorkers.Employees
 
     public enum NpcSubType { Chemist, Handler, Botanist, Cleaner, Driver }
 
-    public enum EState
+    public enum EmployeeAction
     {
       Idle,
       Working,
       Moving
     }
 
-    public class EmployeeState
-    {
-      public string CurrentTaskId { get; set; }
-      public object CurrentWorkStep { get; set; } // Stores enum (e.g., DeliverInventorySteps)
-      public TaskContext TaskContext { get; set; }
-      public int LastScanIndex { get; set; } = -1;
-      public bool HasCallback { get; set; } = false;
-
-      // Clears task state
-      public void Clear()
-      {
-        CurrentTaskId = null;
-        CurrentWorkStep = null;
-        TaskContext = null;
-        LastScanIndex = -1;
-      }
-    }
-
     public class EmployeeInfo
     {
       public Employee Employee { get; }
-      public EmployeeBehaviour AdvBehaviour { get; }
-      public IStationAdapter Station { get; set; }
+      public AdvEmployeeBehaviour AdvBehaviour { get; }
       public AdvMoveItemBehaviour AdvMoveItemBehaviour { get; }
-      public TaskDescriptor CurrentTask { get; set; }
-      public EState CurrentState { get; set; }
-      public EmployeeState State { get; set; }
-      public TaskService.TaskService TaskService { get; set; }
-      private readonly Queue<TaskDescriptor> _followUpTasks = new();
+      public bool IsAdvBehInitialized { get; set; }
 
-      public EmployeeInfo(Employee employee, EmployeeBehaviour behaviour)
+      public TaskDescriptor CurrentTask;
+      public EmployeeAction CurrentAction;
+      public TaskContext TaskContext;
+
+      public EmployeeInfo(Employee employee, AdvEmployeeBehaviour behaviour)
       {
-        // Initialize state with employee and behavior
         Employee = employee ?? throw new ArgumentNullException(nameof(employee));
         AdvBehaviour = behaviour ?? throw new ArgumentNullException(nameof(behaviour));
         AdvMoveItemBehaviour = CreateAdvMoveItemBehaviour(employee);
-        State = new EmployeeState();
-        States[employee.GUID] = this;
+        CacheService.GetOrCreateService(employee.AssignedProperty).EmployeeInfoDict[employee.GUID] = this;
+        IsAdvBehInitialized = false;
       }
 
-      public void EnqueueFollowUpTask(TaskDescriptor task)
-      {
-        _followUpTasks.Enqueue(task);
-        Log(Level.Info, $"StateData: Enqueued follow-up task {task.TaskId} for {Employee.fullName}", Category.EmployeeCore);
-      }
-
-      public bool TryGetFollowUpTask(out TaskDescriptor task)
-      {
-        return _followUpTasks.TryDequeue(out task);
-      }
-
-      // Clears task and state
-      public void Clear()
+      public void Reset()
       {
         CurrentTask = new();
-        CurrentState = EState.Idle;
-        State = null;
+        CurrentAction = EmployeeAction.Idle;
+        IsAdvBehInitialized = false;
       }
     }
   }
 
   public static class Constants
   {
-    public static Dictionary<IStationAdapter, Employee> StationAdapterBehaviours = new();
-    public static Dictionary<Guid, List<ItemSlot>> ReservedSlots = new();
-    public static Dictionary<Property, Dictionary<ItemInstance, float>> TimedOutItems = new();
-    public static readonly Dictionary<Guid, float> PendingAdapters = new();
-    public static readonly Dictionary<Guid, EmployeeData> States = new();
     public const float ADAPTER_DELAY_SECONDS = 3f;
   }
 
@@ -179,91 +143,14 @@ namespace NoLazyWorkers.Employees
     // Registers an employee adapter
     public static void RegisterEmployeeAdapter(Employee employee, IEmployeeAdapter adapter)
     {
-      Log(Level.Verbose, $"RegisterEmployeeAdapter: Entered for NPC={employee?.fullName}, type={adapter?.SubType}", Category.AnyEmployee);
+      Log(Level.Verbose, $"RegisterEmployeeAdapter: Entered for NPC={employee?.fullName}, type={adapter?.EntityType}", Category.AnyEmployee);
       if (employee == null || adapter == null)
       {
         Log(Level.Error, $"RegisterEmployeeAdapter: NPC or adapter is null", Category.AnyEmployee);
         return;
       }
-      IEmployees[employee.AssignedProperty][employee.GUID] = adapter;
-      Log(Level.Info, $"RegisterEmployeeAdapter: Registered adapter for NPC {employee.fullName}, type={adapter.SubType}", Category.AnyEmployee);
-    }
-
-    // Reserves a slot for an employee
-    public static void SetReservedSlot(Employee employee, ItemSlot slot)
-    {
-      Log(Level.Verbose, $"SetReservedSlot: Entered for employee={employee?.fullName}, slot={slot?.SlotIndex}", Category.Handler);
-      if (employee == null || slot == null)
-      {
-        Log(Level.Warning, $"SetReservedSlot: Employee or slot is null", Category.Handler);
-        return;
-      }
-      // Initialize reserved slots list if not present
-      if (!ReservedSlots.TryGetValue(employee.GUID, out var reserved))
-      {
-        ReservedSlots[employee.GUID] = new();
-        reserved = ReservedSlots[employee.GUID];
-        Log(Level.Verbose, $"SetReservedSlot: Initialized reserved slots for employee={employee.fullName}", Category.Handler);
-      }
-      reserved.Add(slot);
-      Log(Level.Info, $"SetReservedSlot: Added slot {slot.SlotIndex} for NPC={employee.fullName}", Category.Handler);
-    }
-
-    // Releases all reserved slots for an employee
-    public static void ReleaseReservations(Employee employee)
-    {
-      Log(Level.Verbose, $"ReleaseReservations: Entered for employee={employee?.fullName}", Category.Handler);
-      if (employee == null)
-      {
-        Log(Level.Warning, $"ReleaseReservations: Employee is null", Category.Handler);
-        return;
-      }
-      if (ReservedSlots.TryGetValue(employee.GUID, out var slots) && slots != null)
-      {
-        Log(Level.Info, $"ReleaseReservations: Released {slots.Count} slots for employee {employee.fullName}", Category.Handler);
-        ReservedSlots.Remove(employee.GUID);
-      }
-      else
-      {
-        Log(Level.Verbose, $"ReleaseReservations: No reserved slots for employee {employee.fullName}", Category.Handler);
-      }
-    }
-
-    public static List<TransferRequest> CreateTransferRequest(Employee employee, TaskDescriptor task)
-    {
-      var source = Storage.ManagedDictionaries.Storages[employee.AssignedProperty].TryGetValue(task.PickupGuid, out var pickup) ? pickup : null;
-      var destination = Storage.ManagedDictionaries.Storages[employee.AssignedProperty].TryGetValue(task.DropoffGuid, out var dropoff) ? dropoff : null;
-      if (source == null || destination == null)
-        return new List<TransferRequest>();
-
-      var item = task.Item.CreateItemInstance();
-      var sourceSlots = GetOutputSlotsContainingItem(source, item);
-      var deliverySlots = destination.InputSlots.Where(s => s.SlotIndex == task.DropoffSlotIndex1).ToList();
-      var inventorySlot = employee.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
-
-      if (sourceSlots.Count == 0 || deliverySlots.Count == 0 || inventorySlot == null)
-        return new List<TransferRequest>();
-
-      var request = TransferRequest.Get(employee, item, task.Quantity, inventorySlot, source, sourceSlots, destination, deliverySlots);
-      return new List<TransferRequest> { request };
-    }
-
-    // Creates a prioritized route from a transfer request
-    public static PrioritizedRoute CreatePrioritizedRoute(TransferRequest request, int priority)
-    {
-      Log(Level.Verbose, $"CreatePrioritizedRoute: Entered for request with item={request?.Item?.ID}, priority={priority}", Category.EmployeeCore);
-      var route = new PrioritizedRoute(request, priority);
-      Log(Level.Info, $"CreatePrioritizedRoute: Created route for item {request.Item.ID}, priority={priority}", Category.EmployeeCore);
-      return route;
-    }
-
-    // Creates multiple prioritized routes
-    public static List<PrioritizedRoute> CreatePrioritizedRoutes(List<TransferRequest> requests, int priority)
-    {
-      Log(Level.Verbose, $"CreatePrioritizedRoutes: Entered with {requests?.Count ?? 0} requests, priority={priority}", Category.EmployeeCore);
-      var routes = requests.Select(r => new PrioritizedRoute(r, priority)).ToList();
-      Log(Level.Info, $"CreatePrioritizedRoutes: Created {routes.Count} routes with priority={priority}", Category.EmployeeCore);
-      return routes;
+      CacheService.GetOrCreateService(employee.AssignedProperty).IEmployees[employee.GUID] = adapter;
+      Log(Level.Info, $"RegisterEmployeeAdapter: Registered adapter for NPC {employee.fullName}, type={adapter.EntityType}", Category.AnyEmployee);
     }
 
     // Creates an AdvancedMoveItemBehaviour component
@@ -275,277 +162,224 @@ namespace NoLazyWorkers.Employees
         Log(Level.Error, $"CreateAdvMoveItemBehaviour: Employee is null", Category.EmployeeCore);
         throw new ArgumentNullException(nameof(employee));
       }
-      // Add behavior component to employee’s game object
-      var advMove = employee.gameObject.AddComponent<AdvMoveItemBehaviour>();
-      advMove.Setup(employee);
-      var networkObject = employee.gameObject.GetComponent<NetworkObject>();
-      ManagedObjects.InitializePrefab(networkObject, -1);
-      // Initialize based on server/client context
-      if (FishNetExtensions.IsServer)
-      {
-        advMove.Preinitialize_Internal(networkObject, true);
-        Log(Level.Verbose, $"CreateAdvMoveItemBehaviour: Preinitialized as server for {employee.fullName}", Category.EmployeeCore);
-      }
-      else
-      {
-        advMove.Preinitialize_Internal(networkObject, false);
-        Log(Level.Verbose, $"CreateAdvMoveItemBehaviour: Preinitialized as client for {employee.fullName}", Category.EmployeeCore);
-      }
-      advMove.NetworkInitializeIfDisabled();
-      // Add to behavior stack
-      employee.behaviour.behaviourStack.Add(advMove);
-      employee.behaviour.behaviourStack = employee.behaviour.behaviourStack.OrderByDescending(x => x.Priority).ToList();
-      Log(Level.Info, $"CreateAdvMoveItemBehaviour: Created and added behaviour for {employee.fullName}", Category.EmployeeCore);
-      return advMove;
-    }
 
-    // Clears all static data
-    public static void Cleanup()
-    {
-      Log(Level.Verbose, $"ClearAll: Entered", Category.AnyEmployee);
-      StationAdapterBehaviours.Clear();
-      Log(Level.Info, $"ClearAll: Cleared StationAdapterBehaviours", Category.AnyEmployee);
-      foreach (var state in States.Values)
-        state.Clear();
-      States.Clear();
-      Log(Level.Info, $"ClearAll: Cleared {States.Count} employee states", Category.AnyEmployee);
-      IEmployees.Clear();
-      NoDropOffCache.Clear();
-      TimedOutItems.Clear();
-      IStations.Clear();
-      ReservedSlots.Clear();
-      Log(Level.Info, $"ClearAll: Cleared all dictionaries", Category.AnyEmployee);
+      var outputs = new List<int>();
+      Action<int, int, int[], List<int>> setupBehaviour = (start, count, inputs, outList) =>
+      {
+        var advMove = employee.gameObject.AddComponent<AdvMoveItemBehaviour>();
+        advMove.Setup(employee);
+        var networkObject = employee.gameObject.GetComponent<NetworkObject>();
+        ManagedObjects.InitializePrefab(networkObject, -1);
+        if (FishNetExtensions.IsServer)
+        {
+          advMove.Preinitialize_Internal(networkObject, true);
+          Log(Level.Verbose, $"CreateAdvMoveItemBehaviour: Preinitialized as server for {employee.fullName}", Category.EmployeeCore);
+        }
+        else
+        {
+          advMove.Preinitialize_Internal(networkObject, false);
+          Log(Level.Verbose, $"CreateAdvMoveItemBehaviour: Preinitialized as client for {employee.fullName}", Category.EmployeeCore);
+        }
+        advMove.NetworkInitializeIfDisabled();
+        employee.behaviour.behaviourStack.Add(advMove);
+        employee.behaviour.behaviourStack = employee.behaviour.behaviourStack.OrderByDescending(x => x.Priority).ToList();
+        Log(Level.Info, $"CreateAdvMoveItemBehaviour: Created and added behaviour for {employee.fullName}", Category.EmployeeCore);
+        outList.Add(1);
+      };
+      Smart.Execute("SetupAdvMoveBehaviour", 1, setupBehaviour, outputs: outputs, options: new SmartOptions { IsTaskSafe = true });
+
+      return employee.gameObject.GetComponent<AdvMoveItemBehaviour>();
     }
   }
 
-  public class EmployeeBehaviour
+  public class AdvEmployeeUpdater : MonoBehaviour
+  {
+    private AdvEmployeeBehaviour _behaviour;
+
+    public void Setup(AdvEmployeeBehaviour behaviour)
+    {
+      _behaviour = behaviour ?? throw new ArgumentNullException(nameof(behaviour));
+      Log(Level.Verbose, $"AdvEmployeeUpdater.Setup: Initialized for {_behaviour.Employee.fullName}", Category.EmployeeCore);
+    }
+
+    private void Update()
+    {
+      if (_behaviour.Info.IsAdvBehInitialized)
+        _behaviour.Update();
+    }
+  }
+
+  public class AdvEmployeeBehaviour
   {
     protected readonly IEmployeeAdapter _adapter;
-    public EmployeeData State { get; }
-    protected readonly Employee _employee;
-    private readonly CacheService _cacheManager;
+    internal readonly Employee Employee;
+    private readonly CacheService _cacheService;
+    private readonly TaskService.TaskService _taskService;
+    public EmployeeData BurstData;
+    public EmployeeInfo Info;
 
-    public EmployeeBehaviour(Employee employee, IEmployeeAdapter adapter)
+    public AdvEmployeeBehaviour(Employee employee, IEmployeeAdapter adapter)
     {
-      Log(Level.Verbose, $"EmployeeBehaviour: Entered for employee={employee?.fullName}", Category.EmployeeCore);
-      _employee = employee ?? throw new ArgumentNullException(nameof(employee));
+      Log(Level.Verbose, $"AdvEmployeeBehaviour: Entered for employee={employee?.fullName}", Category.EmployeeCore);
+      Employee = employee ?? throw new ArgumentNullException(nameof(employee));
       _adapter = adapter ?? throw new ArgumentNullException(nameof(adapter));
-      State = new EmployeeData(employee, this);
-      States[employee.GUID] = State;
+      _cacheService = CacheService.GetOrCreateService(employee.AssignedProperty);
+      BurstData = new EmployeeData(_adapter);
+      _cacheService.EmployeeDataCache[employee.GUID] = BurstData;
+      Info = new EmployeeInfo(employee, this);
       RegisterEmployeeAdapter(employee, adapter);
-      Log(Level.Info, $"EmployeeBehaviour: Initialized for NPC {employee.fullName}", Category.EmployeeCore);
-
-      State.TaskService = TaskServiceManager.GetOrCreateService(employee.AssignedProperty);
-
-      // Add employee to CacheManager
-      var _cacheManager = CacheService.GetOrCreateCacheManager(employee.AssignedProperty);
-      var storageKey = new EntityKey { Guid = employee.GUID, StorageType = StorageType.Employee };
+      Log(Level.Info, $"AdvEmployeeBehaviour: Initialized for NPC {employee.fullName}", Category.EmployeeCore);
+      _taskService = TaskServiceManager.GetOrCreateService(employee.AssignedProperty);
       foreach (var slot in employee.Inventory.ItemSlots)
-        _cacheManager.RegisterItemSlot(slot, storageKey);
+        _cacheService.RegisterItemSlot(slot, employee.GUID);
       var slotData = employee.Inventory.ItemSlots.Select(s => new SlotData
       {
         Item = s.ItemInstance != null ? new ItemData(s.ItemInstance) : ItemData.Empty,
         Quantity = s.Quantity,
         SlotIndex = s.SlotIndex,
-        StackLimit = s.ItemInstance?.StackLimit ?? -1,
-        IsValid = true
+        StackLimit = s.ItemInstance?.StackLimit ?? -1
       });
-      _cacheManager.QueueSlotUpdate(storageKey, slotData);
     }
 
-    public static EmployeeData GetState(Employee employee)
+    public void InitializeEmployee()
     {
-      if (!States.TryGetValue(employee.GUID, out var state))
-        throw new InvalidOperationException($"No state found for employee {employee.fullName}");
-      return state;
+      Log(Level.Info, $"InitializeEmployee: Setting up for {Employee.fullName}", Category.EmployeeCore);
+      Info.IsAdvBehInitialized = true;
+      Employee.behaviour.enabled = true;
     }
 
-    public async Task ExecuteTask()
+    public void Update()
     {
-      var definition = TaskRegistry.Get(State.CurrentTask.Type);
-      if (definition != null)
-      {
-        await definition.Executor.ExecuteAsync(_employee, State, State.CurrentTask);
-        Log(Level.Verbose, $"ExecuteTask: Executed task {State.CurrentTask.Type} for {_employee.fullName}", Category.EmployeeCore);
-      }
-
-      State.CurrentTask.Dispose();
-      State.CurrentTask = default;
-
-      // Check for follow-up tasks
-      while (State.TryGetFollowUpTask(out var followUpTask))
-      {
-        if (followUpTask.IsEmployeeTypeValid(_employee))
-        {
-          State.CurrentTask = followUpTask;
-          State.CurrentState = EState.Working;
-          State.State.TaskContext = new TaskContext { Task = followUpTask };
-          Log(Level.Info, $"ExecuteTask: Starting follow-up task {followUpTask.TaskId} for {_employee.fullName}", Category.EmployeeCore);
-          await definition.Executor.ExecuteAsync(_employee, State, followUpTask);
-          State.CurrentTask.Dispose();
-          State.CurrentTask = default;
-        }
-        else
-        {
-          // Enqueue invalid follow-up task to TaskService
-          State.TaskService.EnqueueTask(followUpTask, followUpTask.Priority);
-          Log(Level.Warning, $"ExecuteTask: Follow-up task {followUpTask.TaskId} invalid for {_employee.fullName}, enqueued to TaskService", Category.EmployeeCore);
-        }
-      }
-
-      State.CurrentState = EState.Idle;
-    }
-
-    public async Task Update()
-    {
-      if (State.CurrentState != EState.Idle)
+      if (!Info.IsAdvBehInitialized)
         return;
 
-      // Step 1: Check employee-initiated tasks (e.g., DeliverInventory)
-      var deliverInventoryTask = await CheckEmployeeInitiatedTasks();
-      if (deliverInventoryTask.HasValue)
+      switch (BurstData.CurrentAction)
       {
-        State.State.TaskContext = new TaskContext { Task = deliverInventoryTask.Value };
-        State.CurrentTask = deliverInventoryTask.Value;
-        State.CurrentState = EState.Working;
-        State.State.LastScanIndex = 0;
-        _employee.MarkIsWorking();
-        Log(Level.Info, $"ChemistBehaviour.Update: Starting employee-initiated task {deliverInventoryTask.Value.TaskId} for {_employee.fullName}", Category.Chemist);
-        await ExecuteTask();
-        return;
+        case EmployeeAction.Idle:
+          HandleIdle();
+          break;
+        case EmployeeAction.Working:
+          HandleWorking();
+          break;
+        case EmployeeAction.Moving:
+          HandleMoving();
+          break;
       }
-
-      // Step 2: Check TaskService queue
-      (bool got, TaskDescriptor taskDescriptor) = await State.TaskService.TryGetTaskAsync(_employee);
-      if (got)
-      {
-        State.State.TaskContext = new TaskContext { Task = taskDescriptor };
-        State.CurrentTask = taskDescriptor;
-        State.CurrentState = EState.Working;
-        State.State.LastScanIndex = 0;
-        _employee.MarkIsWorking();
-        Log(Level.Info, $"ChemistBehaviour.Update: Starting task {taskDescriptor.TaskId} ({taskDescriptor.Type}) for {_employee.fullName}", Category.Chemist);
-        await ExecuteTask();
-        return;
-      }
-
-      _employee.SetIdle(true);
-      Log(Level.Verbose, $"No executable tasks found for {_employee.fullName}", Category.Chemist);
     }
 
-    private async Task<TaskDescriptor?> CheckEmployeeInitiatedTasks()
+    protected virtual bool CheckIdleConditions()
     {
-      // Check DeliverInventory
-      var definition = TaskRegistry.Get(TaskName.DeliverInventory);
-      if (definition == null)
-        return null;
-
-      var context = new TaskValidatorContext
+      var nowork = false;
+      if (!Employee.CanWork())
       {
-        AssignedPropertyName = _employee.AssignedProperty.name,
-        CurrentTime = Time.time
-      };
-      var validTasks = new NativeList<TaskDescriptor>(Allocator.Temp);
-      definition.Validator.Validate(definition, new EntityKey { Guid = _employee.GUID, StorageType = TransitTypes.Inventory }, context, _employee.AssignedProperty, validTasks);
-
-      if (validTasks.Length > 0 && validTasks[0].IsEmployeeTypeValid(_employee))
-      {
-        var task = validTasks[0];
-        validTasks.Dispose();
-        return task;
+        Employee.SubmitNoWorkReason("I am unable to work right now", "Check my status to see why I can't work.");
+        Employee.SetIdle(true);
+        Employee.SetWaitOutside(true);
+        Info.CurrentAction = EmployeeAction.Idle;
+        Log(Level.Verbose, $"CheckIdleConditions: Cannot work for NPC={Employee.fullName}", Category.EmployeeCore);
+        nowork = true;
       }
+      return nowork;
+    }
 
-      validTasks.Dispose();
-      return null;
+    protected virtual void HandleIdle()
+    {
+      if (CheckIdleConditions())
+        return;
+
+      var task = _taskService.GetTaskForEmployee(Employee);
+      if (task == null)
+      {
+        Employee.SetWaitOutside(true);
+        Info.CurrentAction = EmployeeAction.Idle;
+        Log(Level.Verbose, $"HandleIdle: No task available for {Employee.fullName}", Category.EmployeeCore);
+      }
+      else
+      {
+        Employee.SetWaitOutside(false);
+        Info.CurrentTask = task;
+        Info.CurrentAction = EmployeeAction.Working;
+        Log(Level.Info, $"HandleIdle: Assigned task {task.TaskId} to {Employee.fullName}", Category.EmployeeCore);
+        _taskService.ExecuteTask(Employee, task);
+      }
     }
 
     protected void HandleWorking()
     {
       try
       {
-        if (State.CurrentState != EState.Working)
+        if (BurstData.CurrentAction != EmployeeAction.Working)
         {
-          State.CurrentTask = new();
-          Log(Level.Info, $"HandleWorking: Task completed or interrupted for {_employee.fullName}", Category.EmployeeCore);
+          Info.CurrentTask = new();
+          Log(Level.Info, $"HandleWorking: Task completed or interrupted for {Employee.fullName}", Category.EmployeeCore);
         }
       }
       catch (Exception ex)
       {
-        Log(Level.Error, $"HandleWorking: Error executing task for {_employee.fullName}: {ex.Message}", Category.EmployeeCore);
-        State.CurrentTask = new();
-        State.CurrentState = EState.Idle;
+        Log(Level.Error, $"HandleWorking: Error executing task for {Employee.fullName}: {ex.Message}", Category.EmployeeCore);
+        Info.CurrentTask = new();
+        BurstData.CurrentAction = EmployeeAction.Idle;
       }
     }
 
     protected void HandleMoving()
     {
-      var context = State.State.TaskContext;
+      var context = Info.TaskContext;
       if (context.MoveDelay > 0)
       {
         context.MoveDelay -= Time.deltaTime;
         return;
       }
-      if (_employee.Movement.IsMoving)
+      if (Employee.Movement.IsMoving)
       {
         context.MoveElapsed += Time.deltaTime;
         if (context.MoveElapsed >= 30f)
         {
-          Log(Level.Warning, $"HandleMoving: Movement timeout for {_employee.fullName}", Category.EmployeeCore);
-          ResetMovement(Status.Failure);
+          Log(Level.Warning, $"HandleMoving: Movement timeout for {Employee.fullName}", Category.EmployeeCore);
+          ResetMovement(MovementStatus.Failure);
         }
         return;
       }
       if (context.MoveCallback != null)
       {
-        context.MoveCallback.Invoke(_employee, State, Status.Success);
+        context.MoveCallback.Invoke(Employee, Info, MovementStatus.Success);
         context.MoveCallback = null;
       }
-      State.CurrentState = EState.Working;
+      BurstData.CurrentAction = EmployeeAction.Working;
     }
 
-    public void StartMovement<TStep>(List<PrioritizedRoute> routes, TStep nextStep, Action<Employee, EmployeeData, Status> onComplete = null) where TStep : Enum
+    internal IEnumerator StartMovement(TransferRequest request, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
     {
-      if (routes?.Any() != true)
-      {
-        Log(Level.Warning, $"StartMovement: No valid routes for {_employee.fullName}", Category.EmployeeCore);
-        onComplete?.Invoke(_employee, State, Status.Failure);
-        return;
-      }
-      if (onComplete != null)
-        State.State.HasCallback = true;
-      _employee.StartCoroutine(StartMovementCoroutine(routes, nextStep, onComplete));
+      yield return StartMovement([request], onComplete);
     }
 
-    private IEnumerator StartMovementCoroutine<TStep>(List<PrioritizedRoute> routes, TStep nextStep, Action<Employee, EmployeeData, Status> onComplete) where TStep : Enum
+    internal IEnumerator StartMovement(List<TransferRequest> requests, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
     {
       var moveCompleted = false;
-      State.State.TaskContext = new TaskContext
+      Info.TaskContext = new TaskContext
       {
-        Requests = routes.Select(r => TransferRequest.Get(_employee, r.Item, r.Quantity, r.InventorySlot, r.PickUp, r.PickupSlots, r.DropOff, r.DropoffSlots)).ToList(),
+        TransferRoutes = requests.Select(r => TransferRequest.Get(Employee, r.Item, r.Quantity, r.InventorySlot, r.PickUp, r.PickupSlots, r.DropOff, r.DropOffSlots)).ToList(),
         MoveCallback = async (emp, s, status) =>
         {
           moveCompleted = true;
-          Log(Level.Info, $"StartMovement: Callback with status={status}, next step={nextStep} for {emp.fullName}", Category.EmployeeCore);
-          s.State.TaskContext.MovementStatus = status;
-          s.State.CurrentWorkStep = nextStep;
-          s.CurrentState = EState.Working;
+          Log(Level.Info, $"StartMovement: Callback with status={status}, for {emp.fullName}", Category.EmployeeCore);
+          s.TaskContext.MovementStatus = status;
+          s.CurrentAction = EmployeeAction.Working;
           if (onComplete != null)
           {
-            State.State.HasCallback = false;
             onComplete?.Invoke(emp, s, status);
           }
           else
           {
-            s.State.CurrentWorkStep = nextStep;
-            await s.AdvBehaviour.ExecuteTask();
+            s.AdvBehaviour.Disable();
           }
         },
         MoveDelay = 0.5f,
         MoveElapsed = 0f
       };
-      State.AdvMoveItemBehaviour.Initialize(routes, State, State.State.TaskContext.MoveCallback);
-      Log(Level.Info, $"StartMovement: Started with {routes.Count} routes for {_employee.fullName}", Category.EmployeeCore);
-      State.CurrentState = EState.Moving;
+      Info.AdvMoveItemBehaviour.Initialize(requests, Info, Info.TaskContext.MoveCallback);
+      Log(Level.Info, $"StartMovement: Started with {requests.Count} routes for {Employee.fullName}", Category.EmployeeCore);
+      BurstData.CurrentAction = EmployeeAction.Moving;
       float timeoutSeconds = 60.0f;
       float startTime = Time.time;
       while (!moveCompleted && Time.time - startTime < timeoutSeconds)
@@ -554,7 +388,7 @@ namespace NoLazyWorkers.Employees
       }
       if (!moveCompleted)
       {
-        Log(Level.Error, $"StartMovement: Timeout after {timeoutSeconds}s for {_employee.fullName}", Category.EmployeeCore);
+        Log(Level.Error, $"StartMovement: Timeout after {timeoutSeconds}s for {Employee.fullName}", Category.EmployeeCore);
         yield break;
       }
     }
@@ -565,10 +399,10 @@ namespace NoLazyWorkers.Employees
     /// <param name="result">The task completion result.</param>
     public void HandleTaskResult(TaskResult result)
     {
-      Log(Level.Verbose, $"HandleTaskResult: Task {result.Task.TaskId} for {_employee.fullName}, success: {result.Success}, reason: {result.FailureReason ?? "N/A"}", Category.EmployeeCore);
+      Log(Level.Verbose, $"HandleTaskResult: Task {result.Task.TaskId} for {Employee.fullName}, success: {result.Success}, reason: {result.FailureReason.ToString() ?? "N/A"}", Category.EmployeeCore);
 
       // Transition to idle state
-      State.CurrentState = EState.Idle;
+      BurstData.CurrentAction = EmployeeAction.Idle;
 
       // Log failure reason if applicable
       if (!result.Success)
@@ -577,34 +411,29 @@ namespace NoLazyWorkers.Employees
       }
     }
 
-    public void ResetMovement(Status status)
+    public void ResetMovement(MovementStatus status)
     {
-      var context = State.State.TaskContext;
+      var context = Info.TaskContext;
       if (context != null)
       {
         if (context.MoveCallback != null)
         {
-          context.MoveCallback.Invoke(_employee, State, status);
+          context.MoveCallback.Invoke(Employee, Info, status);
           context.MoveCallback = null;
         }
-        context.Cleanup(_employee);
+        context.Cleanup(Employee);
       }
-      State.CurrentState = EState.Working;
-      Log(Level.Info, $"ResetMovement: Reset with status={status} for {_employee.fullName}", Category.EmployeeCore);
+      BurstData.CurrentAction = EmployeeAction.Working;
+      Log(Level.Info, $"ResetMovement: Reset with status={status} for {Employee.fullName}", Category.EmployeeCore);
     }
 
-    public async Task Disable()
+    public void Disable()
     {
-      Utilities.ReleaseReservations(_employee);
-      var state = GetState(_employee);
-      state.State.TaskContext?.Cleanup(_employee);
-      state.State.Clear();
-      state.CurrentTask = new();
-      state.Station = null;
-      state.CurrentState = EState.Idle;
-      _employee.ShouldIdle();
-      Log(Level.Info, $"Disable: Behaviour disabled for {_employee.fullName}", Category.EmployeeCore);
-      await Task.CompletedTask;
+      Info.TaskContext?.Cleanup(Employee);
+      Info.CurrentTask = new();
+      BurstData.CurrentAction = EmployeeAction.Idle;
+      Employee.SetWaitOutside(true);
+      Log(Level.Info, $"Disable: Behaviour disabled for {Employee.fullName}", Category.EmployeeCore);
     }
   }
 
@@ -615,17 +444,18 @@ namespace NoLazyWorkers.Employees
     [HarmonyPatch("OnDestroy")]
     public static void OnDestroyPostfix(Employee __instance)
     {
-      EmployeeBehaviour.GetState(__instance).AdvBehaviour.Disable().GetAwaiter().GetResult();
+      CacheService.GetOrCreateService(__instance.AssignedProperty).IEmployees[__instance.GUID].AdvBehaviour.Disable();
     }
 
     [HarmonyPrefix]
     [HarmonyPatch("Fire")]
     public static void FirePrefix(Employee __instance)
     {
-      States.Remove(__instance.GUID);
-      IEmployees[__instance.AssignedProperty].Remove(__instance.GUID);
+      var taskService = TaskServiceManager.GetOrCreateService(__instance.AssignedProperty);
+      taskService.EntityStateService.EntityStates.Remove(__instance.GUID);
+      taskService.CacheService.IEmployees.Remove(__instance.GUID);
       if (__instance.AssignedProperty.Employees.Count == 1)
-        TaskServiceManager.DeactivateProperty(__instance.AssignedProperty);
+        taskService.DeactivateProperty();
       Log(Level.Info, $"EmployeeBehaviour: Cleaned up for {__instance.fullName}", Category.EmployeeCore);
     }
   }

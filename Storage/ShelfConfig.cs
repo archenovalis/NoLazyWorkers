@@ -1,7 +1,6 @@
 using FishNet.Connection;
 using FishNet.Object;
 using HarmonyLib;
-using MelonLoader;
 using Newtonsoft.Json.Linq;
 using ScheduleOne;
 using ScheduleOne.DevUtilities;
@@ -19,30 +18,26 @@ using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using UnityEngine.UI;
-using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.Product;
 using static NoLazyWorkers.NoLazyUtilities;
-using static NoLazyWorkers.Storage.ManagedDictionaries;
-using static NoLazyWorkers.Storage.Extensions;
-using static NoLazyWorkers.Storage.Utilities;
+using static NoLazyWorkers.CacheManager.ManagedDictionaries;
+using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Storage.ShelfConstants;
 using static NoLazyWorkers.Storage.ShelfExtensions;
 using static NoLazyWorkers.Storage.ShelfUtilities;
 using static NoLazyWorkers.Debug;
-using static NoLazyWorkers.Stations.Extensions;
 using FishNet.Managing;
 using FishNet.Managing.Object;
 using ScheduleOne.Product.Packaging;
 using ScheduleOne.Persistence;
-using NoLazyWorkers.Employees;
-using ScheduleOne.Employees;
-using System.Collections.Concurrent;
 using Unity.Collections;
 using GameKit.Utilities;
 using FishNet;
 using System.Diagnostics;
 using NoLazyWorkers.TaskService;
+using NoLazyWorkers.Extensions;
+using NoLazyWorkers.CacheManager;
 
 namespace NoLazyWorkers.Storage
 {
@@ -113,11 +108,11 @@ namespace NoLazyWorkers.Storage
           Log(Level.Error, $"InitializeStorage: storage is null or guid is empty ({guid})", Category.Storage);
           return false;
         }
-
-        if (!Storages[storage.ParentProperty].ContainsKey(guid))
+        var cacheService = CacheService.GetOrCreateService(storage.ParentProperty);
+        if (!cacheService.Storages.ContainsKey(guid))
         {
-          Storages[storage.ParentProperty][guid] = storage;
-          Log(Level.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}, Storage count: {Storages.Count}", Category.Storage);
+          cacheService.Storages[guid] = storage;
+          Log(Level.Info, $"InitializeStorage: Added storage to dictionary for GUID: {guid}", Category.Storage);
         }
 
         var proxy = StorageConfigurableProxy.AttachToStorage(storage);
@@ -739,6 +734,7 @@ namespace NoLazyWorkers.Storage
     public StorageMode Mode { get; set; }
     public ItemInstance AssignedItem { get; set; }
     public QualityField Quality { get; private set; }
+    private readonly CacheService _cacheService;
 
     public StorageConfiguration(ConfigurationReplicator replicator, IConfigurable configurable, PlaceableStorageEntity storage)
         : base(replicator, configurable)
@@ -754,32 +750,14 @@ namespace NoLazyWorkers.Storage
       replicator.Configuration = this;
       Proxy = configurable as StorageConfigurableProxy;
       Storage = storage;
-
-      if (StorageConfigs.TryGetValue(storage.ParentProperty, out var configs) && configs.TryGetValue(storage.GUID, out var config))
+      _cacheService = CacheService.GetOrCreateService(storage.ParentProperty);
+      if (_cacheService.StorageConfigs.TryGetValue(storage.GUID, out var config))
       {
         if (config.Mode == StorageMode.None)
           return;
-        var storageKey = new EntityKey
-        {
-          Guid = storage.GUID,
-          Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf
-        };
-        var cacheManager = CacheService.GetOrCreateCacheManager(storage.ParentProperty);
-        foreach (var slot in storage.InputSlots) // InputSlots and OutputSlots share ItemSlots
-          cacheManager.RegisterItemSlot(slot, storageKey);
-
-        // Queue initial slot update
-        var slotData = storage.InputSlots.Select(s => new SlotData
-        {
-          Item = s.ItemInstance != null ? new ItemData(s.ItemInstance) : ItemData.Empty,
-          Quantity = s.Quantity,
-          SlotIndex = s.SlotIndex,
-          StackLimit = s.ItemInstance?.StackLimit ?? -1,
-          IsValid = true
-        });
-        cacheManager.QueueSlotUpdate(storageKey, slotData);
+        foreach (var slot in storage.InputSlots)
+          _cacheService.RegisterItemSlot(slot, storage.GUID);
       }
-
       try
       {
         Quality = new QualityField(this);
@@ -798,10 +776,12 @@ namespace NoLazyWorkers.Storage
         };
         StorageItem.onItemChanged.AddListener(_ =>
         {
-          UpdateStorageConfiguration(Storage, AssignedItem);
+          _cacheService.UpdateStorageConfiguration(Storage, AssignedItem);
+          TaskServiceManager.StateServices[storage.ParentProperty].OnConfigUpdate(Storage.GUID);
           RefreshChanged();
         });
-        StorageConfigs[storage.ParentProperty][storage.GUID] = this;
+        _cacheService.StorageConfigs[storage.GUID] = this;
+        _cacheService.Storages[storage.GUID] = storage;
         Log(Level.Info, $"StorageConfiguration: Initialized for GUID: {storage.GUID}", Category.Storage);
       }
       catch (Exception e)
@@ -830,14 +810,6 @@ namespace NoLazyWorkers.Storage
           try
           {
             Mode = (StorageMode)Enum.Parse(typeof(StorageMode), str);
-            if (Mode == StorageMode.Any)
-            {
-              if (!AnyShelves.TryGetValue(Storage.ParentProperty, out var anyShelves))
-              {
-                AnyShelves[Storage.ParentProperty] = new();
-              }
-              AnyShelves[Storage.ParentProperty].Add(Storage);
-            }
           }
           catch (Exception e)
           {
@@ -872,8 +844,8 @@ namespace NoLazyWorkers.Storage
           StorageItem.SelectedItem = null;
           AssignedItem = null;
         }
-
-        UpdateStorageConfiguration(Storage, AssignedItem);
+        _cacheService.UpdateStorageConfiguration(Storage, AssignedItem);
+        _cacheService.UpdateStorageCache(Storage);
       }
       catch (Exception e)
       {
@@ -906,45 +878,30 @@ namespace NoLazyWorkers.Storage
       }
 
       StorageItem.onItemChanged?.Invoke(StorageItem.SelectedItem);
-      UpdateStorageConfiguration(Storage, AssignedItem);
+      _cacheService.UpdateStorageConfiguration(Storage, AssignedItem);
+      _cacheService.UpdateStorageCache(Storage);
       RefreshChanged();
     }
 
     // Cleanup to prevent memory leaks
     public void Dispose()
     {
-      Log(Level.Info,
-          $"StorageConfiguration.Dispose: GUID={Storage.GUID}",
-          Category.Storage);
-
-      StorageConfigs[Storage.ParentProperty].Remove(Storage.GUID);
-
-      var property = Storage.ParentProperty;
-      if (property != null)
+      Log(Level.Info, $"StorageConfiguration.Dispose: GUID={Storage.GUID}", Category.Storage);
+      if (_cacheService.Storages.ContainsKey(Storage.GUID))
+        _cacheService.Storages.Remove(Storage.GUID);
+      if (_cacheService.StorageConfigs.ContainsKey(Storage.GUID))
+        _cacheService.StorageConfigs.Remove(Storage.GUID);
+      if (_cacheService.GuidToType.ContainsKey(Storage.GUID))
+        _cacheService.GuidToType.Remove(Storage.GUID);
+      if (_cacheService.EntityGuids.Contains(Storage.GUID))
+        _cacheService.EntityGuids.Remove(Storage.GUID);
+      if (_cacheService.SlotsCache.TryGetValue(Storage.GUID, out var slots))
       {
-        // Clear all related cache entries
-        var cacheKeysToRemove = ShelfCache
-            .Where(kvp => kvp.Value.ContainsKey(Storage))
-            .Select(kvp => CreateCacheKey(kvp.Key, property))
-            .ToList();
+        slots.Dispose();
+        _cacheService.SlotsCache.Remove(Storage.GUID);
       }
-
-      if (StorageConfigs.TryGetValue(Storage.ParentProperty, out var configs) && configs.TryGetValue(Storage.GUID, out var config))
-      {
-        if (config.Mode == StorageMode.None)
-          return;
-        var storageKey = new EntityKey
-        {
-          Guid = Storage.GUID,
-          Type = config.Mode == StorageMode.Specific ? StorageType.SpecificShelf : StorageType.AnyShelf
-        };
-        var cacheManager = CacheService.GetOrCreateCacheManager(Storage.ParentProperty);
-        foreach (var slot in Storage.InputSlots)
-          cacheManager.UnregisterItemSlot(slot, storageKey);
-        Storages[Storage.ParentProperty].Remove(Storage.GUID);
-      }
-
-      RemoveStorageFromLists(Storage);
+      foreach (var slot in Storage.InputSlots)
+        _cacheService.UnregisterItemSlot(slot, Storage.GUID);
     }
   }
 
@@ -967,7 +924,7 @@ namespace NoLazyWorkers.Storage
     [HarmonyPatch("GetSaveString")]
     static void GetSaveStringPostfix(PlaceableStorageEntity __instance, ref string __result)
     {
-      if (!StorageConfigs[__instance.ParentProperty].TryGetValue(__instance.GUID, out var config))
+      if (!CacheService.GetOrCreateService(__instance.ParentProperty).StorageConfigs.TryGetValue(__instance.GUID, out var config))
         return;
 
       JObject jsonObject = string.IsNullOrEmpty(__result) ? new JObject() : JObject.Parse(__result);
@@ -1128,11 +1085,9 @@ namespace NoLazyWorkers.Storage
           configuration.Load(data);
           if (WorldspaceUI != null)
             ((StorageUIElement)WorldspaceUI).RefreshUI();
-          UpdateStorageConfiguration(Storage, configuration.AssignedItem);
-
-          // Network cache update
-          if (IsServer)
-            RpcUpdateClientCache(Storage.ParentProperty, Storage.GUID, configuration.AssignedItem);
+          var cacheService = CacheService.GetOrCreateService(Storage.ParentProperty);
+          cacheService.UpdateStorageConfiguration(Storage, configuration.AssignedItem);
+          cacheService.UpdateStorageCache(Storage);
 
           Log(Level.Info,
               $"LoadConfigurationWhenReady: Loaded for GUID={Storage.GUID}",
@@ -1150,22 +1105,6 @@ namespace NoLazyWorkers.Storage
       yield return null;
     }
 
-    [ServerRpc]
-    private void RpcUpdateClientCache(Property property, Guid shelfGuid, ItemInstance item)
-    {
-      if (Storages[property].TryGetValue(shelfGuid, out var shelf))
-      {
-        UpdateStorageCache(shelf);
-        TargetUpdateCache();
-      }
-    }
-
-    [TargetRpc]
-    private void TargetUpdateCache()
-    {
-      UpdateStorageCache(Storage);
-    }
-
     private void OnEnable()
     {
       Log(Level.Info, $"StorageConfigurableProxy: OnEnable for GUID: {Storage.GUID}", Category.Storage);
@@ -1181,7 +1120,6 @@ namespace NoLazyWorkers.Storage
       Log(Level.Info, $"StorageConfigurableProxy: OnDestroy for GUID: {Storage.GUID}", Category.Storage);
     }
 
-    // IConfigurable implementation (unchanged)
     public EntityConfiguration Configuration => configuration;
     public ConfigurationReplicator ConfigReplicator => configReplicator;
     public EConfigurableType ConfigurableType => (EConfigurableType)StorageEnum;
@@ -1206,7 +1144,7 @@ namespace NoLazyWorkers.Storage
     {
       Log(Level.Info, $"OnSpawnServer: Called for GUID: {Storage.GUID}", Category.Storage);
       Storage.OnSpawnServer(connection);
-      ((IItemSlotOwner)this).SendItemsToClient(connection);
+      ((IItemSlotOwner)this).SendItemSlotDataToClient(connection);
       SendConfigurationToClient(connection);
     }
 

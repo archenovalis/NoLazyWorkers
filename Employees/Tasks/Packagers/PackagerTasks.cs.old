@@ -394,7 +394,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         }
 
         state.EmployeeState.TaskContext.Requests = requests;
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 100), RefillStationSteps.End);
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(requests, 100), RefillStationSteps.End);
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteRefillStation: Started movement with {requests.Count} routes for {station.TypeOf.Name} {station.GUID}",
             DebugLogger.Category.Packager);
@@ -680,7 +680,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         state.EmployeeState.TaskContext.Requests = requests;
 
         // Start movement with appropriate next step
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 80), nextStep: EmptyLoadingDockSteps.End);
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(requests, 80), nextStep: EmptyLoadingDockSteps.End);
 
         DebugLogger.Log(DebugLogger.LogLevel.Info,
             $"ExecuteEmptyLoadingDock: Started movement with {requests.Count} routes for dock {dock.GUID}",
@@ -891,7 +891,7 @@ namespace NoLazyWorkers.Employees.Tasks.Packagers
         }
 
         state.EmployeeState.TaskContext.Requests = requests;
-        state.EmployeeBeh.StartMovement(CreatePrioritizedRoutes(requests, 60), RestockSpecificShelfSteps.End);
+        state.EmployeeBeh.StartMovement(CreateTransferRequests(requests, 60), RestockSpecificShelfSteps.End);
         DebugLogger.Log(DebugLogger.LogLevel.Info, $"ExecuteRestockSpecificShelf: Started movement with {requests.Count} routes for shelf {source.GUID}", DebugLogger.Category.Packager);
       }
 

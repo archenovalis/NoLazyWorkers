@@ -1,33 +1,33 @@
-# StorageManager API Documentation
+# CacheManager API Documentation
 
 **Date:** July 02, 2025
 
-The `StorageManager` class provides a comprehensive API for managing storage operations in a networked environment, including initialization, cleanup, slot operations, and access to managed dictionaries and internal caches. This documentation outlines how to utilize the public methods, structures, managed dictionaries, and accessible internal caches effectively, with examples using `CoroutineRunner` for coroutine execution and result handling via callbacks.
+The `CacheManager` class provides a comprehensive API for managing storage operations in a networked environment, including initialization, cleanup, slot operations, and access to managed dictionaries and internal caches. This documentation outlines how to utilize the public methods, structures, managed dictionaries, and accessible internal caches effectively, with examples using `CoroutineRunner` for coroutine execution and result handling via callbacks.
 
 ## Classes and Structs
 
-### StorageManager
+### CacheManager
 
 A static class responsible for managing storage operations, including initialization, cleanup, and slot operations for items.
 
 #### Properties
 
-- **IsInitialized** (`bool`, read-only): Indicates whether the `StorageManager` is initialized.
+- **IsInitialized** (`bool`, read-only): Indicates whether the `CacheManager` is initialized.
 
 #### Methods
 
 - **Initialize()**
-  Initializes the `StorageManager` and sets up necessary resources. Must be called on the server before performing storage operations.
+  Initializes the `CacheManager` and sets up necessary resources. Must be called on the server before performing storage operations.
 
   ```csharp
-  StorageManager.Initialize()
+  CacheManager.Initialize()
   ```
 
 - **Cleanup()**
-  Cleans up resources used by the `StorageManager`. Call this to release resources when no longer needed.
+  Cleans up resources used by the `CacheManager`. Call this to release resources when no longer needed.
 
   ```csharp
-  StorageManager.Cleanup()
+  CacheManager.Cleanup()
   ```
 
 - **ClearEntityCache(Property property, Guid guid)**
@@ -37,7 +37,7 @@ A static class responsible for managing storage operations, including initializa
     - `guid`: The `Guid` of the entity to clear from cache.
 
   ```csharp
-  StorageManager.ClearEntityCache(property, entityGuid)
+  CacheManager.ClearEntityCache(property, entityGuid)
   ```
 
 - **ReserveSlot(Guid entityGuid, ItemSlot slot, NetworkObject locker, string lockReason, ItemInstance item = null, int quantity = 0)**
@@ -52,7 +52,7 @@ A static class responsible for managing storage operations, including initializa
   - **Returns**: `bool` indicating success.
 
   ```csharp
-  bool reserved = StorageManager.ReserveSlot(entityGuid, slot, locker, "Reservation for processing", item, 10)
+  bool reserved = CacheManager.ReserveSlot(entityGuid, slot, locker, "Reservation for processing", item, 10)
   ```
 
 - **ReleaseSlot(ItemSlot slot)**
@@ -61,7 +61,7 @@ A static class responsible for managing storage operations, including initializa
     - `slot`: The `ItemSlot` to release.
 
   ```csharp
-  StorageManager.ReleaseSlot(slot)
+  CacheManager.ReleaseSlot(slot)
   ```
 
 - **FindStorageWithItem(Property property, ItemInstance item, int needed, bool allowTargetHigherQuality = false)**
@@ -75,7 +75,7 @@ A static class responsible for managing storage operations, including initializa
 
   ```csharp
   CoroutineRunner runner = CoroutineRunner.Instance; // Assumes singleton instance
-  runner.RunCoroutineWithResult(StorageManager.FindStorageWithItem(property, item, 5, true), (StorageResult result) =>
+  runner.RunCoroutineWithResult(CacheManager.FindStorageWithItem(property, item, 5, true), (StorageResult result) =>
   {
       if (result != null)
       {
@@ -95,7 +95,7 @@ A static class responsible for managing storage operations, including initializa
 
   ```csharp
   CoroutineRunner runner = CoroutineRunner.Instance;
-  runner.RunCoroutine(StorageManager.UpdateStorageCache(property, entityGuid, slots, StorageType.AnyShelf))
+  runner.RunCoroutine(CacheManager.UpdateStorageCache(property, entityGuid, slots, StorageType.AnyShelf))
   ```
 
 - **FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid)**
@@ -109,7 +109,7 @@ A static class responsible for managing storage operations, including initializa
 
   ```csharp
   CoroutineRunner runner = CoroutineRunner.Instance;
-  runner.RunCoroutineWithResult(StorageManager.FindDeliveryDestination(property, item, 10, sourceGuid), (List<DeliveryDestination> destinations) =>
+  runner.RunCoroutineWithResult(CacheManager.FindDeliveryDestination(property, item, 10, sourceGuid), (List<DeliveryDestination> destinations) =>
   {
       if (destinations != null)
       {
@@ -130,7 +130,7 @@ A static class responsible for managing storage operations, including initializa
 
   ```csharp
   CoroutineRunner runner = CoroutineRunner.Instance;
-  runner.RunCoroutineWithResult(StorageManager.FindAvailableSlots(property, entityGuid, slots, item, 5), (List<(ItemSlot, int)> availableSlots) =>
+  runner.RunCoroutineWithResult(CacheManager.FindAvailableSlots(property, entityGuid, slots, item, 5), (List<(ItemSlot, int)> availableSlots) =>
   {
       if (availableSlots != null)
       {
@@ -152,7 +152,7 @@ A static class responsible for managing storage operations, including initializa
       (entityGuid, slot, item, 5, true, locker, "Insert operation")
   };
   CoroutineRunner runner = CoroutineRunner.Instance;
-  runner.RunCoroutineWithResult(StorageManager.ExecuteSlotOperations(property, operations), (List<bool> results) =>
+  runner.RunCoroutineWithResult(CacheManager.ExecuteSlotOperations(property, operations), (List<bool> results) =>
   {
       if (results != null)
       {

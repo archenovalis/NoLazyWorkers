@@ -14,19 +14,19 @@ using static NoLazyWorkers.NoLazyUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Stations.BrickPressExtensions;
-using static NoLazyWorkers.Stations.BrickPressUtilities;
+using static NoLazyWorkers.Stations.LabOvenExtensions;
+using static NoLazyWorkers.Stations.LabOvenUtilities;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers;
 using ScheduleOne;
 using ScheduleOne.Property;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using ScheduleOne.EntityFramework;
 using static NoLazyWorkers.Debug;
 
 namespace NoLazyWorkers.Stations
 {
-  public static class BrickPressConstants
+  public static class LabOvenConstants
   {
     public const int MaxOptions = 5;
     public const string ItemFieldUIPrefix = "ItemFieldUI_";
@@ -36,16 +36,16 @@ namespace NoLazyWorkers.Stations
     public const float UIVerticalSpacing = 104f;
   }
 
-  public static class BrickPressExtensions
+  public static class LabOvenExtensions
   {
     public static Dictionary<Guid, List<ItemField>> ItemFields { get; } = new();
     public static Dictionary<Guid, List<QualityField>> QualityFields { get; } = new();
 
-    public class BrickPressAdapter : IStationAdapter
+    public class LabOvenAdapter : IStationAdapter
     {
-      private readonly BrickPress _station;
+      private readonly LabOven _station;
 
-      public BrickPressAdapter(BrickPress station)
+      public LabOvenAdapter(LabOven station)
       {
         _station = station ?? throw new ArgumentNullException(nameof(station));
         if (!Extensions.IStations.TryGetValue(station.ParentProperty, out var propertyStations))
@@ -54,36 +54,36 @@ namespace NoLazyWorkers.Stations
           Extensions.IStations[station.ParentProperty] = propertyStations;
         }
         propertyStations.Add(GUID, this);
-        Log(Level.Info, $"BrickPressAdapter: Initialized for station {station.GUID}", Category.BrickPress);
+        Log(Level.Info, $"LabOvenAdapter: Initialized for station {station.GUID}", Category.LabOven);
       }
 
       public Guid GUID => _station.GUID;
       public string Name => _station.Name;
       public Vector3 GetAccessPoint(NPC npc) => NavMeshUtility.GetAccessPoint(_station, npc).position;
-      public List<ItemSlot> InsertSlots => _station.ProductSlots.ToList();
-      public List<ItemSlot> ProductSlots => _station.ProductSlots.ToList();
+      public List<ItemSlot> InsertSlots => new List<ItemSlot>();
+      public List<ItemSlot> ProductSlots => new List<ItemSlot> { _station.IngredientSlot };
       public ItemSlot OutputSlot => _station.OutputSlot;
       public bool IsInUse => (_station as IUsable)?.IsInUse ?? false;
       public bool HasActiveOperation => IsInUse;
       public int StartThreshold => 1;
       public List<ItemField> GetInputItemForProduct() => ItemFields.TryGetValue(GUID, out var fields) ? fields : new List<ItemField>();
-      public void StartOperation(Employee employee) => (employee as Packager)?.StartPress(_station);
-      public int MaxProductQuantity => ProductSlots?.FirstOrDefault(s => s.ItemInstance != null)?.ItemInstance?.StackLimit * 2 ?? Registry.GetItem("ogkush").GetDefaultInstance().StackLimit * 2;
+      public void StartOperation(Employee employee) => (employee as Chemist)?.StartLabOven(_station);
+      public int MaxProductQuantity => _station.IngredientSlot?.ItemInstance?.StackLimit ?? 0;
       public ITransitEntity TransitEntity => _station as ITransitEntity;
       public BuildableItem Buildable => _station as BuildableItem;
       public Property ParentProperty => _station.ParentProperty;
       public List<ItemInstance> RefillList() => GetRefillList(_station);
-      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => item.AdvCanStackWith(i, allowTargetHigherQuality: true));
+      public bool CanRefill(ItemInstance item) => item != null && RefillList().Any(i => Utilities.AdvCanStackWith(i, item));
       public Type TypeOf => _station.GetType();
     }
   }
 
-  public static class BrickPressUtilities
+  public static class LabOvenUtilities
   {
     /// <summary>
     /// Cleans up data associated with the DryingRack.
     /// </summary>
-    public static void Cleanup(BrickPress station)
+    public static void Cleanup(LabOven station)
     {
       Log(Level.Verbose, $"Cleanup: Starting cleanup for station {station?.GUID.ToString() ?? "null"}", CategoryDryingRack);
 
@@ -99,16 +99,16 @@ namespace NoLazyWorkers.Stations
       Log(Level.Info, $"Cleanup: Removed data for station {station.GUID}", CategoryDryingRack);
     }
 
-    public static List<ItemInstance> GetRefillList(BrickPress station)
+    public static List<ItemInstance> GetRefillList(LabOven station)
     {
-      Log(Level.Verbose, $"GetRefillList: Retrieving for station {station?.GUID.ToString() ?? "null"}", Category.BrickPress);
+      Log(Level.Verbose, $"GetRefillList: Retrieving for station {station?.GUID.ToString() ?? "null"}", Category.LabOven);
       if (station == null)
       {
-        Log(Level.Warning, "GetRefillList: Station is null", Category.BrickPress);
+        Log(Level.Warning, "GetRefillList: Station is null", Category.LabOven);
         return new List<ItemInstance>();
       }
 
-      var items = new List<ItemInstance>(BrickPressConstants.MaxOptions);
+      var items = new List<ItemInstance>(LabOvenConstants.MaxOptions);
       if (ItemFields.TryGetValue(station.GUID, out var fields) &&
           QualityFields.TryGetValue(station.GUID, out var qualities) &&
           fields != null && qualities != null && fields.Count == qualities.Count)
@@ -122,42 +122,42 @@ namespace NoLazyWorkers.Stations
           {
             prodItem.SetQuality(qualities[i].Value);
             items.Add(prodItem);
-            Log(Level.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", Category.BrickPress);
+            Log(Level.Verbose, $"GetRefillList: Added item {item.ID} with quality {qualities[i].Value} at index {i}", Category.LabOven);
           }
         }
       }
-      Log(Level.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", Category.BrickPress);
+      Log(Level.Info, $"GetRefillList: Returned {items.Count} items for station {station.GUID}", Category.LabOven);
       return items;
     }
 
-    public static void InitializeItemFields(BrickPress station, BrickPressConfiguration config)
+    public static void InitializeItemFields(LabOven station, LabOvenConfiguration config)
     {
-      Log(Level.Verbose, $"InitializeItemFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.BrickPress);
+      Log(Level.Verbose, $"InitializeItemFields: Starting for station {station?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
         if (station == null || config == null)
         {
-          Log(Level.Error, "InitializeItemFields: Station or config is null", Category.BrickPress);
+          Log(Level.Error, "InitializeItemFields: Station or config is null", Category.LabOven);
           return;
         }
 
         Guid guid = station.GUID;
         if (!IStations[station.ParentProperty].ContainsKey(guid))
         {
-          IStations[station.ParentProperty][guid] = new BrickPressAdapter(station);
-          Log(Level.Info, $"InitializeItemFields: Created adapter for station {guid}", Category.BrickPress);
+          IStations[station.ParentProperty][guid] = new LabOvenAdapter(station);
+          Log(Level.Info, $"InitializeItemFields: Created adapter for station {guid}", Category.LabOven);
         }
 
         if (!StationRefillLists.ContainsKey(guid))
-          StationRefillLists[guid] = new List<ItemInstance>(BrickPressConstants.MaxOptions);
+          StationRefillLists[guid] = new List<ItemInstance>(LabOvenConstants.MaxOptions);
 
-        while (StationRefillLists[guid].Count < BrickPressConstants.MaxOptions)
+        while (StationRefillLists[guid].Count < LabOvenConstants.MaxOptions)
           StationRefillLists[guid].Add(null);
 
-        var itemFields = new List<ItemField>(BrickPressConstants.MaxOptions);
-        var qualityFields = new List<QualityField>(BrickPressConstants.MaxOptions);
+        var itemFields = new List<ItemField>(LabOvenConstants.MaxOptions);
+        var qualityFields = new List<QualityField>(LabOvenConstants.MaxOptions);
 
-        for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+        for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
         {
           var qualityField = new QualityField(config);
           qualityField.onValueChanged.RemoveAllListeners();
@@ -169,13 +169,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count && refills[i] is ProductItemInstance prodItem)
               {
                 prodItem.SetQuality(quality);
-                Log(Level.Verbose, $"InitializeItemFields: Set quality {quality} for index {i}", Category.BrickPress);
+                Log(Level.Verbose, $"InitializeItemFields: Set quality {quality} for index {i}", Category.LabOven);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              Log(Level.Error, $"InitializeItemFields: Failed to set quality for index {i}, error: {e.Message}", Category.BrickPress);
+              Log(Level.Error, $"InitializeItemFields: Failed to set quality for index {i}, error: {e.Message}", Category.LabOven);
             }
           });
           qualityFields.Add(qualityField);
@@ -190,13 +190,13 @@ namespace NoLazyWorkers.Stations
               if (i < refills.Count)
               {
                 refills[i] = item?.GetDefaultInstance();
-                Log(Level.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i}", Category.BrickPress);
+                Log(Level.Verbose, $"InitializeItemFields: Set item {item?.ID ?? "null"} for index {i}", Category.LabOven);
               }
               config.InvokeChanged();
             }
             catch (Exception e)
             {
-              Log(Level.Error, $"InitializeItemFields: Failed to set item for index {i}, error: {e.Message}", Category.BrickPress);
+              Log(Level.Error, $"InitializeItemFields: Failed to set item for index {i}, error: {e.Message}", Category.LabOven);
             }
           });
           itemFields.Add(itemField);
@@ -204,40 +204,35 @@ namespace NoLazyWorkers.Stations
 
         ItemFields[guid] = itemFields;
         QualityFields[guid] = qualityFields;
-        Log(Level.Info, $"InitializeItemFields: Initialized {itemFields.Count} fields for station {guid}", Category.BrickPress);
+        Log(Level.Info, $"InitializeItemFields: Initialized {itemFields.Count} fields for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"InitializeItemFields: Failed, error: {e.Message}", Category.BrickPress);
+        Log(Level.Error, $"InitializeItemFields: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
 
-  [HarmonyPatch(typeof(BrickPressConfigPanel))]
-  public class BrickPressPanelPatch
+  [HarmonyPatch(typeof(LabOvenConfigPanel))]
+  public class LabOvenPanelPatch
   {
     [HarmonyPostfix]
     [HarmonyPatch("Bind")]
-    static void BindPostfix(BrickPressConfigPanel __instance, List<EntityConfiguration> configs)
+    static void BindPostfix(LabOvenConfigPanel __instance, List<EntityConfiguration> configs)
     {
-      Log(Level.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", Category.BrickPress);
+      Log(Level.Verbose, $"BindPostfix: Starting for {configs?.Count ?? 0} configs", Category.LabOven);
       try
       {
-        if (configs == null || !configs.Any())
-        {
-          Log(Level.Warning, "BindPostfix: No configurations provided", Category.BrickPress);
-          return;
-        }
-
         __instance.DestinationUI?.gameObject.SetActive(false);
-        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
-        var qualityUITemplate = dryingRackPanelObj.transform.Find("QualityFieldUI");
-        var potPanel = GetPrefabGameObject("PotConfigPanel");
-        var itemUITemplate = potPanel.GetComponentInChildren<ItemFieldUI>();
 
-        if (itemUITemplate == null || qualityUITemplate == null)
+        var dryingRackPanelObj = GetPrefabGameObject("DryingRackPanel");
+        var qualityFieldTemplate = dryingRackPanelObj.transform.Find("QualityFieldUI");
+        var potPanel = GetPrefabGameObject("PotConfigPanel");
+        var itemFieldTemplate = potPanel.GetComponentInChildren<ItemFieldUI>();
+
+        if (itemFieldTemplate == null || qualityFieldTemplate == null)
         {
-          Log(Level.Error, "BindPostfix: Missing UI templates", Category.BrickPress);
+          Log(Level.Error, "BindPostfix: Missing UI templates", Category.LabOven);
           return;
         }
 
@@ -249,23 +244,23 @@ namespace NoLazyWorkers.Stations
         if (ProductManager.FavouritedProducts != null)
           favorites.AddRange(ProductManager.FavouritedProducts.Where(item => item != null));
 
-        var itemFieldLists = new List<ItemField>[BrickPressConstants.MaxOptions];
-        var qualityFieldLists = new List<QualityField>[BrickPressConstants.MaxOptions];
-        for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+        var itemFieldLists = new List<ItemField>[LabOvenConstants.MaxOptions];
+        var qualityFieldLists = new List<QualityField>[LabOvenConstants.MaxOptions];
+        for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
         {
           itemFieldLists[i] = new List<ItemField>();
           qualityFieldLists[i] = new List<QualityField>();
         }
 
-        foreach (var config in configs.OfType<BrickPressConfiguration>())
+        foreach (var config in configs.OfType<LabOvenConfiguration>())
         {
-          if (config?.BrickPress == null) continue;
-          if (!ItemFields.TryGetValue(config.BrickPress.GUID, out var itemFields) ||
-              !QualityFields.TryGetValue(config.BrickPress.GUID, out var qualityFields))
+          if (config?.Oven == null) continue;
+          if (!ItemFields.TryGetValue(config.Oven.GUID, out var itemFields) ||
+              !QualityFields.TryGetValue(config.Oven.GUID, out var qualityFields))
           {
-            InitializeItemFields(config.BrickPress, config);
-            itemFields = ItemFields.GetValueOrDefault(config.BrickPress.GUID);
-            qualityFields = QualityFields.GetValueOrDefault(config.BrickPress.GUID);
+            InitializeItemFields(config.Oven, config);
+            itemFields = ItemFields.GetValueOrDefault(config.Oven.GUID);
+            qualityFields = QualityFields.GetValueOrDefault(config.Oven.GUID);
           }
 
           if (itemFields == null || qualityFields == null) continue;
@@ -273,31 +268,31 @@ namespace NoLazyWorkers.Stations
           foreach (var field in itemFields)
             field.Options = favorites;
 
-          for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+          for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
           {
             itemFieldLists[i].Add(itemFields[i]);
             qualityFieldLists[i].Add(qualityFields[i]);
           }
         }
 
-        for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+        for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
         {
-          var itemUIObj = Object.Instantiate(itemUITemplate.gameObject, __instance.transform, false);
-          itemUIObj.name = $"{BrickPressConstants.ItemFieldUIPrefix}{i}";
-          var itemFieldUI = itemUIObj.GetComponent<ItemFieldUI>();
+          var uiObj = Object.Instantiate(itemFieldTemplate.gameObject, __instance.transform, false);
+          uiObj.name = $"{LabOvenConstants.ItemFieldUIPrefix}{i}";
+          var itemFieldUI = uiObj.GetComponent<ItemFieldUI>() ?? uiObj.AddComponent<ItemFieldUI>();
           itemFieldUI.ShowNoneAsAny = false;
-          itemUIObj.SetActive(true);
+          uiObj.SetActive(true);
 
-          var qualityUIObj = Object.Instantiate(qualityUITemplate.gameObject, __instance.transform, false);
-          qualityUIObj.name = $"{BrickPressConstants.QualityFieldUIPrefix}{i}";
+          var qualityUIObj = Object.Instantiate(qualityFieldTemplate.gameObject, __instance.transform, false);
+          qualityUIObj.name = $"{LabOvenConstants.QualityFieldUIPrefix}{i}";
           qualityUIObj.SetActive(true);
 
           var rect = itemFieldUI.GetComponent<RectTransform>();
           var qualRect = qualityUIObj.GetComponent<RectTransform>();
           if (rect != null && qualRect != null)
           {
-            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, BrickPressConstants.ItemFieldUIOffsetY - BrickPressConstants.UIVerticalSpacing * i);
-            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, BrickPressConstants.QualityFieldUIOffsetY - BrickPressConstants.UIVerticalSpacing * i);
+            rect.anchoredPosition = new Vector2(rect.anchoredPosition.x, LabOvenConstants.ItemFieldUIOffsetY - LabOvenConstants.UIVerticalSpacing * i);
+            qualRect.anchoredPosition = new Vector2(rect.anchoredPosition.x, LabOvenConstants.QualityFieldUIOffsetY - LabOvenConstants.UIVerticalSpacing * i);
           }
 
           foreach (var text in itemFieldUI.GetComponentsInChildren<TextMeshProUGUI>())
@@ -315,32 +310,32 @@ namespace NoLazyWorkers.Stations
 
           itemFieldUI.Bind(itemFieldLists[i]);
           qualityUIObj.GetComponent<QualityFieldUI>().Bind(qualityFieldLists[i]);
-          Log(Level.Info, $"BindPostfix: Bound {BrickPressConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} fields", Category.BrickPress);
+          Log(Level.Info, $"BindPostfix: Bound {LabOvenConstants.ItemFieldUIPrefix}{i} to {itemFieldLists[i].Count} fields", Category.LabOven);
         }
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.BrickPress, Category.Stacktrace);
+        Log(Level.Error, $"BindPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
 
-  [HarmonyPatch(typeof(BrickPressConfiguration))]
-  public class BrickPressConfigurationPatch
+  [HarmonyPatch(typeof(LabOvenConfiguration))]
+  public class LabOvenConfigurationPatch
   {
     [HarmonyPostfix]
-    [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(BrickPress) })]
-    static void ConstructorPostfix(BrickPressConfiguration __instance, BrickPress station)
+    [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(ConfigurationReplicator), typeof(IConfigurable), typeof(LabOven) })]
+    static void ConstructorPostfix(LabOvenConfiguration __instance, LabOven oven)
     {
-      Log(Level.Verbose, $"ConstructorPostfix: Starting for station {station?.GUID.ToString() ?? "null"}", Category.BrickPress);
+      Log(Level.Verbose, $"ConstructorPostfix: Starting for station {oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
-        if (!ItemFields.ContainsKey(station.GUID))
-          InitializeItemFields(station, __instance);
+        if (!ItemFields.ContainsKey(oven.GUID))
+          InitializeItemFields(oven, __instance);
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"ConstructorPostfix: Failed, error: {e.Message}", Category.BrickPress);
+        Log(Level.Error, $"ConstructorPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
 
@@ -354,19 +349,19 @@ namespace NoLazyWorkers.Stations
 
     [HarmonyPostfix]
     [HarmonyPatch("GetSaveString")]
-    static void GetSaveStringPostfix(BrickPressConfiguration __instance, ref string __result)
+    static void GetSaveStringPostfix(LabOvenConfiguration __instance, ref string __result)
     {
-      Log(Level.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.BrickPress?.GUID.ToString() ?? "null"}", Category.BrickPress);
+      Log(Level.Verbose, $"GetSaveStringPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
-        if (__instance?.BrickPress == null) return;
+        if (__instance?.Oven == null) return;
         var json = JObject.Parse(__result);
-        var guid = __instance.BrickPress.GUID;
+        var guid = __instance.Oven.GUID;
 
         if (ItemFields.TryGetValue(guid, out var itemFields))
         {
           var itemFieldsData = new JArray();
-          for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+          for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
             itemFieldsData.Add(new JObject { ["ItemID"] = itemFields[i].SelectedItem?.ID });
           json["ItemFields"] = itemFieldsData;
         }
@@ -374,48 +369,48 @@ namespace NoLazyWorkers.Stations
         if (QualityFields.TryGetValue(guid, out var qualityFields))
         {
           var qualityFieldsArray = new JArray();
-          for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+          for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
             qualityFieldsArray.Add(new JObject { ["Quality"] = qualityFields[i].Value.ToString() });
           json["Qualities"] = qualityFieldsArray;
         }
 
         __result = json.ToString(Newtonsoft.Json.Formatting.Indented);
-        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", Category.BrickPress);
+        Log(Level.Info, $"GetSaveStringPostfix: Saved JSON for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", Category.BrickPress);
+        Log(Level.Error, $"GetSaveStringPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
 
     [HarmonyPostfix]
     [HarmonyPatch("Destroy")]
-    static void DestroyPostfix(BrickPressConfiguration __instance)
+    static void DestroyPostfix(LabOvenConfiguration __instance)
     {
-      Log(Level.Verbose, $"DestroyPostfix: Starting for station {__instance?.BrickPress?.GUID.ToString() ?? "null"}", Category.BrickPress);
+      Log(Level.Verbose, $"DestroyPostfix: Starting for station {__instance?.Oven?.GUID.ToString() ?? "null"}", Category.LabOven);
       try
       {
-        if (__instance?.BrickPress != null)
-          Cleanup(__instance.BrickPress);
+        if (__instance?.Oven != null)
+          Cleanup(__instance.Oven);
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"DestroyPostfix: Failed, error: {e.Message}", Category.BrickPress);
+        Log(Level.Error, $"DestroyPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }
 
-  [HarmonyPatch(typeof(BrickPressLoader))]
-  public class BrickPressLoaderPatch
+  [HarmonyPatch(typeof(LabOvenLoader))]
+  public class LabOvenLoaderPatch
   {
     [HarmonyPostfix]
     [HarmonyPatch("Load")]
     static void LoadPostfix(string mainPath)
     {
-      Log(Level.Verbose, $"LoadPostfix: Starting for {mainPath}", Category.BrickPress);
+      Log(Level.Verbose, $"LoadPostfix: Starting for {mainPath}", Category.LabOven);
       try
       {
-        if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null || !(gridItem is BrickPress station))
+        if (!GridItemLoaderPatch.LoadedGridItems.TryGetValue(mainPath, out var gridItem) || gridItem == null || !(gridItem is LabOven station))
           return;
 
         string configPath = System.IO.Path.Combine(mainPath, "Configuration.json");
@@ -424,7 +419,7 @@ namespace NoLazyWorkers.Stations
 
         string json = System.IO.File.ReadAllText(configPath);
         var jsonObject = JObject.Parse(json);
-        var config = station.stationConfiguration;
+        var config = station.ovenConfiguration;
         if (config == null)
           return;
 
@@ -443,9 +438,9 @@ namespace NoLazyWorkers.Stations
         var itemFieldsData = jsonObject["ItemFields"] as JArray;
         var qualityFieldsData = jsonObject["Qualities"] as JArray;
 
-        if (itemFieldsData != null && itemFieldsData.Count <= BrickPressConstants.MaxOptions)
+        if (itemFieldsData != null && itemFieldsData.Count <= LabOvenConstants.MaxOptions)
         {
-          for (int i = 0; i < BrickPressConstants.MaxOptions; i++)
+          for (int i = 0; i < LabOvenConstants.MaxOptions; i++)
           {
             var qualityData = qualityFieldsData?[i] as JObject;
             if (qualityData != null && qualityData["Quality"] != null)
@@ -465,11 +460,11 @@ namespace NoLazyWorkers.Stations
           }
         }
 
-        Log(Level.Info, $"LoadPostfix: Loaded config for station {guid}", Category.BrickPress);
+        Log(Level.Info, $"LoadPostfix: Loaded config for station {guid}", Category.LabOven);
       }
       catch (Exception e)
       {
-        Log(Level.Error, $"LoadPostfix: Failed, error: {e.Message}", Category.BrickPress);
+        Log(Level.Error, $"LoadPostfix: Failed, error: {e.Message}", Category.LabOven);
       }
     }
   }

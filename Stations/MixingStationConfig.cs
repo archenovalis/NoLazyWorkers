@@ -20,12 +20,15 @@ using static NoLazyWorkers.Stations.MixingStationUtilities;
 using static NoLazyWorkers.Stations.MixingStationConfigUtilities;
 using ScheduleOne.Employees;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.Storage.ManagedDictionaries;
+using static NoLazyWorkers.CacheManager.ManagedDictionaries;
 using ScheduleOne.EntityFramework;
 using ScheduleOne.Property;
 using ScheduleOne.Persistence.Datas;
 using static NoLazyWorkers.Debug;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Extensions;
+using static NoLazyWorkers.TaskService.Extensions;
+using NoLazyWorkers.CacheManager;
+using Unity.Collections;
 
 namespace NoLazyWorkers.Stations
 {
@@ -43,9 +46,7 @@ namespace NoLazyWorkers.Stations
 
       public MixingStationAdapter(MixingStation station)
       {
-        if (!IStations.ContainsKey(station.ParentProperty))
-          IStations[station.ParentProperty] = new();
-        IStations[station.ParentProperty].Add(GUID, this);
+        CacheService.GetOrCreateService(station.ParentProperty).IStations.Add(GUID, this);
 
         _stationState = new StationState<MixingStationStates>(this)
         {
@@ -78,7 +79,7 @@ namespace NoLazyWorkers.Stations
       public List<ItemField> GetInputItemForProduct() => [GetInputItemForProductSlot(this)];
       public Type TypeOf => _station.GetType();
       public void StartOperation(Employee employee) => (employee as Chemist).StartMixingStation(_station);
-      public List<ItemInstance> RefillList() => _routeManager.Refills.Where(item => item != null).ToList();
+      public NativeList<ItemKey> RefillList() => _routeManager.Refills;
       public StationData StationData => _stationData;
       public bool CanRefill(ItemInstance item) => item.CanRefill(_routeManager);
       public IStationState StationState
@@ -86,6 +87,8 @@ namespace NoLazyWorkers.Stations
         get => _stationState;
         set => _stationState = (StationState<MixingStationStates>)value;
       }
+
+      public EntityType EntityType => EntityType.MixingStation;
     }
 
     public enum MixingStationStates
@@ -152,11 +155,8 @@ namespace NoLazyWorkers.Stations
 
     public static bool CanRefill(this ItemInstance item, StationRouteManager manager)
     {
-      foreach (var instance in manager.Refills)
-      {
-        if (item.AdvCanStackWith(instance, allowTargetHigherQuality: true))
-          return true;
-      }
+      if (new ItemKey(item).AdvCanStackWithBurst(manager.Refills, allowTargetHigherQuality: true))
+        return true;
       return false;
     }
   }
@@ -167,7 +167,7 @@ namespace NoLazyWorkers.Stations
     public MixingStationConfiguration Config { get; }
     public QualityField Quality { get; private set; }
     public List<MixingRoute> Routes { get; } = new List<MixingRoute>();
-    public List<ItemInstance> Refills { get; } = new List<ItemInstance>();
+    public NativeList<ItemKey> Refills = new(Allocator.Persistent);
     public const int MaxRoutes = 11;
     public const float MaxThreshold = 20f;
 
@@ -201,7 +201,7 @@ namespace NoLazyWorkers.Stations
       if (Routes.Count >= MaxRoutes) return;
       var route = new MixingRoute(Config);
       Routes.Add(route);
-      Refills.Add(null);
+      Refills.Add(new ItemKey());
       Config.InvokeChanged();
       Log(Level.Info,
           $"StationRouteManager: Added route for station {StationGuid}, total routes: {Routes.Count}",
@@ -246,12 +246,12 @@ namespace NoLazyWorkers.Stations
       var product = Routes[index].Product.SelectedItem;
       if (product == null)
       {
-        Refills[index] = null;
+        Refills[index] = new ItemKey();
         return;
       }
       var prodItem = product.GetDefaultInstance() as ProductItemInstance;
       prodItem?.SetQuality(Quality.Value);
-      Refills[index] = prodItem;
+      Refills[index] = new ItemKey(prodItem);
       Log(Level.Info,
           $"StationRouteManager: Updated refill for route {index} in station {StationGuid}",
           Category.MixingStation);
@@ -295,7 +295,7 @@ namespace NoLazyWorkers.Stations
           };
           route.SetData(data);
           Routes.Add(route);
-          Refills.Add(null);
+          Refills.Add(new ItemKey());
           UpdateRefill(Routes.Count - 1);
         }
       }
@@ -916,7 +916,7 @@ namespace NoLazyWorkers.Stations
             {
               var manager = RouteManagers[config.station.GUID];
               prodItem.SetQuality(manager.Quality.Value);
-              manager.Refills[index] = prodItem;
+              manager.Refills[index] = new ItemKey(prodItem);
               Log(Level.Info,
                           $"MixingRouteEntryUI.OpenItemSelectorScreen: Updated Refills[{index}] for station {config.station.GUID}",
                           Category.MixingStation);

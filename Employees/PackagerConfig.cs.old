@@ -19,7 +19,7 @@ using static NoLazyWorkers.Employees.PackagerBehaviour;
 using static NoLazyWorkers.Employees.Extensions;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using ScheduleOne.DevUtilities;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using ScheduleOne.NPCs;
 using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using ScheduleOne.EntityFramework;

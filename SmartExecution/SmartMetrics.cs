@@ -1,0 +1,1107 @@
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using Unity.Burst;
+using Unity.Collections;
+using NoLazyWorkers.Extensions;
+using static NoLazyWorkers.Extensions.FishNetExtensions;
+using static NoLazyWorkers.Extensions.NativeExtensions;
+using static NoLazyWorkers.Debug;
+using UnityEngine;
+using static NoLazyWorkers.Debug.Deferred;
+using Unity.Jobs;
+
+namespace NoLazyWorkers.SmartExecution
+{
+  /// <summary>
+  /// Provides performance tracking and metrics collection for methods and jobs, optimized for Burst compilation.
+  /// </summary>
+  [BurstCompile]
+  internal static class SmartMetrics
+  {
+    /// <summary>
+    /// Represents a single performance sample for tracking method execution start time.
+    /// </summary>
+    private struct ImpactSample
+    {
+      public FixedString64Bytes MethodName;
+      public long StartTicks;
+    }
+
+    internal static readonly ConcurrentDictionary<string, MetricData> NonBurstMetrics = new();
+    private static readonly ConcurrentDictionary<string, double> _averageCache = new();
+    private static readonly ConcurrentDictionary<string, double> _impactCache = new();
+    private static readonly ConcurrentDictionary<string, bool> _threadSafetyCache = new();
+    private static readonly ConcurrentDictionary<string, RollingAverage> _taskCreationAverages = new();
+    private static readonly ConcurrentDictionary<string, RollingAverage> _mainThreadImpacts = new();
+    private static readonly NativeList<ImpactSample> _burstSamples = new(100, Allocator.Persistent);
+    private static readonly ConcurrentDictionary<int, ImpactSample> _nonBurstSamples = new();
+    private static readonly SynchronizationContext _unitySyncContext = SynchronizationContext.Current;
+    private static readonly Stopwatch _stopwatch = new();
+    private static readonly ConcurrentDictionary<string, RollingAverage> _taskOverheadAverages = new();
+    private static readonly ConcurrentDictionary<string, RollingAverage> _schedulingAverages = new();
+    internal static readonly ConcurrentDictionary<string, int> MetricsThresholds = new();
+    internal static NativeParallelHashMap<FixedString64Bytes, MetricData> Metrics = new(100, Allocator.Persistent);
+    internal static readonly ConcurrentDictionary<string, List<int>> BatchSizeHistory = new();
+    internal static readonly ConcurrentDictionary<string, RollingAverage> RollingAverages = new();
+    internal static readonly ConcurrentDictionary<string, RollingAverage> ImpactAverages = new();
+
+    private static int _availableWorkerThreads;
+    private static int _sampleId;
+    private static bool _isInitialized;
+    private static double _stopwatchOverheadMs;
+
+    private const int MAX_CACHE_SIZE = 1000;
+    private const int WINDOW_SIZE = 100;
+    private const int BATCH_HISTORY_SIZE = 5;
+    private const float MIN_AVG_TIME_MS = 0.05f;
+    private const float MAX_AVG_TIME_MS = 0.5f;
+    private const double OUTLIER_THRESHOLD_MS = 10.0;
+    private const float VARIABILITY_THRESHOLD = 2.0f;
+    internal static int DEFAULT_THRESHOLD = 100;
+    internal static float MAX_FRAME_TIME_MS = 1f;
+    internal static float HIGH_FPS_THRESHOLD = 0.01f;
+    internal static float FPS_CHANGE_THRESHOLD = 0.2f;
+    internal static int MIN_TEST_EXECUTIONS = 3;
+    internal static int PARALLEL_MIN_ITEMS = 100;
+    internal const float METRIC_STABILITY_THRESHOLD = 0.05f;
+    internal const int STABILITY_WINDOW = 100;
+    internal const float STABILITY_VARIANCE_THRESHOLD = 0.001f;
+
+    /// <summary>
+    /// Stores performance metrics for a method or job.
+    /// </summary>
+    [BurstCompile]
+    public struct MetricData
+    {
+      public long CallCount;
+      public double TotalTimeMs;
+      public double MaxTimeMs;
+      public double TotalMainThreadImpactMs;
+      public double MaxMainThreadImpactMs;
+      public long CacheHits;
+      public long CacheMisses;
+      public long ItemCount;
+      public double AvgItemTimeMs;
+      public double AvgMainThreadImpactMs;
+    }
+
+    /// <summary>
+    /// Initializes the performance metrics system, configuring thread pool settings.
+    /// </summary>
+    public static void InitializeMetrics()
+    {
+      if (_isInitialized || !IsServer) return;
+      _isInitialized = true;
+
+      // Configure .NET thread pool to use all available cores
+      int workerThreads = SystemInfo.processorCount * 2; // Allow up to 2x cores for flexibility
+      int completionPortThreads = SystemInfo.processorCount;
+      ThreadPool.SetMinThreads(workerThreads, completionPortThreads);
+      ThreadPool.SetMaxThreads(workerThreads * 2, completionPortThreads * 2);
+      ThreadPool.GetAvailableThreads(out _availableWorkerThreads, out _);
+
+      TimeManagerInstance.OnTick += UpdateMetrics;
+      Log(Level.Info, $"PerformanceMetrics initialized with thread pool: workerThreads={workerThreads}, completionPortThreads={completionPortThreads}", Category.Performance);
+    }
+
+    /// <summary>
+    /// Tracks execution time of a Burst-compiled method and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="executionTimeMs">Execution time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    /// <param name="logs">Native list for logging performance data.</param>
+    [BurstCompile]
+    public static void TrackExecutionBurst(
+                FixedString64Bytes methodName,
+                float executionTimeMs,
+                int itemCount,
+                NativeList<LogEntry> logs)
+    {
+      UpdateMetric(methodName.ToString(), executionTimeMs, 0, itemCount, logs);
+    }
+
+    /// <summary>
+    /// Tracks execution time of a non-Burst method and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The action to execute and measure.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    public static void TrackExecution(string methodName, Action action, int itemCount = 1)
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetricNonBurst(methodName, _stopwatch.ElapsedTicks * 1000f / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Begins a performance sample for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The sample ID.</returns>
+    public static int BeginSample(string methodName)
+    {
+      int id = Interlocked.Increment(ref _sampleId);
+      if (BurstCompiler.IsEnabled)
+      {
+        _burstSamples.Add(new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks });
+        return id;
+      }
+      else
+      {
+        _nonBurstSamples[id] = new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks };
+        return id;
+      }
+    }
+
+    /// <summary>
+    /// Ends a performance sample and calculates main thread impact.
+    /// </summary>
+    /// <param name="sampleId">The sample ID returned by BeginSample.</param>
+    /// <returns>The main thread impact time in milliseconds.</returns>
+    public static float EndSample(int sampleId)
+    {
+      if (BurstCompiler.IsEnabled)
+      {
+        for (int i = 0; i < _burstSamples.Length; i++)
+        {
+          if (_burstSamples[i].StartTicks == sampleId)
+          {
+            float impactMs = (_stopwatch.ElapsedTicks - _burstSamples[i].StartTicks) * 1000f / Stopwatch.Frequency;
+            var avg = _mainThreadImpacts.GetOrAdd(_burstSamples[i].MethodName.ToString(), _ => new RollingAverage(100));
+            avg.AddSample(impactMs);
+            _burstSamples.RemoveAtSwapBack(i);
+            return impactMs;
+          }
+        }
+        return 0;
+      }
+      else
+      {
+        if (!_nonBurstSamples.TryRemove(sampleId, out var sample)) return 0;
+        float impactMs = (_stopwatch.ElapsedTicks - sample.StartTicks) * 1000f / Stopwatch.Frequency;
+        var avg = _mainThreadImpacts.GetOrAdd(sample.MethodName.ToString(), _ => new RollingAverage(100));
+        avg.AddSample(impactMs);
+        return impactMs;
+      }
+    }
+
+    /// <summary>
+    /// Updates performance metrics for a method in a Burst-compatible context.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="timeMs">Execution time in milliseconds.</param>
+    /// <param name="mainThreadImpactMs">Main thread impact time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    /// <param name="logs">Optional native list for logging performance data.</param>
+    [BurstCompile]
+    private static void UpdateMetric(string methodName, double timeMs, float mainThreadImpactMs, int itemCount, NativeList<LogEntry> logs = default)
+    {
+      timeMs = Math.Max(0, timeMs - _stopwatchOverheadMs); // Apply stopwatch overhead
+      if (logs.IsCreated)
+      {
+        if (Metrics.TryGetValue(methodName, out var data))
+          Metrics[methodName] = UpdateMetricData(data, timeMs, mainThreadImpactMs, itemCount);
+        else
+          Metrics.TryAdd(methodName, CreateMetricData(timeMs, mainThreadImpactMs, itemCount));
+#if DEBUG
+        logs.Add(new(Level.Verbose, $"Updated metric for {methodName}: time={timeMs:F3}ms, mainThreadImpact={mainThreadImpactMs:F3}ms, items={itemCount}", Category.Performance));
+#endif
+      }
+      else
+      {
+        NonBurstMetrics.AddOrUpdate(
+            methodName,
+            new MetricData
+            {
+              CallCount = 1,
+              TotalTimeMs = timeMs,
+              MaxTimeMs = timeMs,
+              TotalMainThreadImpactMs = mainThreadImpactMs,
+              MaxMainThreadImpactMs = mainThreadImpactMs,
+              ItemCount = itemCount,
+              AvgItemTimeMs = timeMs / itemCount,
+              AvgMainThreadImpactMs = mainThreadImpactMs / itemCount
+            },
+            (_, existing) => UpdateMetricData(existing, timeMs, mainThreadImpactMs, itemCount));
+#if DEBUG
+        Log(Level.Verbose, $"Updated metric for {methodName}: time={timeMs:F3}ms, items={itemCount}", Category.Performance);
+#endif
+      }
+    }
+
+    /// <summary>
+    /// Updates performance metrics for a method in a non-Burst context.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="timeMs">Execution time in milliseconds.</param>
+    /// <param name="mainThreadImpactMs">Main thread impact time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    private static void UpdateMetricNonBurst(string methodName, double timeMs, float mainThreadImpactMs, int itemCount)
+    {
+      NonBurstMetrics.AddOrUpdate(
+          methodName,
+          new MetricData
+          {
+            CallCount = 1,
+            TotalTimeMs = timeMs,
+            MaxTimeMs = timeMs,
+            TotalMainThreadImpactMs = mainThreadImpactMs,
+            MaxMainThreadImpactMs = mainThreadImpactMs,
+            ItemCount = itemCount,
+            AvgItemTimeMs = timeMs / itemCount,
+            AvgMainThreadImpactMs = mainThreadImpactMs / itemCount
+          },
+          (_, existing) => new MetricData
+          {
+            CallCount = existing.CallCount + 1,
+            TotalTimeMs = existing.TotalTimeMs + timeMs,
+            MaxTimeMs = Math.Max(existing.MaxTimeMs, timeMs),
+            TotalMainThreadImpactMs = existing.TotalMainThreadImpactMs + mainThreadImpactMs,
+            MaxMainThreadImpactMs = Math.Max(existing.MaxMainThreadImpactMs, mainThreadImpactMs),
+            CacheHits = existing.CacheHits,
+            CacheMisses = existing.CacheMisses,
+            ItemCount = existing.ItemCount + itemCount,
+            AvgItemTimeMs = (existing.TotalTimeMs + timeMs) / (existing.ItemCount + itemCount),
+            AvgMainThreadImpactMs = (existing.TotalMainThreadImpactMs + mainThreadImpactMs) / (existing.ItemCount + itemCount)
+          });
+    }
+
+    /// <summary>
+    /// Adds a performance sample for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    internal static void AddSample(string methodName, double avgItemTimeMs, bool isNonBurst = false)
+    {
+      if (avgItemTimeMs <= 0) return;
+      var avg = RollingAverages.GetOrAdd(methodName, _ => new RollingAverage(WINDOW_SIZE));
+      AddPerformanceSample(methodName, avgItemTimeMs);
+      avg.AddSample(avgItemTimeMs);
+#if DEBUG
+      Log(Level.Verbose, $"DynamicProfiler: {methodName} avgProcessingTimeMs={avgItemTimeMs:F3}ms (samples={avg.Count}, isNonBurst={isNonBurst})", Category.Performance);
+#endif
+    }
+
+    /// <summary>
+    /// Gets the dynamic average processing time for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="defaultTimeMs">Default time if no data exists.</param>
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    /// <returns>The average processing time in milliseconds.</returns>
+    internal static float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f, bool isNonBurst = false)
+    {
+      RollingAverage rollingAvg = null;
+      if (TryGetAverage(methodName, out var avg) || RollingAverages.TryGetValue(methodName, out rollingAvg))
+      {
+        float result = (float)(rollingAvg?.GetAverage() ?? avg);
+#if DEBUG
+        Log(Level.Verbose, $"DynamicProfiler: {methodName} avgProcessingTimeMs={result:F3}ms (samples={(rollingAvg?.Count ?? 0)}, isNonBurst={isNonBurst})", Category.Performance);
+#endif
+        return result;
+      }
+      return defaultTimeMs;
+    }
+
+    /// <summary>
+    /// Tries to get the average performance time from the cache.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="avg">The average time in milliseconds.</param>
+    /// <returns>True if the average was found, false otherwise.</returns>
+    public static bool TryGetAverage(string methodName, out double avg)
+    {
+      return _averageCache.TryGetValue(methodName, out avg);
+    }
+
+    /// <summary>
+    /// Adds a batch size to the history for a method.
+    /// </summary>
+    /// <param name="uniqueId">The unique identifier for the method.</param>
+    /// <param name="batchSize">The batch size used.</param>
+    internal static void AddBatchSize(string uniqueId, int batchSize)
+    {
+      var history = BatchSizeHistory.GetOrAdd(uniqueId, _ => new List<int>(BATCH_HISTORY_SIZE));
+      if (history.Count >= BATCH_HISTORY_SIZE)
+        history.RemoveAt(0);
+      history.Add(batchSize);
+    }
+
+    /// <summary>
+    /// Gets the average batch size for a method.
+    /// </summary>
+    /// <param name="uniqueId">The unique identifier for the method.</param>
+    /// <returns>The average batch size.</returns>
+    internal static int GetAverageBatchSize(string uniqueId)
+    {
+      var history = BatchSizeHistory.GetOrAdd(uniqueId, _ => new List<int>(BATCH_HISTORY_SIZE));
+      if (history.Count == 0) return 0;
+      double sum = 0;
+      foreach (var size in history) sum += size;
+      return Mathf.RoundToInt((float)(sum / history.Count));
+    }
+
+    /// <summary>
+    /// Adds an impact sample for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="impactTimeMs">The impact time in milliseconds.</param>
+    public static void AddImpactSample(string methodName, double impactTimeMs)
+    {
+      if (impactTimeMs <= 0) return;
+      impactTimeMs = Math.Max(0, impactTimeMs - _stopwatchOverheadMs);
+      var avg = ImpactAverages.GetOrAdd(methodName, _ => new RollingAverage(WINDOW_SIZE));
+      if (impactTimeMs > OUTLIER_THRESHOLD_MS)
+        Log(Level.Warning, $"Outlier detected for {methodName}: {impactTimeMs:F3}ms", Category.Performance);
+      else if (avg.Count > 0 && impactTimeMs > avg.GetAverage() * VARIABILITY_THRESHOLD)
+      {
+#if DEBUG
+        Log(Level.Verbose, $"High variability for {methodName}: {impactTimeMs:F3}ms vs avg {avg.GetAverage():F3}ms", Category.Performance);
+#endif
+      }
+      AddImpactSample(methodName, impactTimeMs);
+      avg.AddSample(impactTimeMs);
+    }
+
+    /// <summary>
+    /// Gets the coroutine execution cost for a method.
+    /// </summary>
+    /// <param name="coroutineKey">The coroutine identifier.</param>
+    /// <returns>The coroutine cost in milliseconds.</returns>
+    public static float GetCoroutineCost(string coroutineKey)
+    {
+      float cost = GetAverageItemImpact(coroutineKey);
+      return cost == float.MaxValue ? 0.2f : cost;
+    }
+
+    /// <summary>
+    /// Gets the job scheduling overhead for a job.
+    /// </summary>
+    /// <param name="jobKey">The job identifier.</param>
+    /// <returns>The job overhead in milliseconds.</returns>
+    public static float GetJobOverhead(string jobKey)
+    {
+      float overhead = GetAverageItemImpact(jobKey);
+      return overhead == float.MaxValue ? 2f : overhead;
+    }
+
+    public static void AddTaskOverheadSample(string key, double overheadMs)
+    {
+      var avg = _taskOverheadAverages.GetOrAdd(key, _ => new RollingAverage(WINDOW_SIZE));
+      avg.AddSample(overheadMs);
+    }
+
+    public static float GetTaskOverhead(string key)
+    {
+      if (_taskOverheadAverages.TryGetValue(key, out var avg))
+      {
+        return (float)avg.GetAverage();
+      }
+      return 0.1f; // Default overhead
+    }
+
+    public static void AddSchedulingImpactSample(string methodName, double schedulingTimeMs)
+    {
+      var avg = _schedulingAverages.GetOrAdd(methodName, _ => new RollingAverage(10));
+      avg.AddSample(schedulingTimeMs);
+    }
+
+    public static float GetSchedulingOverhead(string methodName)
+    {
+      if (_schedulingAverages.TryGetValue(methodName, out var avg))
+      {
+        return (float)avg.GetAverage();
+      }
+      return 0.1f; // Default overhead
+    }
+
+    public static async Task TrackExecutionTaskAsync(string methodName, Action action, int itemCount = 1)
+    {
+      var creationStart = Stopwatch.GetTimestamp();
+      var task = Task.Run(action);
+      var creationEnd = Stopwatch.GetTimestamp();
+      double creationOverheadMs = (creationEnd - creationStart) * 1000.0 / Stopwatch.Frequency;
+
+      var syncStart = Stopwatch.GetTimestamp();
+      await task.ConfigureAwait(false);
+      var syncEnd = Stopwatch.GetTimestamp();
+      double syncOverheadMs = (syncEnd - syncStart) * 1000.0 / Stopwatch.Frequency;
+
+      double totalOverheadMs = creationOverheadMs + syncOverheadMs;
+      AddTaskOverheadSample(methodName, totalOverheadMs);
+
+#if DEBUG
+      Log(Level.Verbose, $"Task {methodName}: CreationOverhead={creationOverheadMs:F3}ms, SyncOverhead={syncOverheadMs:F3}ms, TotalOverhead={totalOverheadMs:F3}ms", Category.Performance);
+#endif
+
+      float estimatedTimeMs = GetDynamicAvgProcessingTimeMs(methodName) * itemCount;
+      UpdateMetricNonBurst(methodName, estimatedTimeMs, (float)totalOverheadMs, itemCount);
+    }
+
+    public static IEnumerator TrackJobWithStopwatch(string methodName, Func<JobHandle> scheduleJob, int itemCount = 1)
+    {
+      var schedulingStart = Stopwatch.GetTimestamp();
+      var handle = scheduleJob();
+      var schedulingEnd = Stopwatch.GetTimestamp();
+      double schedulingOverheadMs = (schedulingEnd - schedulingStart) * 1000.0 / Stopwatch.Frequency;
+
+      yield return new WaitUntil(() => handle.IsCompleted);
+
+      var completionStart = Stopwatch.GetTimestamp();
+      handle.Complete();
+      var completionEnd = Stopwatch.GetTimestamp();
+      double completionOverheadMs = (completionEnd - completionStart) * 1000.0 / Stopwatch.Frequency;
+
+      double totalOverheadMs = schedulingOverheadMs + completionOverheadMs;
+      AddSchedulingImpactSample(methodName, totalOverheadMs);
+
+#if DEBUG
+      Log(Level.Verbose, $"Job {methodName}: SchedulingOverhead={schedulingOverheadMs:F3}ms, CompletionOverhead={completionOverheadMs:F3}ms, TotalOverhead={totalOverheadMs:F3}ms", Category.Performance);
+#endif
+
+      float estimatedTimeMs = GetDynamicAvgProcessingTimeMs(methodName) * itemCount;
+      UpdateMetricNonBurst(methodName, estimatedTimeMs, (float)totalOverheadMs, itemCount);
+    }
+
+    /// <summary>
+    /// Updates performance thresholds based on main thread and coroutine impacts.
+    /// </summary>
+    [BurstCompile]
+    private static void UpdateThresholds()
+    {
+      foreach (var kvp in MetricsThresholds)
+      {
+        string uniqueId = kvp.Key;
+        if (_mainThreadImpacts.TryGetValue($"{uniqueId}_MainThread", out var mainThreadAvg) &&
+            _mainThreadImpacts.TryGetValue($"{uniqueId}_Coroutine", out var coroutineAvg))
+        {
+          float mainThreadImpact = (float)mainThreadAvg.GetAverage();
+          float coroutineCostMs = (float)coroutineAvg.GetAverage();
+          float variance = CalculateMetricVariance(uniqueId);
+          if (variance > STABILITY_VARIANCE_THRESHOLD)
+          {
+            int threshold = Mathf.Max(100, Mathf.FloorToInt(1000f * DEFAULT_THRESHOLD / Math.Max(1f, coroutineCostMs - mainThreadImpact)));
+            MetricsThresholds[uniqueId] = threshold;
+            Log(Level.Info, $"Updated threshold for {uniqueId}: {threshold}, variance={variance:F3}", Category.Performance);
+          }
+        }
+      }
+    }
+
+    /// <summary>
+    /// Calculates variance for a given method's performance metrics.
+    /// </summary>
+    /// <param name="methodName">Name of the method.</param>
+    /// <returns>Variance of performance metrics, or double.MaxValue if insufficient data.</returns>
+    internal static float CalculateMetricVariance(string methodName)
+    {
+      if (!BatchSizeHistory.TryGetValue(methodName, out var history))
+        return float.MaxValue;
+      if (history.Count < MIN_TEST_EXECUTIONS)
+        return float.MaxValue;
+      double mean = history.Average();
+      float variance = (float)(history.Sum(v => (v - mean) * (v - mean)) / history.Count);
+#if DEBUG
+      Log(Level.Verbose, $"Variance for {methodName}: {variance:F3}, samples={history.Count}", Category.Performance);
+#endif
+      return variance;
+    }
+
+    /// <summary>
+    /// Calculates performance thresholds based on execution times.
+    /// </summary>
+    /// <param name="uniqueId">Unique identifier for the task.</param>
+    /// <param name="testId">Test identifier.</param>
+    /// <param name="mainThreadTime">Main thread execution time per item in milliseconds.</param>
+    /// <param name="jobTime">Job execution time per item in milliseconds.</param>
+    internal static void CalculateThresholds(string uniqueId, string testId, float mainThreadTime, float jobTime)
+    {
+      float iJobCost = GetJobOverhead($"{testId}_IJob");
+      DEFAULT_THRESHOLD = Mathf.Max(50, Mathf.FloorToInt(1000f / Math.Max(1f, mainThreadTime)));
+      MAX_FRAME_TIME_MS = Mathf.Clamp(mainThreadTime * 10, 0.5f, 2f);
+      HIGH_FPS_THRESHOLD = Mathf.Clamp(1f / (60f + mainThreadTime * 1000f), 0.005f, 0.02f);
+      FPS_CHANGE_THRESHOLD = Mathf.Clamp(mainThreadTime / 1000f, 0.1f, 0.3f);
+      MIN_TEST_EXECUTIONS = Math.Max(3, Mathf.FloorToInt(mainThreadTime / 0.1f));
+      PARALLEL_MIN_ITEMS = Math.Max(100, Mathf.FloorToInt(1000f / (SystemInfo.processorCount * 0.5f)));
+      MetricsThresholds[uniqueId] = DEFAULT_THRESHOLD;
+      MetricsThresholds[$"{uniqueId}_ParallelThreshold"] = PARALLEL_MIN_ITEMS;
+#if DEBUG
+      Log(Level.Verbose, $"Calculated thresholds for {uniqueId}: DEFAULT_THRESHOLD={DEFAULT_THRESHOLD}, PARALLEL_MIN_ITEMS={PARALLEL_MIN_ITEMS}, Cores={SystemInfo.processorCount}", Category.Performance);
+#endif
+    }
+
+
+    /// <summary>
+    /// Gets the average main thread impact per item for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The average impact time in milliseconds.</returns>
+    public static float GetAverageItemImpact(string methodName)
+    {
+      RollingAverage avg = null;
+      if (TryGetImpact(methodName, out var impact) || ImpactAverages.TryGetValue(methodName, out avg))
+      {
+        float result = (float)(avg?.GetAverage() ?? impact);
+#if DEBUG
+        Log(Level.Verbose, $"MainThreadImpactTracker: {methodName} avgImpactTimeMs={result:F3}ms (samples={(avg?.Count ?? 0)})", Category.Performance);
+#endif
+        return result;
+      }
+      return float.MaxValue;
+    }
+
+    /// <summary>
+    /// Tries to get the impact time from the cache.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="impact">The impact time in milliseconds.</param>
+    /// <returns>True if the impact was found, false otherwise.</returns>
+    public static bool TryGetImpact(string methodName, out double impact)
+    {
+      return _impactCache.TryGetValue(methodName, out impact);
+    }
+
+    /// <summary>
+    /// Gets the average processing time per item for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The average time per item in milliseconds.</returns>
+    public static float GetAvgItemTimeMs(string methodName) => GetAverageItemImpact(methodName);
+
+    public static float GetTaskCost(string taskKey)
+    {
+      float cost = GetAverageItemImpact(taskKey);
+      return cost == float.MaxValue ? 0.3f : cost; // Slightly higher default than coroutine
+    }
+
+    public static void AddThreadSafetySample(string methodName, bool isTaskSafe)
+    {
+      _threadSafetyCache.AddOrUpdate(methodName, isTaskSafe, (_, _) => isTaskSafe);
+    }
+
+    public static bool TryGetThreadSafety(string methodName, out bool isTaskSafe)
+    {
+      return _threadSafetyCache.TryGetValue(methodName, out isTaskSafe);
+    }
+
+    /// <summary>
+    /// Maintains a rolling average of performance samples.
+    /// </summary>
+    internal class RollingAverage
+    {
+      internal readonly double[] _samples;
+      private int _count;
+      internal double _sum;
+      private readonly int _maxCount;
+      public int Count => _count;
+
+      public RollingAverage(int maxCount)
+      {
+        _samples = new double[maxCount];
+        _count = 0;
+        _sum = 0;
+        _maxCount = maxCount;
+      }
+
+      /// <summary>
+      /// Adds a performance sample to the rolling average.
+      /// </summary>
+      /// <param name="value">The sample value in milliseconds.</param>
+      public void AddSample(double value)
+      {
+        if (_count < _maxCount)
+        {
+          _samples[_count] = value;
+          _sum += value;
+          _count++;
+        }
+        else
+        {
+          _sum -= _samples[_count % _maxCount];
+          _samples[_count % _maxCount] = value;
+          _sum += value;
+        }
+        AddPerformanceSample(Thread.CurrentThread.ManagedThreadId == 1 ? $"MainThread_{Environment.StackTrace}" : Environment.StackTrace, value);
+      }
+
+      /// <summary>
+      /// Gets the current rolling average.
+      /// </summary>
+      /// <returns>The average time in milliseconds.</returns>
+      public double GetAverage()
+      {
+        return _count == 0 ? 0 : Math.Clamp(_sum / _count, MIN_AVG_TIME_MS, MAX_AVG_TIME_MS);
+      }
+    }
+
+    /// <summary>
+    /// Adds a performance sample to the cache.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
+    public static void AddPerformanceSample(string methodName, double avgItemTimeMs)
+    {
+      if (avgItemTimeMs <= 0) return;
+      if (_averageCache.Count >= MAX_CACHE_SIZE)
+      {
+        var oldestKey = _averageCache.Keys.FirstOrDefault();
+        if (oldestKey != null)
+          _averageCache.TryRemove(oldestKey, out _);
+      }
+      _averageCache.AddOrUpdate(methodName, avgItemTimeMs, (_, _) => avgItemTimeMs);
+    }
+
+    /// <summary>
+    /// Stores performance metrics for a method.
+    /// </summary>
+    [BurstCompile]
+    public struct Metric
+    {
+      public FixedString64Bytes MethodName;
+      public float ExecutionTimeMs;
+      public float MainThreadImpactMs;
+      public int ItemCount;
+    }
+
+    /// <summary>
+    /// Tracks execution time of a non-Burst iteration and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The action to execute and measure.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    internal static void TrackNonBurstIteration(string methodName, Action action, int itemCount = 1) //TODO: not implemented?
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      double timeMs = _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency;
+      AddSample(methodName, timeMs / itemCount, isNonBurst: true);
+      UpdateMetric(methodName, timeMs, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Tracks execution time of a function and updates metrics.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function.</typeparam>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The function to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    /// <returns>The result of the function.</returns>
+    internal static T TrackExecution<T>(string methodName, Func<T> action, int itemCount = 1) //TODO: not implemented?
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      T result = action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+      return result;
+    }
+
+    /// <summary>
+    /// Tracks execution time of an async action and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The async action to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    internal static async Task TrackExecutionAsync(string methodName, Func<Task> action, int itemCount = 1) //TODO: not implemented?
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      await action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Tracks execution time of a task and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The action to execute in a task.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    internal static void TrackExecutionTask(string methodName, Action action, int itemCount = 1) //TODO: not implemented?
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Tracks execution time of an async task and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The async function to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    public static async Task TrackExecutionTaskAsync(string methodName, Func<Task> action, int itemCount = 1)
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      var creationStartTicks = _stopwatch.ElapsedTicks;
+      var task = Task.Run(() =>
+      {
+        if (Thread.CurrentThread.ManagedThreadId == 1)
+        {
+          Log(Level.Warning, $"Task for {methodName} executed on main thread", Category.Performance);
+        }
+        try
+        {
+          action().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+          Log(Level.Error, $"Task execution failed for {methodName}: {ex.Message}", Category.Performance);
+          throw;
+        }
+      });
+      var creationEndTicks = _stopwatch.ElapsedTicks;
+      double creationOverheadMs = (creationEndTicks - creationStartTicks) * 1000.0 / Stopwatch.Frequency;
+      AddTaskOverheadSample(methodName, creationOverheadMs);
+      ThreadPool.GetAvailableThreads(out _availableWorkerThreads, out _);
+      if (_availableWorkerThreads < SystemInfo.processorCount / 2)
+      {
+        Log(Level.Warning, $"Thread pool contention detected for {methodName}: availableWorkerThreads={_availableWorkerThreads}", Category.Performance);
+      }
+
+      await task.ConfigureAwait(false);
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Executes a function within Unity's synchronization context and tracks performance.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function.</typeparam>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The function to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    /// <returns>The result of the function.</returns>
+    public static async Task<T> ExecuteWithUnitySyncContext<T>(string methodName, Func<T> action, int itemCount = 1)
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      T result = default;
+      await Task.Run(() =>
+      {
+        _unitySyncContext.Post(_ =>
+              {
+                try
+                {
+                  result = action();
+                }
+                catch (Exception ex)
+                {
+                  Log(Level.Error, $"Unity object access failed in {methodName}: {ex.Message}", Category.Performance);
+                  throw;
+                }
+              }, null);
+      }).ConfigureAwait(false);
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+      return result;
+    }
+
+    /// <summary>
+    /// Gets the average task creation overhead for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The average task creation overhead in milliseconds.</returns>
+    public static float GetTaskCreationOverhead(string methodName)
+    {
+      if (_taskCreationAverages.TryGetValue(methodName, out var avg))
+      {
+        return (float)avg.GetAverage();
+      }
+      return 0.1f; // Default overhead estimate
+    }
+
+    /// <summary>
+    /// Tracks execution time of an async function and updates metrics.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function.</typeparam>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="action">The async function to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    /// <returns>The result of the function.</returns>
+    internal static async Task<T> TrackExecutionAsync<T>(string methodName, Func<Task<T>> action, int itemCount = 1) //TODO: not implemented?
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      T result = await action();
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+      return result;
+    }
+
+    /// <summary>
+    /// Tracks execution time of a coroutine and updates metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="coroutine">The coroutine to execute.</param>
+    /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    /// <returns>An enumerator for the coroutine.</returns>
+    internal static IEnumerator TrackExecutionCoroutine(string methodName, IEnumerator coroutine, int itemCount = 1)
+    {
+      var impact = BeginSample(methodName);
+      _stopwatch.Restart();
+      while (coroutine.MoveNext())
+        yield return coroutine.Current;
+      _stopwatch.Stop();
+      float mainThreadImpactMs = EndSample(impact);
+      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
+    }
+
+    /// <summary>
+    /// Tracks execution time of a Burst-compiled job and stores metrics.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="executionTimeMs">Execution time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    /// <param name="metrics">Array to store metrics.</param>
+    /// <param name="logs">Native list for logging performance data.</param>
+    /// <param name="index">Index in the metrics array.</param>
+    [BurstCompile]
+    internal static void TrackExecutionBurst( //TODO: not implemented?
+        FixedString64Bytes methodName,
+        float executionTimeMs,
+        int itemCount,
+        NativeArray<Metric> metrics,
+        NativeList<LogEntry> logs,
+        int index)
+    {
+      metrics[index] = new Metric
+      {
+        MethodName = methodName,
+        ExecutionTimeMs = executionTimeMs,
+        MainThreadImpactMs = 0,
+        ItemCount = itemCount
+      };
+#if DEBUG
+      logs.Add(new LogEntry
+      {
+        Level = Level.Verbose,
+        Message = $"Burst job tracked for {methodName}: time={executionTimeMs:F3}ms, items={itemCount}",
+        Category = Category.Performance
+      });
+#endif
+    }
+
+    /// <summary>
+    /// Tracks cache access for a Burst-compiled job and updates metrics.
+    /// </summary>
+    /// <param name="cacheName">The name of the cache.</param>
+    /// <param name="isHit">Whether the cache access was a hit.</param>
+    /// <param name="logs">Native list for logging performance data.</param>
+    [BurstCompile]
+    public static void TrackCacheAccess(FixedString64Bytes cacheName, bool isHit, NativeList<LogEntry> logs)
+    {
+      if (Metrics.TryGetValue(cacheName, out var existing))
+      {
+        var updated = new MetricData
+        {
+          CallCount = existing.CallCount,
+          TotalTimeMs = existing.TotalTimeMs,
+          MaxTimeMs = existing.MaxTimeMs,
+          TotalMainThreadImpactMs = existing.TotalMainThreadImpactMs,
+          MaxMainThreadImpactMs = existing.MaxMainThreadImpactMs,
+          CacheHits = existing.CacheHits + (isHit ? 1 : 0),
+          CacheMisses = existing.CacheMisses + (isHit ? 0 : 1),
+          ItemCount = existing.ItemCount,
+          AvgItemTimeMs = existing.AvgItemTimeMs,
+          AvgMainThreadImpactMs = existing.AvgMainThreadImpactMs
+        };
+        Metrics.AddOrUpdate(cacheName, updated, logs);
+      }
+      else
+      {
+        var newMetric = new MetricData
+        {
+          CallCount = 1,
+          CacheHits = isHit ? 1 : 0,
+          CacheMisses = isHit ? 0 : 1,
+          ItemCount = 0,
+          AvgItemTimeMs = 0,
+          AvgMainThreadImpactMs = 0
+        };
+        Metrics.AddOrUpdate(cacheName, newMetric, logs);
+      }
+#if DEBUG
+      logs.Add(new LogEntry
+      {
+        Level = Level.Verbose,
+        Message = $"Cache access tracked for {cacheName}: isHit={isHit}",
+        Category = Category.Performance
+      });
+#endif
+    }
+
+    /// <summary>
+    /// Updates all performance metrics and logs results.
+    /// </summary>
+    private static void UpdateMetrics()
+    {
+      foreach (var kvp in NonBurstMetrics)
+      {
+        var m = kvp.Value;
+        if (m.CallCount == 0) continue;
+        Log(Level.Info,
+            $"Metric {kvp.Key}: Calls={m.CallCount}, AvgTime={(m.TotalTimeMs / m.CallCount):F2}ms, MaxTime={m.MaxTimeMs:F2}ms, " +
+            $"AvgMainThreadImpact={(m.TotalMainThreadImpactMs / m.CallCount):F2}ms, MaxMainThreadImpact={m.MaxMainThreadImpactMs:F2}ms, " +
+            $"CacheHitRate={(m.CacheHits / (double)(m.CacheHits + m.CacheMisses) * 100):F1}%, " +
+            $"Items={m.ItemCount}, AvgItemTime={(m.AvgItemTimeMs):F3}ms, AvgItemMainThreadImpact={(m.AvgMainThreadImpactMs):F3}ms",
+            Category.Performance);
+      }
+    }
+
+    /// <summary>
+    /// Cleans up performance metrics resources and clears caches.
+    /// </summary>
+    [BurstCompile]
+    public static void Cleanup()
+    {
+      MetricsThresholds.Clear();
+      Metrics.Dispose();
+      _burstSamples.Dispose();
+      NonBurstMetrics.Clear();
+      _averageCache.Clear();
+      _impactCache.Clear();
+      _threadSafetyCache.Clear();
+      _taskCreationAverages.Clear();
+      _mainThreadImpacts.Clear();
+      _taskOverheadAverages.Clear();
+      _schedulingAverages.Clear();
+      RollingAverages.Clear();
+      BatchSizeHistory.Clear();
+      ImpactAverages.Clear();
+      _isInitialized = false;
+      Log(Level.Info, "PerformanceMetrics cleaned up", Category.Performance);
+    }
+
+
+    /// <summary>
+    /// Tracks cache access for a Burst-compiled job and updates metrics.
+    /// </summary>
+    /// <param name="cacheName">The name of the cache.</param>
+    /// <param name="isHit">Whether the cache access was a hit.</param>
+    /// <param name="logs">Native list for logging performance data.</param>
+    [BurstCompile]
+    public static void TrackJobCacheAccess(FixedString64Bytes cacheName, bool isHit, NativeList<LogEntry> logs) //TODO: not implemented?
+    {
+      if (Metrics.TryGetValue(cacheName, out var metricData))
+      {
+        Metrics[cacheName] = UpdateCacheData(metricData, isHit);
+      }
+      else
+      {
+        Metrics.TryAdd(cacheName, CreateCacheData(isHit));
+      }
+
+#if DEBUG
+      // Defer logging to a Burst-compatible NativeList
+      logs.Add(new(Level.Verbose, $"Cache access tracked for {cacheName}: isHit={isHit}", Category.Performance));
+#endif
+    }
+
+    /// <summary>
+    /// Creates a new MetricData instance for a cache access.
+    /// </summary>
+    /// <param name="isHit">Whether the cache access was a hit.</param>
+    /// <returns>The created MetricData instance.</returns>
+    [BurstCompile]
+    private static MetricData CreateCacheData(bool isHit)
+    {
+      return new MetricData
+      {
+        CacheHits = isHit ? 1 : 0,
+        CacheMisses = isHit ? 0 : 1
+      };
+    }
+
+    /// <summary>
+    /// Updates an existing MetricData instance with cache access data.
+    /// </summary>
+    /// <param name="existing">The existing MetricData instance.</param>
+    /// <param name="isHit">Whether the cache access was a hit.</param>
+    /// <returns>The updated MetricData instance.</returns>
+    [BurstCompile]
+    private static MetricData UpdateCacheData(MetricData existing, bool isHit)
+    {
+      return new MetricData
+      {
+        CallCount = existing.CallCount,
+        TotalTimeMs = existing.TotalTimeMs,
+        MaxTimeMs = existing.MaxTimeMs,
+        TotalMainThreadImpactMs = existing.TotalMainThreadImpactMs,
+        MaxMainThreadImpactMs = existing.MaxMainThreadImpactMs,
+        CacheHits = existing.CacheHits + (isHit ? 1 : 0),
+        CacheMisses = existing.CacheMisses + (isHit ? 0 : 1),
+        ItemCount = existing.ItemCount,
+        AvgItemTimeMs = existing.AvgItemTimeMs,
+        AvgMainThreadImpactMs = existing.AvgMainThreadImpactMs
+      };
+    }
+
+    /// <summary>
+    /// Creates a new MetricData instance for a method execution.
+    /// </summary>
+    /// <param name="timeMs">Execution time in milliseconds.</param>
+    /// <param name="mainThreadImpactMs">Main thread impact time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    /// <returns>The created MetricData instance.</returns>
+    [BurstCompile]
+    private static MetricData CreateMetricData(double timeMs, float mainThreadImpactMs, int itemCount)
+    {
+      return new MetricData
+      {
+        CallCount = 1,
+        TotalTimeMs = timeMs,
+        MaxTimeMs = timeMs,
+        TotalMainThreadImpactMs = mainThreadImpactMs,
+        MaxMainThreadImpactMs = mainThreadImpactMs,
+        ItemCount = itemCount,
+        AvgItemTimeMs = itemCount > 0 ? timeMs / itemCount : 0,
+        AvgMainThreadImpactMs = itemCount > 0 ? mainThreadImpactMs / itemCount : 0
+      };
+    }
+
+    /// <summary>
+    /// Updates an existing MetricData instance with new execution data.
+    /// </summary>
+    /// <param name="existing">The existing MetricData instance.</param>
+    /// <param name="timeMs">Execution time in milliseconds.</param>
+    /// <param name="mainThreadImpactMs">Main thread impact time in milliseconds.</param>
+    /// <param name="itemCount">Number of items processed.</param>
+    /// <returns>The updated MetricData instance.</returns>
+    [BurstCompile]
+    private static MetricData UpdateMetricData(MetricData existing, double timeMs, float mainThreadImpactMs, int itemCount)
+    {
+      return new MetricData
+      {
+        CallCount = existing.CallCount + 1,
+        TotalTimeMs = existing.TotalTimeMs + timeMs,
+        MaxTimeMs = Math.Max(existing.MaxTimeMs, timeMs),
+        TotalMainThreadImpactMs = existing.TotalMainThreadImpactMs + mainThreadImpactMs,
+        MaxMainThreadImpactMs = Math.Max(existing.MaxMainThreadImpactMs, mainThreadImpactMs),
+        CacheHits = existing.CacheHits,
+        CacheMisses = existing.CacheMisses,
+        ItemCount = existing.ItemCount + itemCount,
+        AvgItemTimeMs = existing.ItemCount + itemCount > 0 ? (existing.TotalTimeMs + timeMs) / (existing.ItemCount + itemCount) : existing.AvgItemTimeMs,
+        AvgMainThreadImpactMs = existing.ItemCount + itemCount > 0 ? (existing.TotalMainThreadImpactMs + mainThreadImpactMs) / (existing.ItemCount + itemCount) : existing.AvgMainThreadImpactMs
+      };
+    }
+  }
+}

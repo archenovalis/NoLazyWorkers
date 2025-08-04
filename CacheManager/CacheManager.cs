@@ -4,28 +4,38 @@ using ScheduleOne.Management;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Property;
 using ScheduleOne.Product;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
 using Unity.Collections;
 using FishNet;
 using static NoLazyWorkers.Storage.ShelfExtensions;
-using NoLazyWorkers.Performance;
+using NoLazyWorkers.SmartExecution;
 using Unity.Burst;
 using System.Collections;
 using static NoLazyWorkers.TaskService.Extensions;
 using ScheduleOne.Delivery;
-using static NoLazyWorkers.Storage.ManagedDictionaries;
+using static NoLazyWorkers.CacheManager.ManagedDictionaries;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Debug.Deferred;
-using UnityEngine.Pool;
 using NoLazyWorkers.Extensions;
 using FishNet.Object;
+using static NoLazyWorkers.Extensions.PoolUtility;
+using static NoLazyWorkers.CacheManager.CacheService;
+using NoLazyWorkers.Storage;
+using Unity.Services.Qos.Internal;
+using UnityEngine;
 
-namespace NoLazyWorkers.Storage
+namespace NoLazyWorkers.CacheManager
 {
+  /// <summary>
+  /// Provides extension structs and methods for managing storage operations in a networked environment.
+  /// </summary>
   public static class Extensions
   {
+    /// <summary>
+    /// Represents a slot update operation.
+    /// </summary>
     [BurstCompile]
     public struct SlotUpdate
     {
@@ -69,7 +79,7 @@ namespace NoLazyWorkers.Storage
       public bool IsInsert;
       public int LockerId;
       public FixedString128Bytes LockReason;
-      public bool IsValid => Slot.IsValid && LockerId != 0 && Quantity > 0;
+      public bool IsValid => LockerId != 0 && Quantity > 0;
     }
 
     /// <summary>
@@ -113,46 +123,92 @@ namespace NoLazyWorkers.Storage
       LoadingDock
     }
 
+    /// <summary>
+    /// Represents a key for identifying an item with ID, packaging, and quality.
+    /// </summary>
     public readonly struct ItemKey : IEquatable<ItemKey>
     {
-      public readonly FixedString32Bytes ItemId;
-      public readonly FixedString32Bytes PackagingId;
+      public readonly FixedString32Bytes ID;
+      public readonly FixedString32Bytes PackagingID;
       public readonly EQualityBurst Quality;
+
+      public ItemKey()
+      {
+        ID = "";
+        PackagingID = "";
+        Quality = EQualityBurst.None;
+      }
 
       public ItemKey(ItemInstance item)
       {
         if (item == null)
         {
-          ItemId = "";
-          PackagingId = "";
+          ID = "";
+          PackagingID = "";
           Quality = EQualityBurst.None;
         }
         else
         {
           var itemKey = new ItemData(item);
-          ItemId = itemKey.Id;
-          PackagingId = itemKey.PackagingId;
+          ID = itemKey.ID;
+          PackagingID = itemKey.PackagingID;
           Quality = itemKey.Quality;
         }
       }
 
       public ItemKey(ItemData itemKey)
       {
-        ItemId = itemKey.Id;
-        PackagingId = itemKey.PackagingId;
+        ID = itemKey.ID;
+        PackagingID = itemKey.PackagingID;
         Quality = itemKey.Quality;
       }
 
       public new string ToString()
       {
-        return ItemId.ToString() +
-               (PackagingId.ToString() != "" ? " Packaging:" + PackagingId.ToString() : "") +
+        return ID.ToString() +
+               (PackagingID.ToString() != "" ? " Packaging:" + PackagingID.ToString() : "") +
                (Quality != EQualityBurst.None ? " Quality:" + Quality.ToString() : "");
       }
 
-      public bool Equals(ItemKey other) => ItemId == other.ItemId && PackagingId == other.PackagingId && Quality == other.Quality;
+      public bool Equals(ItemKey other) => ID == other.ID && PackagingID == other.PackagingID && Quality == other.Quality;
       public override bool Equals(object obj) => obj is ItemKey other && Equals(other);
-      public override int GetHashCode() => HashCode.Combine(ItemId, PackagingId, Quality);
+      public override int GetHashCode() => HashCode.Combine(ID, PackagingID, Quality);
+
+
+      [BurstCompile]
+      internal bool AdvCanStackWithBurst(NativeList<ItemKey> refills, bool allowTargetHigherQuality = false)
+      {
+        foreach (var item in refills)
+        {
+          if (item.ID == "Any")
+          {
+            if (allowTargetHigherQuality ? item.Quality <= Quality : item.Quality == Quality)
+              return true;
+          }
+          else
+          {
+            if (item.ID != ID)
+            {
+              continue;
+            }
+            if (!(item.PackagingID == "" && PackagingID == "") ||
+                (item.PackagingID != "" && PackagingID != "" && item.PackagingID == PackagingID))
+              continue;
+            if (allowTargetHigherQuality ? item.Quality <= Quality : item.Quality == Quality)
+              return true;
+          }
+        }
+        return false;
+      }
+
+      [BurstCompile]
+      internal bool AdvCanStackWithBurst(ItemKey refill, bool allowTargetHigherQuality = false)
+      {
+        var list = new NativeList<ItemKey>(Allocator.TempJob) { refill };
+        var result = AdvCanStackWithBurst(list, allowTargetHigherQuality);
+        list.Dispose();
+        return result;
+      }
     }
 
     /// <summary>
@@ -161,48 +217,64 @@ namespace NoLazyWorkers.Storage
     [BurstCompile]
     public struct ItemData : IEquatable<ItemData>
     {
-      public FixedString32Bytes Id;
-      public FixedString32Bytes PackagingId;
+      public FixedString32Bytes ID;
+      public FixedString32Bytes PackagingID;
       public EQualityBurst Quality;
       public int Quantity;
       public int StackLimit;
       public static ItemData Empty => new ItemData("", "", EQualityBurst.None, 0, -1);
 
+      /// <summary>
+      /// Initializes ItemData from an ItemInstance.
+      /// </summary>
+      /// <param name="item">The item instance to initialize from.</param>
       public ItemData(ItemInstance item)
       {
-        Id = item.ID ?? throw new ArgumentNullException(nameof(Id));
-        PackagingId = (item as ProductItemInstance)?.AppliedPackaging?.ID ?? "";
-        Quality = (item is ProductItemInstance prodItem) ? Enum.Parse<EQualityBurst>(prodItem.Quality.ToString()) : EQualityBurst.None;
+        ID = item.ID ?? throw new ArgumentNullException(nameof(ID));
+        PackagingID = (item as ProductItemInstance)?.AppliedPackaging?.ID ?? "";
+        Quality = (item is QualityItemInstance qualItem) ? Enum.Parse<EQualityBurst>(qualItem.Quality.ToString()) : EQualityBurst.None;
         Quantity = item.Quantity;
         StackLimit = item.StackLimit;
       }
 
+      /// <summary>
+      /// Initializes ItemData with specific item details.
+      /// </summary>
+      /// <param name="id">The item ID.</param>
+      /// <param name="packagingId">The packaging ID.</param>
+      /// <param name="quality">The item quality.</param>
+      /// <param name="quantity">The item quantity.</param>
+      /// <param name="stackLimit">The stack limit for the item.</param>
       public ItemData(string id, string packagingId, EQualityBurst? quality, int quantity, int stackLimit)
       {
-        Id = id ?? "";
-        PackagingId = packagingId ?? "";
+        ID = id ?? "";
+        PackagingID = packagingId ?? "";
         Quality = quality ?? EQualityBurst.None;
         Quantity = quantity;
         StackLimit = stackLimit;
       }
-
+      public ItemKey ItemKey => new ItemKey(this);
       public string ItemId => CacheId + " Quantity=" + Quantity;
-      public string CacheId => Id.ToString() + (PackagingId.ToString() != "" ? " Packaging:" + PackagingId.ToString() : "") + (Quality != EQualityBurst.None ? " Quality:" + Quality.ToString() : "") + " Stacklimit=" + StackLimit;
+      public string CacheId => ID.ToString() + (PackagingID.ToString() != "" ? " Packaging:" + PackagingID.ToString() : "") + (Quality != EQualityBurst.None ? " Quality:" + Quality.ToString() : "") + " Stacklimit=" + StackLimit;
 
-      public bool Equals(ItemData other) => Id == other.Id && PackagingId == other.PackagingId && Quality == other.Quality;
+      public bool Equals(ItemData other) => ID == other.ID && PackagingID == other.PackagingID && Quality == other.Quality;
       public override bool Equals(object obj) => obj is ItemData other && Equals(other);
-      public override int GetHashCode() => HashCode.Combine(Id, PackagingId, Quality);
+      public override int GetHashCode() => HashCode.Combine(ID, PackagingID, Quality);
 
+      /// <summary>
+      /// Creates an ItemInstance from the ItemData.
+      /// </summary>
+      /// <returns>The created ItemInstance.</returns>
       public ItemInstance CreateItemInstance()
       {
-        string itemId = Id.ToString();
-        if (PackagingId != "")
+        string itemId = ID.ToString();
+        if (PackagingID != "")
         {
           return new ProductItemInstance
           {
             ID = itemId,
             Quality = Enum.Parse<EQuality>(Quality.ToString()),
-            PackagingID = PackagingId.ToString()
+            PackagingID = PackagingID.ToString()
           };
         }
         if (Quality != EQualityBurst.None)
@@ -217,16 +289,23 @@ namespace NoLazyWorkers.Storage
                throw new ArgumentException($"No default item instance for ID: {itemId}");
       }
 
+      /// <summary>
+      /// Checks if this item can stack with another item, optimized for Burst compilation.
+      /// </summary>
+      /// <param name="targetItem">The target item to check stacking with.</param>
+      /// <param name="allowTargetHigherQuality">Whether to allow higher quality items.</param>
+      /// <param name="checkQuantities">Whether to check quantities against stack limit.</param>
+      /// <returns>True if the items can stack, false otherwise.</returns>
       [BurstCompile]
       internal readonly bool AdvCanStackWithBurst(ItemData targetItem, bool allowTargetHigherQuality = false, bool checkQuantities = false)
       {
         bool qualityMatch;
-        if (targetItem.Id == "Any")
+        if (targetItem.ID == "Any")
         {
           qualityMatch = allowTargetHigherQuality ? Quality <= targetItem.Quality : Quality == targetItem.Quality;
           return qualityMatch;
         }
-        if (Id != targetItem.Id)
+        if (ID != targetItem.ID)
           return false;
         if (checkQuantities)
         {
@@ -235,55 +314,62 @@ namespace NoLazyWorkers.Storage
           if (StackLimit < targetItem.Quantity + Quantity)
             return false;
         }
-        if (!ArePackagingsCompatible(targetItem))
+        if (!((PackagingID == "" && targetItem.PackagingID == "") ||
+               (PackagingID != "" && targetItem.PackagingID != "" && PackagingID == targetItem.PackagingID)))
           return false;
         qualityMatch = allowTargetHigherQuality ? Quality <= targetItem.Quality : Quality == targetItem.Quality;
         return qualityMatch;
       }
-
-      [BurstCompile]
-      private readonly bool ArePackagingsCompatible(ItemData targetItem)
-      {
-        return (PackagingId == "" && targetItem.PackagingId == "") ||
-               (PackagingId != "" && targetItem.PackagingId != "" && PackagingId == targetItem.PackagingId);
-      }
     }
 
+    /// <summary>
+    /// Represents storage data for a storage entity, optimized for Burst compilation.
+    /// </summary>
     [BurstCompile]
     public struct StorageData : IEquatable<StorageData>, IDisposable
     {
       public readonly Guid Guid;
-      public readonly int PropertyId;
-      public NativeList<SlotData> OutputSlots;
+      public readonly FixedString32Bytes PropertyName;
+      public NativeList<SlotData> Slots;
       public NativeParallelMultiHashMap<ItemKey, int> ItemToSlots;
       public readonly StorageType StorageType;
 
+      /// <summary>
+      /// Initializes StorageData from a PlaceableStorageEntity.
+      /// </summary>
+      /// <param name="shelf">The storage entity to initialize from.</param>
       public StorageData(PlaceableStorageEntity shelf)
       {
         Guid = shelf.GUID;
-        PropertyId = shelf.ParentProperty.NetworkObject.ObjectId;
-        OutputSlots = new NativeList<SlotData>(Allocator.Persistent);
+        PropertyName = shelf.ParentProperty.name;
+        Slots = new NativeList<SlotData>(Allocator.Persistent);
         ItemToSlots = new NativeParallelMultiHashMap<ItemKey, int>(shelf.StorageEntity.SlotCount, Allocator.Persistent);
-        StorageType = StorageConfigs.TryGetValue(shelf.ParentProperty, out var configs) &&
-                      configs.TryGetValue(shelf.GUID, out var config) && config.Mode == StorageMode.Specific
+        StorageType = GetOrCreateService(shelf.ParentProperty).StorageConfigs.TryGetValue(shelf.GUID, out var config) && config.Mode == StorageMode.Specific
             ? StorageType.SpecificShelf
             : StorageType.AnyShelf;
         foreach (var slot in shelf.OutputSlots)
         {
-          OutputSlots.Add(new SlotData(shelf.GUID, slot, StorageType));
+          Slots.Add(new SlotData(shelf.GUID, slot, StorageType));
           if (slot.ItemInstance != null)
             ItemToSlots.Add(new ItemKey(slot.ItemInstance), slot.SlotIndex);
         }
       }
 
+      /// <summary>
+      /// Converts StorageData to a PlaceableStorageEntity.
+      /// </summary>
+      /// <returns>The corresponding PlaceableStorageEntity.</returns>
       public PlaceableStorageEntity ToPlaceableStorageEntity()
       {
-        return Storages[IdToProperty[PropertyId]][Guid];
+        return GetOrCreateService(PropertyByName[PropertyName.ToString()]).Storages[Guid];
       }
 
+      /// <summary>
+      /// Disposes of native collections used by the StorageData.
+      /// </summary>
       public void Dispose()
       {
-        if (OutputSlots.IsCreated) OutputSlots.Dispose();
+        if (Slots.IsCreated) Slots.Dispose();
         if (ItemToSlots.IsCreated) ItemToSlots.Dispose();
       }
 
@@ -292,6 +378,9 @@ namespace NoLazyWorkers.Storage
       public override int GetHashCode() => Guid.GetHashCode();
     }
 
+    /// <summary>
+    /// Represents data for a loading dock, optimized for Burst compilation.
+    /// </summary>
     [BurstCompile]
     public struct LoadingDockData : IEquatable<LoadingDockData>, IDisposable
     {
@@ -302,6 +391,10 @@ namespace NoLazyWorkers.Storage
       public NativeParallelMultiHashMap<ItemKey, int> ItemToSlots;
       public readonly StorageType StorageType;
 
+      /// <summary>
+      /// Initializes LoadingDockData from a LoadingDock.
+      /// </summary>
+      /// <param name="dock">The loading dock to initialize from.</param>
       public LoadingDockData(LoadingDock dock)
       {
         Guid = dock.GUID;
@@ -322,6 +415,9 @@ namespace NoLazyWorkers.Storage
         }
       }
 
+      /// <summary>
+      /// Disposes of native collections used by the LoadingDockData.
+      /// </summary>
       public void Dispose()
       {
         if (OutputSlots.IsCreated) OutputSlots.Dispose();
@@ -333,24 +429,33 @@ namespace NoLazyWorkers.Storage
       public override int GetHashCode() => Guid.GetHashCode();
     }
 
+    /// <summary>
+    /// Represents data for a station, optimized for Burst compilation.
+    /// </summary>
     [BurstCompile]
     public struct StationData : IEquatable<StationData>, IDisposable
     {
       public readonly Guid Guid;
-      public readonly int PropertyId;
+      public readonly FixedString32Bytes PropertyName;
       public readonly EntityType EntityType;
       public NativeList<SlotData> InsertSlots;
       public NativeList<SlotData> ProductSlots;
       public SlotData OutputSlot;
       public NativeParallelMultiHashMap<ItemKey, int> ItemToSlots;
       public bool IsInUse;
+      public int StartThreshold;
       public NativeList<ItemKey> RefillList;
       public int State;
 
+      /// <summary>
+      /// Initializes StationData from an IStationAdapter.
+      /// </summary>
+      /// <param name="station">The station adapter to initialize from.</param>
       public StationData(IStationAdapter station)
       {
         Guid = station.GUID;
-        PropertyId = station.ParentProperty.NetworkObject.ObjectId;
+        StartThreshold = station.StartThreshold;
+        PropertyName = station.ParentProperty.name;
         InsertSlots = new NativeList<SlotData>(Allocator.Persistent);
         ProductSlots = new NativeList<SlotData>(Allocator.Persistent);
         ItemToSlots = new NativeParallelMultiHashMap<ItemKey, int>(10, Allocator.Persistent);
@@ -373,15 +478,21 @@ namespace NoLazyWorkers.Storage
           ItemToSlots.Add(new ItemKey(station.OutputSlot.ItemInstance), station.OutputSlot.SlotIndex);
         EntityType = station.EntityType;
         IsInUse = station.IsInUse;
-        foreach (var item in station.RefillList())
-          RefillList.Add(new ItemKey(item));
+        RefillList = station.RefillList();
       }
 
+      /// <summary>
+      /// Converts StationData to an IStationAdapter.
+      /// </summary>
+      /// <returns>The corresponding IStationAdapter.</returns>
       public IStationAdapter ToStationAdapter()
       {
-        return IStations[IdToProperty[PropertyId]][Guid];
+        return GetOrCreateService(PropertyByName[PropertyName.ToString()]).IStations[Guid];
       }
 
+      /// <summary>
+      /// Disposes of native collections used by the StationData.
+      /// </summary>
       public void Dispose()
       {
         if (InsertSlots.IsCreated) InsertSlots.Dispose();
@@ -395,19 +506,27 @@ namespace NoLazyWorkers.Storage
       public override int GetHashCode() => Guid.GetHashCode();
     }
 
+    /// <summary>
+    /// Represents data for an employee, optimized for Burst compilation.
+    /// </summary>
     [BurstCompile]
     public struct EmployeeData : IEquatable<EmployeeData>, IDisposable
     {
       public readonly Guid Guid;
-      public readonly int PropertyId;
+      public readonly FixedString32Bytes PropertyName;
+      public readonly EntityType EntityType;
       public NativeList<SlotData> InventorySlots;
       public NativeParallelMultiHashMap<ItemKey, int> ItemToSlots;
-      public readonly EntityType EntityType;
+      public EmployeeAction CurrentAction;
 
+      /// <summary>
+      /// Initializes EmployeeData from an IEmployeeAdapter.
+      /// </summary>
+      /// <param name="employee">The employee adapter to initialize from.</param>
       public EmployeeData(IEmployeeAdapter employee)
       {
         Guid = employee.Guid;
-        PropertyId = employee.AssignedProperty.NetworkObject.ObjectId;
+        PropertyName = employee.AssignedProperty.name;
         InventorySlots = new NativeList<SlotData>(Allocator.Persistent);
         ItemToSlots = new NativeParallelMultiHashMap<ItemKey, int>(10, Allocator.Persistent);
         EntityType = employee.EntityType;
@@ -419,11 +538,18 @@ namespace NoLazyWorkers.Storage
         }
       }
 
+      /// <summary>
+      /// Converts EmployeeData to an IEmployeeAdapter.
+      /// </summary>
+      /// <returns>The corresponding IEmployeeAdapter.</returns>
       public IEmployeeAdapter ToEmployeeAdapter()
       {
-        return IEmployees[IdToProperty[PropertyId]][Guid];
+        return GetOrCreateService(PropertyByName[PropertyName.ToString()]).IEmployees[Guid];
       }
 
+      /// <summary>
+      /// Disposes of native collections used by the EmployeeData.
+      /// </summary>
       public void Dispose()
       {
         if (InventorySlots.IsCreated) InventorySlots.Dispose();
@@ -435,33 +561,40 @@ namespace NoLazyWorkers.Storage
       public override int GetHashCode() => Guid.GetHashCode();
     }
 
+    /// <summary>
+    /// Represents data for a slot, optimized for Burst compilation.
+    /// </summary>
     [BurstCompile]
     public struct SlotData : IEquatable<SlotData>
     {
-      public int PropertyId;
+      public FixedString32Bytes PropertyName;
       public Guid EntityGuid;
       public int SlotIndex;
       public ItemData Item;
       public int Quantity;
       public bool IsLocked;
       public int StackLimit;
-      public bool IsValid;
       public StorageType Type;
 
+      /// <summary>
+      /// Initializes SlotData with entity GUID, slot, and storage type.
+      /// </summary>
+      /// <param name="guid">The GUID of the entity.</param>
+      /// <param name="slot">The slot to initialize from.</param>
+      /// <param name="type">The storage type of the slot.</param>
       public SlotData(Guid guid, ItemSlot slot, StorageType type)
       {
-        PropertyId = slot.GetProperty()?.NetworkObject.ObjectId ?? 0;
+        PropertyName = slot.GetProperty()?.name;
         SlotIndex = slot.SlotIndex;
         Item = slot.ItemInstance != null ? new ItemData(slot.ItemInstance) : ItemData.Empty;
         Quantity = slot.Quantity;
         IsLocked = slot.IsLocked;
         StackLimit = slot.ItemInstance?.StackLimit ?? -1;
-        IsValid = true;
         EntityGuid = guid;
         Type = type;
       }
 
-      public ItemSlot ItemSlot => new SlotKey(EntityGuid, SlotIndex).GetItemSlotFromKey(IdToProperty[PropertyId]);
+      public ItemSlot ItemSlot => new SlotKey(EntityGuid, SlotIndex).GetItemSlotFromKey(PropertyByName[PropertyName.ToString()]);
 
       public bool Equals(SlotData other) => EntityGuid == other.EntityGuid && SlotIndex == other.SlotIndex;
       public override bool Equals(object obj) => obj is SlotData other && Equals(other);
@@ -508,32 +641,28 @@ namespace NoLazyWorkers.Storage
       /// <exception cref="KeyNotFoundException">Thrown if the slot is not found.</exception>
       internal ItemSlot GetItemSlotFromKey(Property property)
       {
-        var cacheService = CacheService.GetOrCreateCacheService(property);
-        if (cacheService._slotCache.TryGetValue(this, out var slotInfo))
+        var cacheService = CacheService.GetOrCreateService(property);
+        if (cacheService.SlotCache.TryGetValue(this, out var slotInfo))
         {
           var _this = this;
           switch (slotInfo.Type)
           {
             case StorageType.AnyShelf:
             case StorageType.SpecificShelf:
-              if (Storages.TryGetValue(property, out var storages) &&
-                  storages.TryGetValue(EntityGuid, out var shelf))
+              if (cacheService.Storages.TryGetValue(EntityGuid, out var shelf))
                 return shelf.OutputSlots[SlotIndex];
               break;
             case StorageType.Station:
-              if (IStations.TryGetValue(property, out var stations) &&
-                  stations.TryGetValue(EntityGuid, out var station))
+              if (cacheService.IStations.TryGetValue(EntityGuid, out var station))
                 return station.InsertSlots.Concat(station.ProductSlots).Concat(new[] { station.OutputSlot })
                   .FirstOrDefault(s => s.SlotIndex == _this.SlotIndex);
               break;
             case StorageType.LoadingDock:
-              if (LoadingDocks.TryGetValue(property, out var docks) &&
-                  docks.TryGetValue(EntityGuid, out var dock))
+              if (cacheService.LoadingDocks.TryGetValue(EntityGuid, out var dock))
                 return dock.OutputSlots[SlotIndex];
               break;
             case StorageType.Employee:
-              if (IEmployees.TryGetValue(property, out var employees) &&
-                  employees.TryGetValue(EntityGuid, out var employee))
+              if (cacheService.IEmployees.TryGetValue(EntityGuid, out var employee))
                 return employee.InventorySlots[SlotIndex];
               break;
           }
@@ -548,7 +677,7 @@ namespace NoLazyWorkers.Storage
     [BurstCompile]
     public struct StorageResultBurst
     {
-      public int PropertyId;
+      public FixedString32Bytes PropertyName;
       public Guid ShelfGuid;
       public int AvailableQuantity;
       public NativeList<SlotData> SlotData;
@@ -559,10 +688,10 @@ namespace NoLazyWorkers.Storage
       /// <returns>The managed StorageResult.</returns>
       public StorageResult GetResult()
       {
-        var shelf = Storages[IdToProperty[PropertyId]][ShelfGuid];
+        var shelf = GetOrCreateService(PropertyByName[PropertyName.ToString()]).Storages[ShelfGuid];
         List<ItemSlot> itemSlots = new();
         foreach (var slot in SlotData)
-          itemSlots.Add(shelf.InputSlots[slot.SlotIndex]);
+          itemSlots.Add(slot.ItemSlot);
         SlotData.Dispose();
         return new StorageResult()
         {
@@ -622,24 +751,14 @@ namespace NoLazyWorkers.Storage
   /// <summary>
   /// Manages storage operations, including initialization, cleanup, and slot operations for items in a networked environment.
   /// </summary>
-  public static class StorageManager
+  public static class CacheManager
   {
     /// <summary>
     /// Indicates whether the StorageManager is initialized.
     /// </summary>
     public static bool IsInitialized { get; private set; }
 
-    internal static readonly ObjectPool<List<int>> _intListPool = new ObjectPool<List<int>>(
-        createFunc: () => new List<int>(10),
-        actionOnGet: null,
-        actionOnRelease: list => list.Clear(),
-        actionOnDestroy: null,
-        collectionCheck: false,
-        defaultCapacity: 10,
-        maxSize: 100);
-
-    internal static readonly List<Action<ItemSlot, ItemInstance, int>> _slotListeners = new();
-    internal static readonly List<Action<PlaceableStorageEntity, StorageType>> _shelfListeners = new();
+    private static NativeListPool<int> _intListPool;
 
     /// <summary>
     /// Initializes the SlotService, setting up necessary resources.
@@ -659,6 +778,7 @@ namespace NoLazyWorkers.Storage
       SlotService.Initialize();
       IsInitialized = true;
       Log(Level.Info, "StorageManager initialized", Category.Storage);
+      _intListPool = InitializeNativeListPool<int>(() => new NativeList<int>(10, Allocator.TempJob), 10, "StorageManager_IntListPool");
     }
 
     /// <summary>
@@ -666,23 +786,26 @@ namespace NoLazyWorkers.Storage
     /// </summary>
     public static void Cleanup()
     {
-      if (!IsInitialized)
-      {
-        Log(Level.Warning, "StorageManager not initialized, skipping cleanup", Category.Storage);
-        return;
-      }
+      if (!IsInitialized) return;
       if (!FishNetExtensions.IsServer)
       {
         Log(Level.Warning, "StorageManager cleanup skipped: not server", Category.Storage);
         return;
       }
       SlotService.Cleanup();
-      foreach (var cacheService in CacheServices.Values.ToList())
-        cacheService.Dispose();
-      CacheServices.Clear();
-      _intListPool.Clear();
-      _slotListeners.Clear();
-      _shelfListeners.Clear();
+      foreach (var cacheService in CacheServiceByProperty.Values)
+      {
+        try
+        {
+          cacheService.Dispose();
+        }
+        catch (Exception ex)
+        {
+          Log(Level.Error, $"Failed to dispose CacheService: {ex.Message}", Category.Storage);
+        }
+      }
+      DisposeNativeListPool(_intListPool, "StorageManager_IntListPool");
+      CacheServiceByProperty.Clear();
       IsInitialized = false;
       Log(Level.Info, "StorageManager cleaned up", Category.Storage);
     }
@@ -694,7 +817,7 @@ namespace NoLazyWorkers.Storage
     /// <param name="guid">The GUID of the entity to clear from cache.</param>
     public static void ClearEntityCache(Property property, Guid guid)
     {
-      CacheService.GetOrCreateCacheService(property).ClearCacheForEntity(guid);
+      GetOrCreateService(property).ClearCacheForEntity(guid);
     }
 
     /// <summary>
@@ -752,7 +875,7 @@ namespace NoLazyWorkers.Storage
         yield break;
       }
 
-      var cacheService = CacheService.GetOrCreateCacheService(property);
+      var cacheService = GetOrCreateService(property);
       var itemKey = new ItemKey(item);
       var itemData = new ItemData(item);
       if (cacheService.IsItemNotFound(itemKey))
@@ -763,16 +886,27 @@ namespace NoLazyWorkers.Storage
       }
 
       var storageKeys = new NativeList<Guid>(Allocator.TempJob);
-      var results = new NativeList<StorageResultBurst>(Allocator.TempJob);
+      var results = new NativeList<StorageResultBurst>(Allocator.Persistent);
       var logs = new NativeList<LogEntry>(Allocator.TempJob);
       try
       {
-        storageKeys.AddRange(cacheService._entityGuids.AsArray());
-
-        yield return SmartExecution.ExecuteBurstFor<Guid, StorageResultBurst>(
+        storageKeys.AddRange(cacheService.EntityGuids.AsArray());
+        var findItemBurstFor = new FindItemBurstFor
+        {
+          StorageSlotsCache = cacheService.SlotsCache,
+          ItemToSlots = cacheService.ItemToSlots,
+          GuidToType = cacheService.GuidToType,
+          StorageDataCache = cacheService.StorageDataCache,
+          TargetItem = itemData,
+          Needed = needed,
+          AllowTargetHigherQuality = allowTargetHigherQuality
+        };
+        yield return SmartExecution.Smart.ExecuteBurstFor<Guid, StorageResultBurst, FindItemBurstFor>(
             uniqueId: nameof(FindStorageWithItem),
             itemCount: storageKeys.Length,
-            burstForDelegate: (i, inputs, outputs, logs) => cacheService.FindItem(i, inputs, outputs, itemData, needed, allowTargetHigherQuality, logs, cacheService._slotsCache, cacheService._itemToSlots, cacheService._guidToType)
+            burstForAction: findItemBurstFor.ExecuteFor,
+            inputs: storageKeys.AsArray(),
+            outputs: results
         );
 
         if (results.Length > 0 && results[0].SlotData.Length > 0)
@@ -796,11 +930,10 @@ namespace NoLazyWorkers.Storage
         if (results.IsCreated)
         {
           foreach (var result in results)
-            result.SlotData.Dispose();
+            if (result.SlotData.IsCreated) result.SlotData.Dispose();
           results.Dispose();
         }
         if (logs.IsCreated) logs.Dispose();
-        cacheService._storageResultPool.Release(new List<StorageResultBurst>());
       }
     }
 
@@ -820,7 +953,7 @@ namespace NoLazyWorkers.Storage
         yield break;
       }
 
-      var cacheService = CacheService.GetOrCreateCacheService(property);
+      var cacheService = CacheService.GetOrCreateService(property);
 
       var slotUpdates = new NativeList<SlotUpdate>(slots.Count, Allocator.TempJob);
       var logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
@@ -830,7 +963,7 @@ namespace NoLazyWorkers.Storage
         {
           var slotKey = slot.GetSlotKey();
           if (slotKey.EntityGuid != entityGuid) continue;
-          cacheService._slotCache[slotKey] = (property.NetworkObject.ObjectId, storageType, slot.SlotIndex);
+          cacheService.SlotCache[slotKey] = (property.NetworkObject.ObjectId, storageType, slot.SlotIndex);
           slotUpdates.Add(new SlotUpdate
           {
             OwnerGuid = entityGuid,
@@ -843,7 +976,7 @@ namespace NoLazyWorkers.Storage
 
         if (slotUpdates.Length > 0)
         {
-          cacheService._pendingSlotUpdates.AddRange(slotUpdates.AsArray());
+          cacheService.PendingSlotUpdates.AddRange(slotUpdates.AsArray());
         }
 
         yield return ProcessLogs(logs);
@@ -863,7 +996,7 @@ namespace NoLazyWorkers.Storage
     /// <param name="quantity">The quantity to deliver.</param>
     /// <param name="sourceGuid">The GUID of the source entity.</param>
     /// <returns>An enumerator yielding a list of DeliveryDestinationBurst objects.</returns>
-    public static IEnumerator FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid)
+    public static IEnumerator FindDeliveryDestination(Property property, ItemInstance item, int quantity, Guid sourceGuid) // TODO: this could be optimized using stationdata and storagedata instead of IStations and linq. create a burst struct that creates the input. also, might be better as a burst, not burstfor since there is only one input item that is searching for the first valid destination.
     {
       if (!IsInitialized || !InstanceFinder.NetworkManager.IsServer || item == null || quantity <= 0)
       {
@@ -872,7 +1005,7 @@ namespace NoLazyWorkers.Storage
         yield break;
       }
 
-      var cacheService = CacheService.GetOrCreateCacheService(property);
+      var cacheService = CacheService.GetOrCreateService(property);
       var itemKey = new ItemKey(item);
       var itemData = new ItemData(item);
       var destinations = new NativeList<DeliveryDestinationBurst>(Allocator.TempJob);
@@ -883,27 +1016,24 @@ namespace NoLazyWorkers.Storage
       try
       {
         // Prioritize packaging stations
-        if (IStations.TryGetValue(property, out var stations))
+        foreach (var station in cacheService.IStations.Values)
         {
-          foreach (var station in stations.Values)
-          {
 #if DEBUG
-            Log(Level.Verbose, $"Checking station {station.GUID} for delivery", Category.Storage);
+          Log(Level.Verbose, $"Checking station {station.GUID} for delivery", Category.Storage);
 #endif
-            if (station.EntityType == EntityType.PackagingStation && !station.IsInUse && station.CanRefill(item))
-            {
-              var refillList = new NativeList<ItemKey>(Allocator.TempJob);
-              inputs.Add((station.GUID, true));
-              foreach (var itemInstance in station.RefillList())
-                refillList.Add(new ItemKey(itemInstance));
-              stationInputs.Add((station.GUID, refillList));
-            }
+          if (station.EntityType == EntityType.PackagingStation && !station.IsInUse && station.CanRefill(item))
+          {
+            var refillList = new NativeList<ItemKey>(Allocator.TempJob);
+            inputs.Add((station.GUID, true));
+            foreach (var key in station.RefillList())
+              refillList.Add(key);
+            stationInputs.Add((station.GUID, refillList));
           }
         }
 
         // Then specific shelves
-        var specificShelfGuids = cacheService._guidToType.GetKeyArray(Allocator.Temp)
-            .Where(g => cacheService._guidToType[g].StorageType == StorageType.SpecificShelf)
+        var specificShelfGuids = cacheService.GuidToType.GetKeyArray(Allocator.Temp)
+            .Where(g => cacheService.GuidToType[g].StorageType == StorageType.SpecificShelf)
             .ToArray();
         foreach (var guid in specificShelfGuids)
         {
@@ -914,8 +1044,8 @@ namespace NoLazyWorkers.Storage
         }
 
         // Then any shelves
-        var anyShelfGuids = cacheService._guidToType.GetKeyArray(Allocator.Temp)
-            .Where(g => cacheService._guidToType[g].StorageType == StorageType.AnyShelf)
+        var anyShelfGuids = cacheService.GuidToType.GetKeyArray(Allocator.Temp)
+            .Where(g => cacheService.GuidToType[g].StorageType == StorageType.AnyShelf)
             .ToArray();
         foreach (var guid in anyShelfGuids)
         {
@@ -925,7 +1055,7 @@ namespace NoLazyWorkers.Storage
           inputs.Add((guid, false));
         }
 
-        if (cacheService._noDropOffCache.Contains(itemKey))
+        if (cacheService.NoDropOffCache.Contains(itemKey))
         {
 #if DEBUG
           Log(Level.Verbose, $"Item {itemKey.ToString()} found in no drop-off cache, skipping delivery", Category.Storage);
@@ -934,18 +1064,19 @@ namespace NoLazyWorkers.Storage
           yield break;
         }
 
-        yield return SmartExecution.ExecuteBurstFor<(Guid, NativeList<ItemKey>), Empty>(
-            uniqueId: nameof(FindDeliveryDestination) + "_RefillList",
-            itemCount: stationInputs.Length,
-            burstForDelegate: (index, inputs, outputs, logs) => cacheService.UpdateStationRefillListBurst(index, inputs, itemKey, logs)
-        );
-
         int remainingQty = quantity;
-        yield return SmartExecution.ExecuteBurstFor<(Guid, bool), DeliveryDestinationBurst>(
+        var findDeliveryDestinationBurstFor = new FindDeliveryDestinationBurstFor
+        {
+          StorageSlotsCache = cacheService.SlotsCache,
+          GuidToType = cacheService.GuidToType,
+          Quantity = quantity,
+          SourceGuid = sourceGuid
+        };
+        yield return SmartExecution.Smart.ExecuteBurstFor<(Guid, bool), DeliveryDestinationBurst, FindDeliveryDestinationBurstFor>(
             uniqueId: nameof(FindDeliveryDestination),
             itemCount: inputs.Length,
-            burstForDelegate: (i, inputs, outputs, logs) => cacheService.FindDeliveryDestinationBurst(i, inputs, outputs, quantity, sourceGuid, logs, cacheService._slotsCache, cacheService._guidToType, ref remainingQty),
-            burstResultsDelegate: cacheService.FindDeliveryDestinationResults,
+            burstForAction: findDeliveryDestinationBurstFor.ExecuteFor,
+            burstResultsAction: cacheService.FindDeliveryDestinationResults,
             inputs: inputs.AsArray(),
             outputs: destinations
         );
@@ -1001,7 +1132,7 @@ namespace NoLazyWorkers.Storage
         yield return new List<(ItemSlot, int)>();
         yield break;
       }
-      var cacheService = CacheService.GetOrCreateCacheService(property);
+      var cacheService = CacheService.GetOrCreateService(property);
       var results = new NativeList<SlotResult>(slots.Count, Allocator.TempJob);
       var logs = new NativeList<LogEntry>(slots.Count, Allocator.TempJob);
       var slotData = new NativeArray<SlotData>(slots.Count, Allocator.TempJob);
@@ -1014,11 +1145,12 @@ namespace NoLazyWorkers.Storage
 #endif
           slotData[i] = new SlotData(entityGuid, slots[i], slots[i].OwnerType());
         }
-        yield return SmartExecution.ExecuteBurstFor<SlotData, SlotResult>(
+        var findAvailableSlotsBurstFor = new FindAvailableSlotsBurstFor();
+        yield return SmartExecution.Smart.ExecuteBurstFor<SlotData, SlotResult, FindAvailableSlotsBurstFor>(
             uniqueId: nameof(FindAvailableSlots),
             itemCount: slots.Count,
-            burstForDelegate: (index, inputs, outputs, logs) => cacheService.FindAvailableSlotsBurst(index, inputs, outputs, new ItemData(item), quantity, logs),
-            burstResultsDelegate: (results, logs) => cacheService.FindAvailableSlotsBurstResults(results, slots, logs),
+            burstForAction: findAvailableSlotsBurstFor.ExecuteFor,
+            burstResultsAction: (results, logs) => cacheService.FindAvailableSlotsBurstResults(results, slots, logs),
             inputs: slotData,
             outputs: results
         );
@@ -1048,7 +1180,7 @@ namespace NoLazyWorkers.Storage
         yield return new List<bool>();
         yield break;
       }
-      var cacheService = CacheService.GetOrCreateCacheService(property);
+      var cacheService = CacheService.GetOrCreateService(property);
       var opList = SlotService._operationPool.Get();
       var opData = new NativeArray<OperationData>(operations.Count, Allocator.TempJob);
       var results = new NativeList<SlotOperationResult>(operations.Count, Allocator.TempJob);
@@ -1076,11 +1208,16 @@ namespace NoLazyWorkers.Storage
             LockReason = op.LockReason
           };
         }
-        yield return SmartExecution.ExecuteBurstFor<OperationData, SlotOperationResult>(
+        var processSlotOperationsBurstFor = new ProcessSlotOperationsBurstFor
+        {
+          StorageSlotsCache = cacheService.SlotsCache,
+          GuidToType = cacheService.GuidToType
+        };
+        yield return SmartExecution.Smart.ExecuteBurstFor<OperationData, SlotOperationResult, ProcessSlotOperationsBurstFor>(
             uniqueId: nameof(ExecuteSlotOperations),
             itemCount: operations.Count,
-            burstForDelegate: (index, inputs, outputs, logs) => cacheService.ProcessSlotOperationsBurst(index, inputs, outputs, logs),
-            burstResultsDelegate: (results, logs) => cacheService.ProcessOperationResults(results, operations, opList, SlotService.NetworkObjectCache, logs),
+            burstForAction: processSlotOperationsBurstFor.ExecuteFor,
+            burstResultsAction: (results, logs) => cacheService.ProcessOperationResults(results, operations, opList, SlotService.NetworkObjectCache, logs),
             inputs: opData,
             outputs: results
         );

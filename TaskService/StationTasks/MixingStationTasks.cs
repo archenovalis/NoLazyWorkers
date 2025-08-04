@@ -1,699 +1,384 @@
 using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
-using ScheduleOne.Management;
-using ScheduleOne.ObjectScripts;
 using ScheduleOne.Property;
 using Unity.Collections;
 using UnityEngine;
-using static NoLazyWorkers.Storage.Extensions;
-using static NoLazyWorkers.Storage.ManagedDictionaries;
-using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Stations.Extensions;
-using NoLazyWorkers.Storage;
 using Unity.Burst;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.Extensions.FishNetExtensions;
-using NoLazyWorkers.Performance;
 using System.Collections;
 using static NoLazyWorkers.TaskService.Extensions;
 using static NoLazyWorkers.Debug;
 using static NoLazyWorkers.Debug.Deferred;
-using NoLazyWorkers.Stations;
+using static NoLazyWorkers.CacheManager.Extensions;
+using static NoLazyWorkers.Storage.SlotService;
+using ScheduleOne.DevUtilities;
+using static NoLazyWorkers.Employees.Extensions;
 using NoLazyWorkers.Extensions;
-using FishNet.Object;
 
 namespace NoLazyWorkers.TaskService.StationTasks
 {
   [EntityTask]
-  public class MixingStationTask : BaseTask<Empty, Empty>
+  public class MixingStationTask : BaseTask
   {
-    private readonly TaskService _taskService;
     private readonly Property _property;
-    private readonly Action<int, int, int[], List<Empty>> _setupDelegate;
-    private readonly Action<NativeList<Guid>> _selectEntitiesDelegate;
-    private readonly Action<int, int, Guid[], List<Empty>> _validationSetupDelegate;
-    private readonly Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> _validateEntityDelegate;
-    private readonly Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> _createTaskDelegate;
+    private readonly TaskService _taskService;
+    public MixingStationTask(Property property)
+    {
+      _property = property ?? throw new ArgumentNullException(nameof(property));
+      _taskService = TaskServiceManager.GetOrCreateService(property);
+    }
 
     public override TaskName Type => TaskName.MixingStation;
-    public override StorageType[] SupportedEntityTypes => new[] { StorageType.Station };
-
-    public MixingStationTask()
-    {
-      _taskService = TaskServiceManager.GetOrCreateService(ManagedDictionaries.IdToProperty[0]);
-      _property = ManagedDictionaries.IdToProperty[0];
-      var builder = new TaskBuilder<Empty, Empty>(Type)
-          .WithSetup((start, count, inputs, outputs) => { })
-          .WithSelectEntities(output => TaskUtilities.SelectEntitiesByType<IStationAdapter>(_property, output))
-          .WithValidationSetup((start, count, inputs, outputs) => { })
-          .WithValidateEntity((index, guids, outputs) => MixingStationLogic.ValidateEntityState(_property, guids[index], outputs))
-          .WithCreateTask(CreateTaskDelegateImpl);
-      _setupDelegate = builder.SetupDelegate;
-      _selectEntitiesDelegate = builder.SelectEntitiesDelegate;
-      _validationSetupDelegate = builder.ValidationSetupDelegate;
-      _validateEntityDelegate = builder.ValidateEntityDelegate;
-      _createTaskDelegate = builder.CreateTaskDelegate;
-    }
-
-    public override Action<int, int, int[], List<Empty>> SetupDelegate => _setupDelegate;
-    public override Action<NativeList<Guid>> SelectEntitiesDelegate => _selectEntitiesDelegate;
-    public override Action<int, int, Guid[], List<Empty>> ValidationSetupDelegate => _validationSetupDelegate;
-    public override Action<int, NativeArray<Guid>, NativeList<ValidationResultData>> ValidateEntityDelegate => _validateEntityDelegate;
-    public override Action<int, NativeArray<ValidationResultData>, NativeList<TaskResult>> CreateTaskDelegate => _createTaskDelegate;
-
-    public override bool IsValidState(int state)
-    {
-      return state >= 0 && state <= (int)States.NeedsDelivery;
-    }
-
-    private void CreateTaskDelegateImpl(int index, NativeArray<ValidationResultData> results, NativeList<TaskResult> outputs)
-    {
-      var result = results[index];
-      if (!result.IsValid || result.State == (int)States.Invalid || result.State == (int)States.Idle)
+    public override EntityType[] SupportedEntityTypes => [EntityType.MixingStation];
+    public override Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate =>
+      (index, inputs, outputs, logs) =>
       {
-#if DEBUG
-        DeferredLog(Level.Verbose, $"Invalid or idle state for station {result.EntityGuid}", Category.MixingStation);
-#endif
-        return;
-      }
-
-      var station = ManagedDictionaries.IStations[_property][result.EntityGuid];
-      if (station == null || station.TransitEntity == null)
-      {
-#if DEBUG
-        DeferredLog(Level.Error, $"Invalid station {result.EntityGuid} or no TransitEntity", Category.MixingStation);
-#endif
-        return;
-      }
-
-      var logs = GetLogPool().Get();
-      try
-      {
-        var taskData = CreateTaskData(station, result);
-        if (taskData == null)
+        var guid = inputs[index];
+        if (!_taskService.CacheService.StationDataCache.TryGetValue(guid, out var stationData))
         {
-#if DEBUG
-          logs.Add(new LogEntry { Message = $"Failed to create task for station {station.GUID}, state {result.State}", Level = Level.Verbose, Category = Category.MixingStation });
-#endif
+          logs.Add(new LogEntry { Message = $"Station {guid} not found", Level = Level.Warning, Category = Category.Tasks });
           return;
         }
 
-        var task = TaskDescriptor.Create(
-            station.GUID, Type, result.State - 1, TaskEmployeeType.Chemist, 100,
-            _property.name, result.Item, result.Quantity,
-            taskData.SourceGuid, taskData.SourceSlotIndices,
-            taskData.DestGuid, taskData.DestSlotIndices,
-            Time.time, logs
-        );
-
-        if (task.TaskId != Guid.Empty)
-          outputs.Add(new TaskResult(task, true));
-#if DEBUG
-        logs.Add(new LogEntry { Message = $"Created task {task.TaskId} for station {station.GUID}, state {result.State}", Level = Level.Info, Category = Category.MixingStation });
-#endif
-      }
-      finally
-      {
-        ProcessLogsAsync(logs).GetAwaiter().GetResult();
-        logs.Dispose();
-      }
-    }
-
-    private (Guid SourceGuid, int[] SourceSlotIndices, Guid DestGuid, int[] DestSlotIndices)? CreateTaskData(IStationAdapter station, ValidationResultData result)
-    {
-      Guid sourceGuid = Guid.Empty;
-      int[] sourceSlotIndices = null;
-      Guid destGuid = Guid.Empty;
-      int[] destSlotIndices = null;
-
-      if (result.State == (int)States.NeedsRestock)
-      {
-        var requiredItems = PoolUtility.GetPooled<NativeList<ItemData>>(Allocator.TempJob);
-        try
+        if (!_taskService.EntityStateService.EntityStates.TryGetValue(guid, out int state))
         {
-          var mixerItemField = MixingStationUtilities.GetInputItemForProductSlot(station);
-          ItemData mixerItem = mixerItemField?.SelectedItem != null ? new ItemData(mixerItemField.SelectedItem.GetDefaultInstance()) : ItemData.Empty;
+          logs.Add(new LogEntry { Message = $"No state for station {guid}", Level = Level.Warning, Category = Category.EntityState });
+          state = (int)EntityStates.MixingStation.Invalid;
+        }
 
-          if (mixerItem.Id != "")
-            requiredItems.Add(mixerItem);
-          else
+        ItemData item = default;
+        int quantity = 0;
+        Guid pickupGuid = default;
+        NativeArray<int> pickupSlotIndices = default;
+        Guid dropoffGuid = default;
+        NativeArray<int> dropoffSlotIndices = default;
+        bool isValid = false;
+
+        if (state == (int)EntityStates.MixingStation.NeedsRestock)
+        {
+          item = stationData.InsertSlots.Length > 0 ? stationData.InsertSlots[0].Item : default;
+          quantity = stationData.InsertSlots.Length > 0 ? stationData.StartThreshold - stationData.InsertSlots[0].Quantity : 0;
+          var shelf = FindShelfWithItem(item.ItemKey);
+          if (shelf.Guid != default)
           {
-            var refills = station.RefillList();
-            foreach (var refill in refills)
-              if (refill != null)
-                requiredItems.Add(new ItemData(refill));
-          }
-
-          bool success = false;
-          foreach (var itemKey in requiredItems)
-          {
-            var itemInstance = itemKey.CreateItemInstance();
-            int threshold = station.StartThreshold;
-            int desiredQty = Math.Min(station.MaxProductQuantity, station.ProductSlots[0].Quantity);
-            int invQty = ManagedDictionaries.IEmployees[_property][station.GUID]?.Inventory.GetIdenticalItemAmount(itemInstance) ?? 0;
-            int inputQty = station.InsertSlots[0].Quantity;
-            int quantityNeeded = Math.Max(0, threshold - inputQty - invQty);
-            int quantityWanted = Math.Max(0, desiredQty - inputQty - invQty);
-            int finalQuantity = Math.Max(quantityNeeded, quantityWanted);
-
-            var runner = CoroutineRunner.Instance;
-            var routine = runner.RunCoroutineWithResult(
-                StorageManager.FindStorageWithItem(_property, itemInstance, finalQuantity, true),
-                result =>
-                {
-                  if (result != null && result.Shelf != null)
-                  {
-                    sourceGuid = result.Shelf.GUID;
-                    sourceSlotIndices = result.ItemSlots.Select(s => s.SlotIndex).ToArray();
-                    destGuid = station.GUID;
-                    result.Quantity = Math.Min(result.AvailableQuantity, finalQuantity);
-                    success = true;
-                  }
-                }
+            pickupGuid = shelf.Guid;
+            pickupSlotIndices = new NativeArray<int>(
+                shelf.Slots
+                    .Select((slot, idx) => SlotProcessingUtility.CanRemove(slot, item, quantity) ? idx : -1)
+                    .Where(idx => idx >= 0)
+                    .ToArray(),
+                Allocator.TempJob
             );
-            routine.MoveNext();
-            if (success) break;
-          }
-
-          if (!success)
-          {
-            var runner = CoroutineRunner.Instance;
-            runner.RunCoroutine(_taskService.AddDisabledEntity<Empty, Empty>(
-                station.GUID, result.State - 1, DisabledEntityData.DisabledReasonType.MissingItem,
-                requiredItems, true, _property, Type
-            ));
-            return null;
+            isValid = pickupSlotIndices.Length > 0;
           }
         }
-        finally
+        else if (state == (int)EntityStates.MixingStation.ReadyToOperate)
         {
-          requiredItems.Dispose();
+          isValid = true;
         }
-      }
-      else if (result.State == (int)States.NeedsDelivery)
-      {
-        var runner = CoroutineRunner.Instance;
-        var destinations = PoolUtility.GetPooled<NativeList<(Guid, NativeList<int>, int)>>(Allocator.TempJob);
-        try
+        else if (state == (int)EntityStates.MixingStation.HasOutput)
         {
-          var routine = runner.RunCoroutineWithResult(
-              StorageManager.FindDeliveryDestination(_property, result.Item.CreateItemInstance(), result.Quantity, station.GUID),
-              result =>
-              {
-                foreach (var dest in result)
-                {
-                  var slotIndices = new NativeList<int>(Allocator.Temp);
-                  foreach (var slot in dest.ItemSlots)
-                    slotIndices.Add(slot.SlotIndex);
-                  destinations.Add((dest.Entity.GUID, slotIndices, dest.Capacity));
-                }
-              }
-          );
-          routine.MoveNext();
-
-          if (destinations.Length > 0)
+          item = stationData.OutputSlot.Item;
+          quantity = stationData.OutputSlot.Quantity;
+          if (stationData.ProductSlots.Length > 0 &&
+              (stationData.ProductSlots[0].Item.ID == "" ||
+                stationData.ProductSlots[0].Item.AdvCanStackWithBurst(item)) &&
+              stationData.ProductSlots[0].Quantity < stationData.ProductSlots[0].StackLimit)
           {
-            var (dest, destSlots, capacity) = destinations[0];
-            sourceGuid = station.GUID;
-            sourceSlotIndices = new[] { station.OutputSlot.SlotIndex };
-            destGuid = dest;
-            destSlotIndices = destSlots.ToArray();
-            result.DestinationCapacity = capacity;
-            destSlots.Dispose();
+            state = 3; // Loop action
+            isValid = true;
           }
           else
           {
-            var requiredItems = PoolUtility.GetPooled<NativeList<ItemData>>(Allocator.TempJob);
-            try
+            state = 5; // Deliver action
+            var destination = FindDestination(item);
+            if (destination.Guid != default)
             {
-              requiredItems.Add(result.Item);
-              runner.RunCoroutine(_taskService.AddDisabledEntity<Empty, Empty>(
-                  station.GUID, result.State - 1, DisabledEntityData.DisabledReasonType.NoDestination,
-                  requiredItems, true, _property, Type
-              ));
+              dropoffGuid = destination.Guid;
+              dropoffSlotIndices = new NativeArray<int>(
+                  destination.Slots
+                      .Select((slot, idx) => SlotProcessingUtility.CanInsert(slot, item, quantity) ? idx : -1)
+                      .Where(idx => idx >= 0)
+                      .ToArray(),
+                  Allocator.TempJob
+              );
+              isValid = dropoffSlotIndices.Length > 0;
             }
-            finally
-            {
-              requiredItems.Dispose();
-            }
-            return null;
           }
         }
-        finally
+
+        if (isValid)
         {
-          destinations.Dispose();
-        }
-      }
-      else if (result.State == (int)States.HasOutput)
-      {
-        sourceGuid = station.GUID;
-        sourceSlotIndices = new[] { station.OutputSlot.SlotIndex };
-        destGuid = station.GUID;
-        var loopSlots = PoolUtility.GetPooled<NativeList<int>>(Allocator.TempJob);
-        try
-        {
-          var runner = CoroutineRunner.Instance;
-          var routine = runner.RunCoroutineWithResult(
-              StorageManager.FindAvailableSlots(_property, station.GUID, station.ProductSlots.ToList(), result.Item.CreateItemInstance(), result.Quantity),
-              result =>
-              {
-                foreach (var (slot, _) in result)
-                  if (!slot.IsLocked)
-                    loopSlots.Add(slot.SlotIndex);
-              }
+          var task = TaskDescriptor.Create(
+              entityGuid: guid,
+              type: TaskName.MixingStation,
+              actionId: state,
+              employeeType: TaskEmployeeType.Chemist,
+              priority: 50,
+              propertyName: _property.name,
+              item: item,
+              quantity: quantity,
+              pickupGuid: pickupGuid,
+              pickupSlotIndices: pickupSlotIndices,
+              dropoffGuid: dropoffGuid,
+              dropoffSlotIndices: dropoffSlotIndices,
+              creationTime: Time.time,
+              logs: logs
           );
-          routine.MoveNext();
-          destSlotIndices = loopSlots.Length > 0 ? loopSlots.ToArray().Take(3).ToArray() : null;
+          outputs.Add(new TaskResult(task, true));
         }
-        finally
+        else
         {
-          loopSlots.Dispose();
+          if (pickupSlotIndices.IsCreated) pickupSlotIndices.Dispose();
+          if (dropoffSlotIndices.IsCreated) dropoffSlotIndices.Dispose();
+          outputs.Add(new TaskResult(default, false, "Invalid state or no valid slots"));
         }
-      }
+      };
 
-      if (sourceSlotIndices == null || destSlotIndices == null)
-        return null;
-
-      return (sourceGuid, sourceSlotIndices, destGuid, destSlotIndices);
-    }
-
-    public override IEnumerator ExecuteCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options)
+    public override IEnumerator Execute(Employee employee, TaskDescriptor task)
     {
-      if (employee.Type != Enum.Parse<EEmployeeType>(TaskEmployeeType.Chemist.ToString()))
+      if (!(employee is Chemist chemist))
       {
-#if DEBUG
-        Log(Level.Error, $"Employee {employee.fullName} is not a Chemist", Category.MixingStation);
-#endif
+        Log(Level.Error, "MixingStationTask requires a Chemist", Category.Tasks);
         yield break;
       }
 
-      var station = ManagedDictionaries.IStations[_property][task.EntityGuid];
-      if (station == null || station.TransitEntity == null)
+      if (!_taskService.CacheService.IStations.TryGetValue(task.EntityGuid, out var station))
       {
-#if DEBUG
-        Log(Level.Error, $"Invalid station {task.EntityGuid} or no TransitEntity", Category.MixingStation);
-#endif
+        Log(Level.Error, $"Station {task.EntityGuid} not found", Category.Tasks);
         yield break;
       }
 
       switch (task.ActionId)
       {
-        case 0: // NeedsRestock
-          yield return HandleRestockAsync(station, employee, task);
-          yield return ValidateAndOperateAsync(station, employee, task);
+        case (int)EntityStates.MixingStation.NeedsRestock:
+          yield return RestockIngredients(chemist, task, station);
           break;
-        case 1: // ReadyToOperate
-          yield return HandleOperateAsync(station, employee, task);
+        case (int)EntityStates.MixingStation.ReadyToOperate:
+          yield return OperateStation(chemist, task, station);
           break;
-        case 2: // HasOutput
-          yield return HandleLoopAsync(station, employee, task);
+        case 3: // Loop
+          yield return LoopOutput(chemist, task, station);
           break;
-        case 3: // NeedsDelivery
-          yield return HandleDeliveryAsync(station, employee, task);
+        case 4: // Deliver
+          yield return DeliverOutput(chemist, task, station);
           break;
         default:
-#if DEBUG
-          Log(Level.Error, $"Invalid action ID {task.ActionId} for task {task.TaskId}", Category.MixingStation);
-#endif
-          break;
+          Log(Level.Warning, $"Unknown action {task.ActionId}", Category.Tasks);
+          yield break;
       }
-#if DEBUG
-      Log(Level.Info, $"Transitioned to action {task.ActionId} for task {task.TaskId}, employee {employee.fullName}", Category.MixingStation);
-#endif
     }
 
-    private IEnumerator HandleRestockAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
+    private IEnumerator RestockIngredients(Chemist chemist, TaskDescriptor task, IStationAdapter station)
     {
-      yield return ExecuteActionAsync(station, employee, task, RestockSlots, maxRetries: 3);
+      var slot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+      if (slot == null || !_taskService.CacheService.IStations.TryGetValue(task.PickupGuid, out var pickupStation))
+      {
+        Log(Level.Warning, $"Restock failed: No slot or pickup station {task.PickupGuid}", Category.Tasks);
+        yield break;
+      }
+
+      var transferRequest = TransferRequest.Get(
+          chemist, task.Item.CreateItemInstance(), task.Quantity, slot,
+          pickupStation.TransitEntity, new List<ItemSlot> { pickupStation.OutputSlot },
+          station.TransitEntity, new List<ItemSlot> { station.InsertSlots[0] }
+      );
+      bool completed = false;
+      yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
+        transferRequest,
+        (request, _, status) =>
+          {
+            completed = status == MovementStatus.Success;
+            TransferRequest.Release(transferRequest);
+          }
+      );
+
+      if (completed && _taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
+          state == (int)EntityStates.MixingStation.ReadyToOperate)
+      {
+        yield return OperateStation(chemist, task, station);
+      }
+
+      _taskService.CompleteTask(task);
     }
 
-    private IEnumerator HandleOperateAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
+    private IEnumerator OperateStation(Chemist chemist, TaskDescriptor task, IStationAdapter station)
     {
-      yield return OperateAsync(station, employee, task);
+      chemist.SetDestination(station.TransitEntity);
+      while (!NavMeshUtility.IsAtTransitEntity(station.TransitEntity, chemist))
+      {
+        yield return FishNetExtensions.AwaitNextTick();
+      }
+      station.StartOperation(chemist);
+      float elapsed = 0f;
+      const float TIMEOUT = 30f;
+      while (!station.IsInUse && elapsed < TIMEOUT)
+      {
+        yield return new WaitForSeconds(0.1f);
+        elapsed += 0.1f;
+      }
+
+      if (!station.IsInUse)
+      {
+        Log(Level.Error, $"Station {station.GUID} failed to start", Category.Tasks);
+        yield break;
+      }
+
+      elapsed = 0f;
+      while (station.IsInUse && elapsed < TIMEOUT)
+      {
+        yield return new WaitForSeconds(0.1f);
+        elapsed += 0.1f;
+      }
+
+      if (station.IsInUse)
+      {
+        Log(Level.Error, $"Operation timed out for station {station.GUID}", Category.Tasks);
+        yield break;
+      }
+
+      _taskService.EntityStateService.OnConfigUpdate(station.GUID);
+      _taskService.CompleteTask(task);
     }
 
-    private IEnumerator HandleLoopAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
+    private IEnumerator LoopOutput(Chemist chemist, TaskDescriptor task, IStationAdapter station)
     {
-      yield return ExecuteActionAsync(station, employee, task, LoopSlots, maxRetries: 3);
-      yield return FollowUpCoroutine(employee, task, SmartExecutionOptions.Default);
+      var slot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+      if (slot == null)
+      {
+        Log(Level.Warning, $"No inventory slot for chemist {chemist.fullName}", Category.Tasks);
+        yield break;
+      }
+
+      var transferRequest = TransferRequest.Get(
+          chemist, station.OutputSlot.ItemInstance, station.OutputSlot.Quantity, slot,
+          station.TransitEntity, new List<ItemSlot> { station.OutputSlot },
+          station.TransitEntity, new List<ItemSlot> { station.ProductSlots[0] }
+      );
+      bool completed = false;
+      yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
+        transferRequest,
+        (_, _, status) =>
+        {
+          completed = status == MovementStatus.Success;
+          TransferRequest.Release(transferRequest);
+        }
+      );
+
+      if (completed && _taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
+          (state == (int)EntityStates.MixingStation.NeedsRestock || state == (int)EntityStates.MixingStation.ReadyToOperate))
+      {
+        yield return _taskService.CreateFollowUpTask(chemist.GUID, task.EntityGuid, task.Type);
+      }
+
+      _taskService.CompleteTask(task);
     }
 
-    private IEnumerator HandleDeliveryAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
+    private IEnumerator DeliverOutput(Chemist chemist, TaskDescriptor task, IStationAdapter station)
     {
-      yield return ExecuteActionAsync(station, employee, task, DeliverSlots, maxRetries: 3);
+      var slot = chemist.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null);
+      if (slot == null || !_taskService.CacheService.IStations.TryGetValue(task.DropoffGuid, out var dropoffStation))
+      {
+        Log(Level.Warning, $"Deliver failed: No slot or dropoff station {task.DropoffGuid}", Category.Tasks);
+        yield break;
+      }
+
+      var transferRequest = TransferRequest.Get(
+          chemist, station.OutputSlot.ItemInstance, station.OutputSlot.Quantity, slot,
+          station.TransitEntity, new List<ItemSlot> { station.OutputSlot },
+          dropoffStation.TransitEntity, new List<ItemSlot> { dropoffStation.ProductSlots[0] }
+      );
+      bool completed = false;
+      yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
+        transferRequest,
+        (_, _, status) =>
+        {
+          completed = status == MovementStatus.Success;
+          TransferRequest.Release(transferRequest);
+        }
+      );
+
+      _taskService.CompleteTask(task);
     }
 
-    private IEnumerator ValidateAndOperateAsync(IStationAdapter station, Employee employee, TaskDescriptor task)
+    [BurstCompile]
+    private StorageData FindShelfWithItem(NativeList<ItemKey> items, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
     {
-      var logs = GetLogPool().Get();
-      List<(ItemSlot, int)>? cachedSlots = null;
+      StorageData returnData = default;
+      if (_taskService.CacheService.StorageDataCache.Count() > 0)
+      {
+        var dataCache = _taskService.CacheService.StorageDataCache.GetValueArray(Allocator.Temp);
+        foreach (var storageData in dataCache)
+          if (storageData.Slots.Any(slot => slot.Item.ItemKey.AdvCanStackWithBurst(items, allowTargetHigherQuality) && slot.Quantity > desiredQuantity))
+          {
+            returnData = storageData;
+            break;
+          }
+        dataCache.Dispose();
+      }
+      return returnData;
+    }
+
+    [BurstCompile]
+    private StorageData FindShelfWithItem(ItemKey item, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
+    {
+      StorageData returnData = default;
+      var list = new NativeList<ItemKey>(Allocator.TempJob) { item };
       try
       {
-        var runner = CoroutineRunner.Instance;
-        var routine = runner.RunCoroutineWithResult(
-            StorageManager.FindAvailableSlots(_property, station.GUID, station.AllSlots.ToList(), ItemData.Empty.CreateItemInstance(), 0),
-            result => cachedSlots = result
-        );
-        routine.MoveNext();
-
-        if (cachedSlots == null)
-        {
-#if DEBUG
-          logs.Add(new LogEntry { Message = $"No slot data for station {station.GUID} during validation", Level = Level.Verbose, Category = Category.MixingStation });
-#endif
-          yield break;
-        }
-
-        var result = MixingStationLogic.ValidateEntityState(_property, station.GUID, logs, employee, cachedSlots);
-        if (result.State == (int)States.ReadyToOperate)
-          yield return OperateAsync(station, employee, task);
-
-        runner.RunCoroutine(StorageManager.UpdateStorageCache(_property, station.GUID, cachedSlots.Select(s => s.Item1).ToList(), StorageType.Station));
+        returnData = FindShelfWithItem(item, desiredQuantity, allowTargetHigherQuality);
       }
       finally
       {
-        ProcessLogsAsync(logs).GetAwaiter().GetResult();
-        logs.Dispose();
+        list.Dispose();
       }
+      return returnData;
     }
 
-    private IEnumerator ExecuteActionAsync(
-        IStationAdapter station,
-        Employee employee,
-        TaskDescriptor task,
-        Func<IStationAdapter, ITransitEntity, TaskDescriptor, List<ItemSlot>> slotResolver,
-        int maxRetries)
+    [BurstCompile]
+    private StationData FindPackagingStation(ItemData item)
     {
-      var pickupEntity = ManagedDictionaries.IStations[_property].ContainsKey(task.PickupGuid)
-          ? ManagedDictionaries.IStations[_property][task.PickupGuid]
-          : ManagedDictionaries.Storages[_property][task.PickupGuid];
-      if (pickupEntity == null)
+      StationData returnData = default;
+      if (_taskService.CacheService.StorageDataCache.Count() > 0)
       {
-#if DEBUG
-        Log(Level.Error, $"Invalid pickup entity {task.PickupGuid}", Category.MixingStation);
-#endif
-        yield break;
+        var dataCache = _taskService.CacheService.StationDataCache.GetValueArray(Allocator.Temp);
+        foreach (var station in dataCache)
+          if (station.EntityType == EntityType.PackagingStation && station.ProductSlots[0].Item.ID.IsEmpty || (station.ProductSlots[0].Item.ItemKey.Equals(item.ItemKey) && station.ProductSlots[0].StackLimit >= station.ProductSlots[0].Quantity + item.Quantity))
+            returnData = station;
       }
-
-      var deliveryEntity = ManagedDictionaries.IStations[_property].ContainsKey(task.DropoffGuid)
-          ? ManagedDictionaries.IStations[_property][task.DropoffGuid]
-          : ManagedDictionaries.Storages[_property][task.DropoffGuid];
-      if (deliveryEntity == null)
-      {
-#if DEBUG
-        Log(Level.Error, $"Invalid delivery entity {task.DropoffGuid}", Category.MixingStation);
-#endif
-        yield break;
-      }
-
-      var pickupSlots = slotResolver(station, pickupEntity, task);
-      var deliverySlots = slotResolver(station, deliveryEntity, task);
-      if (!pickupSlots.Any() || !deliverySlots.Any())
-      {
-#if DEBUG
-        Log(Level.Warning, $"Invalid slots for station {station.GUID}", Category.MixingStation);
-#endif
-        yield break;
-      }
-
-      var inventorySlot = employee.Inventory.ItemSlots.FirstOrDefault(s => s.ItemInstance == null || s.ItemInstance.AdvCanStackWith(task.Item.CreateItemInstance()));
-      if (inventorySlot == null)
-      {
-#if DEBUG
-        Log(Level.Warning, $"No inventory slot for employee {employee.fullName}", Category.MixingStation);
-#endif
-        yield break;
-      }
-
-      bool success = false;
-      int retries = 0;
-      var operations = new List<(Guid, ItemSlot, ItemInstance, int, bool, NetworkObject, string)>();
-      while (!success && retries < maxRetries)
-      {
-        operations.Clear();
-        foreach (var slot in pickupSlots)
-          if (StorageManager.ReserveSlot(pickupEntity.GUID, slot, employee.NetworkObject, "pickup"))
-            operations.Add((pickupEntity.GUID, slot, task.Item.CreateItemInstance(), task.Quantity, false, employee.NetworkObject, "pickup"));
-        foreach (var slot in deliverySlots)
-          if (StorageManager.ReserveSlot(deliveryEntity.GUID, slot, employee.NetworkObject, "delivery"))
-            operations.Add((deliveryEntity.GUID, slot, task.Item.CreateItemInstance(), task.Quantity, true, employee.NetworkObject, "delivery"));
-
-        if (operations.Count != pickupSlots.Count + deliverySlots.Count)
-        {
-          foreach (var op in operations)
-            StorageManager.ReleaseSlot(op.Item2);
-          retries++;
-          if (retries < maxRetries)
-          {
-#if DEBUG
-            Log(Level.Warning, $"Retry {retries} for task {task.TaskId} on station {station.GUID}", Category.MixingStation);
-#endif
-            yield return new WaitForSeconds(1f);
-          }
-          continue;
-        }
-
-        var runner = CoroutineRunner.Instance;
-        var routine = runner.RunCoroutineWithResult(
-            StorageManager.ExecuteSlotOperations(_property, operations),
-            results =>
-            {
-              success = results.All(r => r);
-              if (success)
-              {
-                runner.RunCoroutine(StorageManager.UpdateStorageCache(_property, pickupEntity.GUID, pickupSlots, pickupEntity is IStationAdapter ? StorageType.Station : StorageType.AnyShelf));
-                runner.RunCoroutine(StorageManager.UpdateStorageCache(_property, deliveryEntity.GUID, deliverySlots, deliveryEntity is IStationAdapter ? StorageType.Station : StorageType.AnyShelf));
-#if DEBUG
-                Log(Level.Info, $"Completed action for task {task.TaskId} on station {station.GUID}", Category.MixingStation);
-#endif
-              }
-            }
-        );
-        routine.MoveNext();
-
-        if (!success)
-        {
-          foreach (var op in operations)
-            StorageManager.ReleaseSlot(op.Item2);
-          retries++;
-          if (retries < maxRetries)
-          {
-#if DEBUG
-            Log(Level.Warning, $"Retry {retries} for task {task.TaskId} on station {station.GUID}", Category.MixingStation);
-#endif
-            yield return new WaitForSeconds(1f);
-          }
-        }
-      }
-
-      if (!success)
-      {
-#if DEBUG
-        Log(Level.Error, $"Failed action for task {task.TaskId} after {maxRetries} retries", Category.MixingStation);
-#endif
-      }
-      else
-      {
-        _taskService.CompleteTask(task);
-      }
+      return returnData;
     }
 
-    public override IEnumerator FollowUpCoroutine(Employee employee, TaskDescriptor task, SmartExecutionOptions options)
+    [BurstCompile]
+    private StorageData FindDestination(ItemData item)
     {
-      if (!employee.IsAvailable())
+      foreach (var storage in _taskService.CacheService.StorageDataCache)
       {
-#if DEBUG
-        Log(Level.Verbose, $"Employee {employee.fullName} unavailable for follow-up task {task.TaskId}", Category.MixingStation);
-#endif
-        yield break;
-      }
-
-      var station = ManagedDictionaries.IStations[_property][task.EntityGuid];
-      if (station == null || station.TransitEntity == null)
-      {
-#if DEBUG
-        Log(Level.Error, $"Invalid station {task.EntityGuid} for follow-up", Category.MixingStation);
-#endif
-        yield break;
-      }
-
-      var logs = GetLogPool().Get();
-      List<(ItemSlot, int)>? cachedSlots = null;
-      try
-      {
-        var runner = CoroutineRunner.Instance;
-        var routine = runner.RunCoroutineWithResult(
-            StorageManager.FindAvailableSlots(_property, station.GUID, station.AllSlots.ToList(), ItemData.Empty.CreateItemInstance(), 0),
-            result => cachedSlots = result
-        );
-        routine.MoveNext();
-
-        if (cachedSlots == null)
+        if (storage.Value.Slots.Any(slot => slot.Item.ID == "" || (slot.Item.Equals(item) && slot.Quantity < slot.StackLimit)))
         {
-#if DEBUG
-          logs.Add(new LogEntry { Message = $"No slot data for station {station.GUID}", Level = Level.Verbose, Category = Category.MixingStation });
-#endif
-          yield break;
+          return storage.Value;
         }
-
-        var result = MixingStationLogic.ValidateEntityState(_property, station.GUID, logs, employee, cachedSlots);
-        if (result.State != (int)States.NeedsRestock && result.State != (int)States.ReadyToOperate)
-        {
-#if DEBUG
-          logs.Add(new LogEntry { Message = $"Station {station.GUID} not in restock or operate state after looping", Level = Level.Verbose, Category = Category.MixingStation });
-#endif
-          yield break;
-        }
-
-        var createTaskRoutine = _taskService.CreateTaskAsync(_property, Type, employee.GUID, station.GUID);
-        yield return createTaskRoutine;
-
-        var newTask = _taskService.GetEmployeeSpecificTask(employee.GUID);
-        if (newTask.TaskId != Guid.Empty)
-        {
-          yield return ExecuteCoroutine(employee, newTask, options);
-          newTask.Dispose();
-        }
-#if DEBUG
-        logs.Add(new LogEntry { Message = $"Completed follow-up for task {task.TaskId}, new task {newTask.TaskId}", Level = Level.Info, Category = Category.MixingStation });
-#endif
       }
-      finally
-      {
-        ProcessLogsAsync(logs).GetAwaiter().GetResult();
-        logs.Dispose();
-      }
+      return default;
     }
 
-    // Unchanged methods: OperateAsync, RestockSlots, LoopSlots, DeliverSlots
-    // Note: These methods are unchanged as they align with StorageManager and TaskService requirements.
-
-    public static class MixingStationLogic
+    [BurstCompile]
+    private StorageData FindStorageForDelivery(ItemData item)
     {
-      [BurstCompile]
-      public static ValidationResultData ValidateEntityState(Property property, Guid stationGuid, NativeList<LogEntry> logs, Employee employee = null, List<(ItemSlot, int)> slots = null)
+      StorageData returnData = default;
+      if (_taskService.CacheService.StorageDataCache.Count() > 0)
       {
-        var result = new ValidationResultData { IsValid = false, State = (int)States.Invalid };
-        var station = ManagedDictionaries.IStations[property][stationGuid];
-        if (station.IsInUse)
-        {
-#if DEBUG
-          logs.Add(new LogEntry { Message = $"Station {station.GUID} is in use", Level = Level.Verbose, Category = Category.MixingStation });
-#endif
-          return result;
-        }
-
-        ItemData outputItem = ItemData.Empty;
-        int outputQuantity = 0;
-        foreach (var (slot, capacity) in slots)
-        {
-          if (slot.SlotIndex == station.OutputSlot.SlotIndex && slot.Quantity > 0 && !slot.IsLocked)
+        var dataCache = _taskService.CacheService.StorageDataCache.GetValueArray(Allocator.Temp);
+        foreach (var storageData in dataCache)
+          if (storageData.Slots.Any(slot => slot.Item.ID.IsEmpty || slot.Item.AdvCanStackWithBurst(item, checkQuantities: true)))
           {
-            outputItem = new ItemData(slot.ItemInstance);
-            outputQuantity = slot.Quantity;
+            returnData = storageData;
             break;
           }
-        }
-
-        if (outputItem.Id != "")
-        {
-          int loopCount = 0;
-          foreach (var (slot, capacity) in slots)
-          {
-            if (station.ProductSlots.Any(ps => ps.SlotIndex == slot.SlotIndex) && !slot.IsLocked)
-            {
-              if (capacity > 0 && (slot.ItemInstance == null || slot.ItemInstance.AdvCanStackWith(outputItem.CreateItemInstance())))
-                loopCount++;
-            }
-          }
-
-          if (loopCount > 0)
-          {
-            result = new ValidationResultData
-            {
-              IsValid = true,
-              State = (int)States.HasOutput,
-              Item = outputItem,
-              Quantity = outputQuantity
-            };
-            return result;
-          }
-
-          result = new ValidationResultData
-          {
-            IsValid = true,
-            State = (int)States.NeedsDelivery,
-            Item = outputItem,
-            Quantity = outputQuantity
-          };
-          return result;
-        }
-
-        ItemData restockItem = ItemData.Empty;
-        int restockQuantity = 0;
-        int threshold = station.StartThreshold;
-        int desiredQty = Math.Min(station.MaxProductQuantity, station.ProductSlots[0].Quantity);
-        int invQty = employee != null ? employee.Inventory.GetIdenticalItemAmount(restockItem.CreateItemInstance()) : 0;
-        foreach (var (slot, capacity) in slots)
-        {
-          if (station.InsertSlots.Any(isl => isl.SlotIndex == slot.SlotIndex))
-          {
-            if (capacity > 0)
-            {
-              restockItem = slot.ItemInstance != null ? new ItemData(slot.ItemInstance) : new ItemData(station.InsertSlots.First(isl => isl.SlotIndex == slot.SlotIndex).ItemInstance);
-              restockQuantity = Math.Max(0, Math.Max(threshold, desiredQty) - slot.Quantity - invQty);
-              break;
-            }
-          }
-        }
-
-        if (restockItem.Id != "")
-        {
-          result = new ValidationResultData
-          {
-            IsValid = true,
-            State = (int)States.NeedsRestock,
-            Item = restockItem,
-            Quantity = restockQuantity
-          };
-          return result;
-        }
-
-        bool canOperate = true;
-        foreach (var (slot, _) in slots)
-        {
-          if (station.InsertSlots.Any(isl => isl.SlotIndex == slot.SlotIndex) && slot.Quantity < threshold)
-          {
-            canOperate = false;
-            break;
-          }
-        }
-
-        if (canOperate)
-        {
-          result = new ValidationResultData
-          {
-            IsValid = true,
-            State = (int)States.ReadyToOperate,
-            Item = ItemData.Empty,
-            Quantity = 0
-          };
-          return result;
-        }
-
-        result = new ValidationResultData { IsValid = true, State = (int)States.Idle };
-        return result;
+        dataCache.Dispose();
       }
-    }
-
-    private enum States
-    {
-      Invalid = 0,
-      NeedsRestock = 1,
-      ReadyToOperate = 2,
-      HasOutput = 3,
-      NeedsDelivery = 4,
-      Idle = 5
+      return returnData;
     }
   }
 }

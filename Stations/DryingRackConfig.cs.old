@@ -18,7 +18,7 @@ using static NoLazyWorkers.Stations.DryingRackExtensions;
 using static NoLazyWorkers.Stations.DryingRackUtilities;
 using ScheduleOne.NPCs;
 using ScheduleOne.Employees;
-using NoLazyWorkers.Storage;
+using NoLazyWorkers.CacheManager;
 using ScheduleOne.EntityFramework;
 using static NoLazyWorkers.Debug;
 

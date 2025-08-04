@@ -1,45 +1,21 @@
-namespace NoLazyWorkers.Performance
+/// <summary>
+/// Defines types of jobs for scheduling in the performance system.
+/// </summary>
+internal enum JobType
+
+/// <summary>
+/// Interface for wrapping job scheduling and completion.
+/// </summary>
+internal interface IJobWrapper
+
+/// <summary>
+/// Wraps a single item job for scheduling.
+/// </summary>
+/// <typeparam name="T">The type of job, implementing IJob.</typeparam>
+internal struct JobWrapper : IJobWrapper
 {
-  /// <summary>
-  /// Defines types of jobs for scheduling in the performance system.
-  /// </summary>
-  internal enum JobType
+    public JobWrapper(T job)
 
-  /// <summary>
-  /// Interface for wrapping job scheduling and completion.
-  /// </summary>
-  internal interface IJobWrapper
-  {
-    /// <summary>
-    /// Schedules the job with optional count and batch size.
-    /// </summary>
-    /// <param name="count">Number of items to process.</param>
-    /// <param name="batchSize">Size of each batch for parallel processing.</param>
-    /// <returns>A JobHandle representing the scheduled job.</returns>
-    JobHandle Schedule(int count = 0, int batchSize = 64)
-
-    /// <summary>
-    /// Completes the job, disposing of resources if necessary.
-    /// </summary>
-    void Complete()
-
-    /// <summary>
-    /// Gets whether the job is processed in parallel.
-    /// </summary>
-    bool IsParallel { get }
-
-    /// <summary>
-    /// Gets the type of job.
-    /// </summary>
-    JobType JobType { get }
-  }
-
-  /// <summary>
-  /// Wraps a single item job for scheduling.
-  /// </summary>
-  /// <typeparam name="T">The type of job, implementing IJob.</typeparam>
-  internal struct JobWrapper<T> : IJobWrapper where T : struct, IJob
-  {
     /// <summary>
     /// Schedules a single item job.
     /// </summary>
@@ -53,23 +29,16 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     public void Complete()
 
-    /// <summary>
-    /// Gets whether the job is processed in parallel (always false).
-    /// </summary>
-    public bool IsParallel { get }
+}
 
-    /// <summary>
-    /// Gets the type of job (IJob).
-    /// </summary>
-    public JobType JobType { get }
-  }
+/// <summary>
+/// Wraps a parallel job for multiple items.
+/// </summary>
+/// <typeparam name="T">The type of job, implementing IJobParallelFor.</typeparam>
+internal struct JobParallelForWrapper : IJobWrapper
+{
+    public JobParallelForWrapper(T job, int count, int batchSize)
 
-  /// <summary>
-  /// Wraps a parallel job for multiple items.
-  /// </summary>
-  /// <typeparam name="T">The type of job, implementing IJobParallelFor.</typeparam>
-  internal struct JobParallelForWrapper<T> : IJobWrapper where T : struct, IJobParallelFor
-  {
     /// <summary>
     /// Schedules a parallel job for multiple items.
     /// </summary>
@@ -83,83 +52,90 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     public void Complete()
 
-    /// <summary>
-    /// Gets whether the job is processed in parallel (always true).
-    /// </summary>
-    public bool IsParallel { get }
+}
 
-    /// <summary>
-    /// Gets the type of job (IJobParallelFor).
-    /// </summary>
-    public JobType JobType { get }
-  }
-
-  /// <summary>
-  /// Executes a delegate-based job for processing input to output.
-  /// </summary>
-  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
-  [BurstCompile]
-  internal struct DelegateJob<TInput, TOutput> : IJob where TInput : unmanaged where TOutput : unmanaged
-  {
+/// <summary>
+/// Executes a delegate-based job for processing input to output.
+/// </summary>
+/// <typeparam name="TInput">Unmanaged input type.</typeparam>
+/// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+[BurstCompile]
+internal struct DelegateJob : IJob
+{
     /// <summary>
     /// Executes the job, invoking the delegate with input and output arrays.
     /// </summary>
     public void Execute()
-  }
 
-  /// <summary>
-  /// Executes a delegate-based parallel job for processing input to output.
-  /// </summary>
-  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
-  [BurstCompile]
-  internal struct DelegateParallelJob<TInput, TOutput> : IJobParallelFor where TInput : unmanaged where TOutput : unmanaged
-  {
+}
+
+/// <summary>
+/// Executes a delegate-based parallel job for processing input to output.
+/// </summary>
+/// <typeparam name="TInput">Unmanaged input type.</typeparam>
+/// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+[BurstCompile]
+internal struct DelegateParallelJob : IJobParallelFor
+{
     /// <summary>
     /// Executes the parallel job for a specific index range.
     /// </summary>
     /// <param name="index">The index of the batch to process.</param>
     public void Execute(int index)
-  }
 
-  /// <summary>
-  /// Executes a delegate-based job for processing individual items in parallel.
-  /// </summary>
-  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
-  [BurstCompile]
-  internal struct DelegateForJob<TInput, TOutput> : IJobParallelFor where TInput : unmanaged where TOutput : unmanaged
-  {
+}
+
+/// <summary>
+/// Executes a delegate-based job for processing individual items in parallel.
+/// </summary>
+/// <typeparam name="TInput">Unmanaged input type.</typeparam>
+/// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+[BurstCompile]
+internal struct DelegateForJob : IJobParallelFor
+{
     /// <summary>
     /// Executes the job for a specific index.
     /// </summary>
     /// <param name="index">The index of the item to process.</param>
     public void Execute(int index)
-  }
 
-  /// <summary>
-  /// Executes a delegate-based parallel job for transform processing.
-  /// </summary>
-  [BurstCompile]
-  internal struct DelegateParallelForTransformJob : IJobParallelForTransform
-  {
+}
+
+/// <summary>
+/// Executes a delegate-based parallel job for transform processing.
+/// </summary>
+[BurstCompile]
+internal struct DelegateParallelForTransformJob : IJobParallelForTransform
+{
     /// <summary>
     /// Executes the transform job for a specific index.
     /// </summary>
     /// <param name="index">The index of the transform to process.</param>
     /// <param name="transform">The transform to process.</param>
     public void Execute(int index, TransformAccess transform)
-  }
 
-  /// <summary>
-  /// Wraps delegate-based jobs for flexible scheduling across job types.
-  /// </summary>
-  /// <typeparam name="TInput">Unmanaged input type.</typeparam>
-  /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
-  [BurstCompile]
-  internal struct DelegateJobWrapper<TInput, TOutput> : IJobWrapper where TInput : unmanaged where TOutput : unmanaged
-  {
+}
+
+/// <summary>
+/// Wraps delegate-based jobs for flexible scheduling across job types.
+/// </summary>
+/// <typeparam name="TInput">Unmanaged input type.</typeparam>
+/// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+[BurstCompile]
+internal struct DelegateJobWrapper : IJobWrapper
+{
+    public DelegateJobWrapper(
+        Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateIJob,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegateFor,
+        Action<int, TransformAccess, NativeList<LogEntry>> transformDelegate,
+        NativeArray<TInput> inputs,
+        NativeList<TOutput> outputs,
+        TransformAccessArray transforms,
+        int startIndex,
+        int count,
+        int batchSize,
+        JobType jobType)
+
     /// <summary>
     /// Schedules the job based on the specified job type.
     /// </summary>
@@ -173,22 +149,13 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     public void Complete()
 
-    /// <summary>
-    /// Gets whether the job is processed in parallel.
-    /// </summary>
-    public bool IsParallel { get }
+}
 
-    /// <summary>
-    /// Gets the type of job.
-    /// </summary>
-    public JobType JobType { get }
-  }
-
-  /// <summary>
-  /// Tracks performance metrics for job execution and cache access.
-  /// </summary>
-  internal static class Metrics
-  {
+/// <summary>
+/// Tracks performance metrics for job execution and cache access.
+/// </summary>
+internal static class Metrics
+{
     /// <summary>
     /// Gets the average processing time per item for a method.
     /// </summary>
@@ -207,10 +174,11 @@ namespace NoLazyWorkers.Performance
     [BurstCompile]
     public struct SingleEntityMetricsJob : IJob
     {
-      /// <summary>
-      /// Executes the metrics tracking job.
-      /// </summary>
-      public void Execute()
+        /// <summary>
+        /// Executes the metrics tracking job.
+        /// </summary>
+        public void Execute()
+
     }
 
     /// <summary>
@@ -218,27 +186,19 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     [BurstCompile]
     public struct Metric
-    {
-      public FixedString64Bytes MethodName
-      public float ExecutionTimeMs
-      public float MainThreadImpactMs
-      public int ItemCount
-    }
 
     /// <summary>
     /// Stores cache access metrics.
     /// </summary>
     [BurstCompile]
     public struct CacheMetric
-    {
-      public FixedString64Bytes CacheName
-      public bool IsHit
-    }
 
     /// <summary>
     /// Aggregated performance data for a method.
     /// </summary>
     public struct Data
+
+    internal static void TrackNonBurstIteration(string methodName, Action action, int itemCount = 1)
 
     /// <summary>
     /// Tracks execution time of an action and updates metrics.
@@ -296,7 +256,12 @@ namespace NoLazyWorkers.Performance
     /// <param name="metrics">Array to store metrics.</param>
     /// <param name="index">Index in the metrics array.</param>
     [BurstCompile]
-    internal static void TrackExecutionBurst(FixedString64Bytes methodName, float executionTimeMs, int itemCount, NativeArray<Metric> metrics, int index)
+    internal static void TrackExecutionBurst(
+        FixedString64Bytes methodName,
+        float executionTimeMs,
+        int itemCount,
+        NativeArray<Metric> metrics,
+        int index)
 
     /// <summary>
     /// Tracks cache access for a job and updates metrics.
@@ -324,43 +289,41 @@ namespace NoLazyWorkers.Performance
     internal static void UpdateMetric(string methodName, double timeMs, float mainThreadImpactMs, int itemCount)
 
     /// <summary>
+    /// Updates and logs metrics for all tracked methods.
+    /// </summary>
+    private static void UpdateMetrics()
+
+    /// <summary>
     /// Cleans up metrics data and unsubscribes from tick updates.
     /// </summary>
     public static void Cleanup()
-  }
 
-  /// <summary>
-  /// Tracks rolling averages for performance profiling.
-  /// </summary>
-  internal static class DynamicProfiler
-  {
+}
+
+/// <summary>
+/// Tracks rolling averages for performance profiling.
+/// </summary>
+internal static class DynamicProfiler
+{
     /// <summary>
     /// Maintains a rolling average of performance samples.
     /// </summary>
     internal class RollingAverage
     {
-      /// <summary>
-      /// Initializes a new rolling average with the specified maximum sample count.
-      /// </summary>
-      /// <param name="maxCount">Maximum number of samples to store.</param>
-      public RollingAverage(int maxCount)
+        public RollingAverage(int maxCount)
 
-      /// <summary>
-      /// Adds a performance sample to the rolling average.
-      /// </summary>
-      /// <param name="value">The sample value in milliseconds.</param>
-      public void AddSample(double value)
+        /// <summary>
+        /// Adds a performance sample to the rolling average.
+        /// </summary>
+        /// <param name="value">The sample value in milliseconds.</param>
+        public void AddSample(double value)
 
-      /// <summary>
-      /// Gets the current rolling average.
-      /// </summary>
-      /// <returns>The average time in milliseconds.</returns>
-      public double GetAverage()
+        /// <summary>
+        /// Gets the current rolling average.
+        /// </summary>
+        /// <returns>The average time in milliseconds.</returns>
+        public double GetAverage()
 
-      /// <summary>
-      /// Gets the number of samples in the rolling average.
-      /// </summary>
-      public int Count { get }
     }
 
     /// <summary>
@@ -368,7 +331,7 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
     /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
-    /// <param name="isNonBurst">Whether the sample is from a non-Burst context.</param>
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
     internal static void AddSample(string methodName, double avgItemTimeMs, bool isNonBurst = false)
 
     /// <summary>
@@ -376,7 +339,7 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
     /// <param name="defaultTimeMs">Default time if no data exists.</param>
-    /// <param name="isNonBurst">Whether the sample is from a non-Burst context.</param>
+    /// <param name="isNonBurst">Burst flag. Default=false</param>
     /// <returns>The average processing time in milliseconds.</returns>
     internal static float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f, bool isNonBurst = false)
 
@@ -398,13 +361,16 @@ namespace NoLazyWorkers.Performance
     /// Cleans up profiler data.
     /// </summary>
     internal static void Cleanup()
-  }
 
-  /// <summary>
-  /// Tracks main thread impact for performance optimization.
-  /// </summary>
-  internal static class MainThreadImpactTracker
-  {
+}
+
+/// <summary>
+/// Tracks main thread impact for performance optimization.
+/// </summary>
+internal static class MainThreadImpactTracker
+{
+    private struct ImpactSample
+
     /// <summary>
     /// Initializes the main thread impact tracker.
     /// </summary>
@@ -462,16 +428,22 @@ namespace NoLazyWorkers.Performance
     public static float EndSample(int sampleId)
 
     /// <summary>
+    /// Updates performance thresholds based on metrics.
+    /// </summary>
+    private static void UpdateThresholds()
+
+    /// <summary>
     /// Cleans up main thread impact tracking data.
     /// </summary>
     public static void Cleanup()
-  }
 
-  /// <summary>
-  /// Caches performance and impact metrics.
-  /// </summary>
-  internal static class MetricsCache
-  {
+}
+
+/// <summary>
+/// Caches performance and impact metrics.
+/// </summary>
+internal static class MetricsCache
+{
     /// <summary>
     /// Adds a performance sample to the cache.
     /// </summary>
@@ -506,24 +478,21 @@ namespace NoLazyWorkers.Performance
     /// Clears the performance and impact caches.
     /// </summary>
     public static void Cleanup()
-  }
 
-  /// <summary>
-  /// Configuration options for smart execution.
-  /// </summary>
-  public struct SmartExecutionOptions
-  {
-    /// <summary>
-    /// Gets the default smart execution options.
-    /// </summary>
-    public static SmartExecutionOptions Default { get }
-  }
+}
 
-  /// <summary>
-  /// Manages optimized execution of jobs, coroutines, or main thread tasks.
-  /// </summary>
-  public static partial class SmartExecution
-  {
+/// <summary>
+/// Configuration options for smart execution.
+/// </summary>
+public struct SmartExecutionOptions
+
+/// <summary>
+/// Manages optimized execution of jobs, coroutines, or main thread tasks.
+/// </summary>
+public static partial class SmartExecution
+{
+    static SmartExecution()
+
     /// <summary>
     /// Initializes the smart execution system.
     /// </summary>
@@ -552,37 +521,6 @@ namespace NoLazyWorkers.Performance
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         Action<List<TOutput>> burstResultsDelegate = null,
         SmartExecutionOptions options = default) where TOutput : unmanaged
-
-    [BurstCompile]
-    public static IEnumerator ExecuteBurst<TInput, TOutput, TStruct>(
-        string uniqueId,
-        Action<TInput, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
-        TInput input = default,
-        NativeList<TOutput> outputs = default,
-        NativeList<LogEntry> logs = default,
-        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
-        Action<List<TOutput>> nonBurstResultsDelegate = null,
-        SmartExecutionOptions options = default) where TInput : unmanaged where TOutput : unmanaged where TStruct : struct
-
-    public static IEnumerator ExecuteBurstFor<TInput, TOutput, TStruct>(
-        string uniqueId,
-        int itemCount,
-        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstForDelegate,
-        NativeArray<TInput> inputs = default,
-        NativeList<TOutput> outputs = default,
-        NativeList<LogEntry> logs = default,
-        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
-        Action<List<TOutput>> nonBurstResultsDelegate = null,
-        SmartExecutionOptions options = default) where TInput : unmanaged where TOutput : unmanaged where TStruct : struct
-
-    public static IEnumerator ExecuteTransforms<TInput>(
-        string uniqueId,
-        TransformAccessArray transforms,
-        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate,
-        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate,
-        NativeArray<TInput> inputs = default,
-        NativeList<LogEntry> logs = default,
-        SmartExecutionOptions options = default) where TInput : unmanaged
 
     /// <summary>
     /// Runs a non-Burst coroutine with fine-grained yielding for load spreading.
@@ -661,6 +599,28 @@ namespace NoLazyWorkers.Performance
         bool isPlayerVisible)
 
     /// <summary>
+    /// Executes a single-item Burst-compiled job with simplified input handling.
+    /// </summary>
+    /// <param name="uniqueId">Unique identifier for the job, used for metrics and profiling.</param>
+    /// <param name="burstDelegate">Delegate to process the single input, outputting to a NativeList.</param>
+    /// <param name="input">Single input item to process.</param>
+    /// <param name="outputs">Optional NativeList for outputs; created if not provided.</param>
+    /// <param name="burstResultsDelegate">Optional delegate for processing results in Burst.</param>
+    /// <param name="nonBurstResultsDelegate">Optional delegate for processing results without Burst.</param>
+    /// <param name="options">Execution options, e.g., visibility settings.</param>
+    /// <returns>An IEnumerator for coroutine execution, allowing frame distribution.</returns>
+    [BurstCompile]
+    public static IEnumerator ExecuteBurst<TInput, TOutput, TStruct>(
+        string uniqueId,
+        Action<TInput, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
+        TInput input = default,
+        NativeList<TOutput> outputs = default,
+        NativeList<LogEntry> logs = default,
+        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
+        SmartExecutionOptions options = default) where TInput : unmanaged where TOutput : unmanaged where TStruct : struct
+
+    /// <summary>
     /// Executes a Burst-compiled job for a single item with metrics-driven results processing.
     /// </summary>
     /// <typeparam name="TInput">Unmanaged input type.</typeparam>
@@ -671,7 +631,6 @@ namespace NoLazyWorkers.Performance
     /// <param name="nonBurstResultsDelegate">Delegate for non-Burst results processing.</param>
     /// <param name="inputs">Input data array.</param>
     /// <param name="outputs">Output data list.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="options">Execution options.</param>
     /// <returns>An enumerator for the execution coroutine.</returns>
     private static IEnumerator ExecuteBurstInternal<TInput, TOutput>(
@@ -683,6 +642,51 @@ namespace NoLazyWorkers.Performance
         NativeList<LogEntry> logs = default,
         Action<List<TOutput>> nonBurstResultsDelegate = null,
         SmartExecutionOptions options = default) where TInput : unmanaged where TOutput : unmanaged
+
+    /// <summary>
+    /// Executes a Burst-compiled job for multiple items with metrics-driven results processing.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="burstForDelegate">Delegate for Burst-compiled job execution per item.</param>
+    /// <param name="burstResultsDelegate">Delegate for Burst-compiled results processing.</param>
+    /// <param name="nonBurstResultsDelegate">Delegate for non-Burst results processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    public static IEnumerator ExecuteBurstFor<TInput, TOutput, TStruct>(
+        string uniqueId,
+        int itemCount,
+        Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstForDelegate,
+        NativeArray<TInput> inputs = default,
+        NativeList<TOutput> outputs = default,
+        NativeList<LogEntry> logs = default,
+        Action<NativeList<TOutput>, NativeList<LogEntry>> burstResultsDelegate = null,
+        Action<List<TOutput>> nonBurstResultsDelegate = null,
+        SmartExecutionOptions options = default) where TInput : unmanaged where TOutput : unmanaged where TStruct : struct
+
+    /// <summary>
+    /// Executes transform operations using the optimal execution path.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="transforms">Array of transforms to process.</param>
+    /// <param name="burstTransformDelegate">Delegate for burst-compiled transform job.</param>
+    /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
+    public static IEnumerator ExecuteTransforms<TInput>(
+        string uniqueId,
+        TransformAccessArray transforms,
+        Action<int, TransformAccess, NativeList<LogEntry>> burstTransformDelegate,
+        Action<int, Transform, NativeList<LogEntry>> burstMainThreadTransformDelegate,
+        NativeArray<TInput> inputs = default,
+        NativeList<LogEntry> logs = default,
+        SmartExecutionOptions options = default) where TInput : unmanaged
 
     /// <summary>
     /// Runs the execution loop for processing items.
@@ -699,7 +703,6 @@ namespace NoLazyWorkers.Performance
     /// <param name="inputs">Input data array.</param>
     /// <param name="outputs">Output data list.</param>
     /// <param name="transforms">Array of transforms.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="options">Execution options.</param>
     /// <param name="executeAction">Action to execute for each batch.</param>
     /// <returns>An enumerator for the execution coroutine.</returns>
@@ -719,6 +722,16 @@ namespace NoLazyWorkers.Performance
         Func<int, int, JobType, float, float, float, bool, IEnumerator> executeAction = null) where TInput : unmanaged where TOutput : unmanaged
 
     /// <summary>
+    /// Determines the job type for execution scope.
+    /// </summary>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="itemCount">Number of items to process.</param>
+    /// <param name="hasTransforms">Whether transforms are involved.</param>
+    /// <param name="mainThreadCost">Main thread execution cost.</param>
+    /// <returns>The selected job type.</returns>
+    private static JobType DetermineJobTypeExecutescope(string uniqueId, int itemCount, bool hasTransforms, float mainThreadCost)
+
+    /// <summary>
     /// Runs a coroutine for processing Burst-compiled items with metrics-driven yielding.
     /// </summary>
     /// <typeparam name="TInput">Input data type (unmanaged).</typeparam>
@@ -726,10 +739,10 @@ namespace NoLazyWorkers.Performance
     /// <param name="burstDelegate">Burst-compatible delegate for processing items.</param>
     /// <param name="inputs">Input data collection.</param>
     /// <param name="outputs">Output data collection to store results.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="startIndex">Starting index for processing.</param>
     /// <param name="count">Number of items to process.</param>
-    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements.</param>
+    /// <param name="isNetworked">Whether the operation is networked (affects metrics).</param>
+    /// <param name="isPlayerVisible">Whether the operation affects player-visible elements (determines yield type).</param>
     /// <returns>Coroutine that yields to spread load across frames.</returns>
     private static IEnumerator RunBurstCoroutine<TInput, TOutput>(
         Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> burstDelegate,
@@ -745,7 +758,6 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
     /// <param name="transforms">Array of transforms.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="startIndex">Starting index for processing.</param>
     /// <param name="count">Number of transforms to process.</param>
     /// <param name="isPlayerVisible">Whether the execution is networked.</param>
@@ -798,7 +810,6 @@ namespace NoLazyWorkers.Performance
     /// <param name="burstForDelegate">Delegate for IJobFor execution.</param>
     /// <param name="inputs">Input data array.</param>
     /// <param name="jobOutputs">Output data list for jobs.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="coroutineOutputs">Output data list for coroutines.</param>
     /// <param name="batchSize">Size of each batch.</param>
     /// <param name="isPlayerVisible">Whether the execution is networked.</param>
@@ -823,7 +834,6 @@ namespace NoLazyWorkers.Performance
     /// <param name="burstTransformDelegate">Delegate for burst-compiled transform job.</param>
     /// <param name="burstMainThreadTransformDelegate">Delegate for main thread transform processing.</param>
     /// <param name="inputs">Input data array.</param>
-    /// <param name="logs">Optional NativeList for logs.</param>
     /// <param name="batchSize">Size of each batch.</param>
     /// <param name="isPlayerVisible">Whether the execution is networked.</param>
     /// <returns>An enumerator for the baseline coroutine.</returns>
@@ -892,26 +902,33 @@ namespace NoLazyWorkers.Performance
     /// </summary>
     [Serializable]
     private class BaselineData
+    {
+    }
 
     /// <summary>
     /// Serializes rolling average data for storage.
     /// </summary>
     [Serializable]
     private class RollingAverageData
+    {
+    }
 
     /// <summary>
     /// Serializes cache metric data for storage.
     /// </summary>
     [Serializable]
     private class CacheMetricData
-  }
+    {
+    }
 
-  /// <summary>
-  /// Applies Harmony patches for performance-related functionality.
-  /// </summary>
-  [HarmonyPatch]
-  public static class PerformanceHarmonyPatches
-  {
+}
+
+/// <summary>
+/// Applies Harmony patches for performance-related functionality.
+/// </summary>
+[HarmonyPatch]
+public static class PerformanceHarmonyPatches
+{
     /// <summary>
     /// Postfix patch for SetupScreen.ClearFolderContents to reset baseline data.
     /// </summary>
@@ -926,5 +943,5 @@ namespace NoLazyWorkers.Performance
     [HarmonyPostfix]
     [HarmonyPatch(typeof(ImportScreen), "Confirm")]
     public static void ImportScreen_Confirm()
-  }
+
 }

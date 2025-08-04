@@ -5,10 +5,10 @@ using ScheduleOne.Property;
 using ScheduleOne.NPCs;
 using UnityEngine;
 using ScheduleOne.Employees;
-using static NoLazyWorkers.Storage.Extensions;
-using NoLazyWorkers.Storage;
-using Unity.Collections;
+using static NoLazyWorkers.CacheManager.Extensions;
+using NoLazyWorkers.CacheManager;
 using static NoLazyWorkers.TaskService.Extensions;
+using Unity.Collections;
 
 namespace NoLazyWorkers.Stations
 {
@@ -31,7 +31,7 @@ namespace NoLazyWorkers.Stations
       ITransitEntity TransitEntity { get; }
       BuildableItem Buildable { get; }
       Property ParentProperty { get; }
-      List<ItemInstance> RefillList();
+      NativeList<ItemKey> RefillList();
       StationData StationData { get; }
       bool CanRefill(ItemInstance item);
       EntityType EntityType { get; }
@@ -52,16 +52,15 @@ namespace NoLazyWorkers.Stations
       public StationState(IStationAdapter adapter)
       {
         // Initialize Station in CacheService
-        var cacheService = CacheService.GetOrCreateCacheService(adapter.ParentProperty);
-        cacheService.StationData.Add(new StationData(adapter));
-        var storageKey = new EntityKey { Guid = adapter.GUID, StorageType = StorageType.Station };
+        var cacheService = CacheService.GetOrCreateService(adapter.ParentProperty);
+        cacheService.StationDataCache.Add(adapter.GUID, new StationData(adapter));
         foreach (var slot in adapter.InsertSlots)
-          cacheService.RegisterItemSlot(slot, storageKey);
+          cacheService.RegisterItemSlot(slot, adapter.GUID);
         foreach (var slot in adapter.ProductSlots)
-          cacheService.RegisterItemSlot(slot, storageKey);
-        cacheService.RegisterItemSlot(adapter.OutputSlot, storageKey);
+          cacheService.RegisterItemSlot(slot, adapter.GUID);
+        cacheService.RegisterItemSlot(adapter.OutputSlot, adapter.GUID);
         List<ItemSlot> itemSlots = [.. adapter.InsertSlots, .. adapter.ProductSlots, .. new[] { adapter.OutputSlot }];
-        StorageManager.UpdateStorageCache(adapter.ParentProperty, adapter.GUID, itemSlots, StorageType.Station);
+        CacheManager.CacheManager.UpdateStorageCache(adapter.ParentProperty, adapter.GUID, itemSlots, StorageType.Station);
       }
 
       public TStates State { get; set; } // Type-safe state

@@ -13,6 +13,13 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<Analyzer Include="D:\projects\Schedule I\UnityTaskSafeAnalyzer\dist\UnityTaskSafeAnalyzer.dll">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </Analyzer>
+	</ItemGroup>
+	
+	<ItemGroup>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
 		<Reference Include="MelonLoader">
 			<HintPath>d:\Games\Schedule I\MelonLoader\net6\MelonLoader.dll</HintPath>

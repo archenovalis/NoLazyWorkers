@@ -1,21 +1,98 @@
 using ScheduleOne.ItemFramework;
 using UnityEngine;
-using static NoLazyWorkers.Storage.Extensions;
+using static NoLazyWorkers.CacheManager.Extensions;
 using Unity.Burst;
 using HarmonyLib;
 using static NoLazyWorkers.Debug;
 using UnityEngine.Pool;
 using FishNet.Object;
 using ScheduleOne.UI;
+using System.Collections;
+using ScheduleOne.Employees;
 
 namespace NoLazyWorkers.Storage
 {
+  public static class SlotExtensions
+  {
+    [BurstCompile]
+    public struct SlotCheckInput
+    {
+      public SlotData Slot;
+      public ItemData Item;
+      public int Quantity;
+    }
+
+    public static (bool Success, ItemInstance Item) LastRemoveResult { get; set; }
+    public static IEnumerator AdvInsertItemCoroutine(this ItemSlot slot, ItemInstance item, int quantity, Guid entityGuid, Employee employee)
+    {
+      if (slot == null || item == null || quantity <= 0)
+      {
+        Log(Level.Warning, $"AdvInsertItemCoroutine: Invalid slot, item, or quantity for entity {entityGuid}", Category.Storage);
+        yield break;
+      }
+      if (SlotService.ReserveSlot(entityGuid, slot, employee.NetworkObject, "insert", item, quantity))
+      {
+        slot.Quantity += quantity;
+        slot.ItemInstance = item.GetCopy();
+        Log(Level.Verbose, $"AdvInsertItemCoroutine: Inserted {quantity} {item.ID} into slot {slot.SlotIndex}", Category.Storage);
+      }
+      else
+      {
+        Log(Level.Warning, $"AdvInsertItemCoroutine: Failed to reserve slot {slot.SlotIndex} for insert", Category.Storage);
+      }
+    }
+
+    public static IEnumerator AdvRemoveItemCoroutine(this ItemSlot slot, int quantity, Guid entityGuid, Employee employee)
+    {
+      slot.LastRemoveResult = (false, null);
+      if (slot == null || quantity <= 0 || slot.Quantity < quantity)
+      {
+        Log(Level.Warning, $"AdvRemoveItemCoroutine: Invalid slot or quantity for entity {entityGuid}", Category.Storage);
+        yield break;
+      }
+      if (SlotService.ReserveSlot(entityGuid, slot, employee.NetworkObject, "remove", slot.ItemInstance, quantity))
+      {
+        var item = slot.ItemInstance.GetCopy();
+        slot.Quantity -= quantity;
+        if (slot.Quantity == 0)
+          slot.ItemInstance = null;
+        SlotService.ReleaseSlot(slot);
+        slot.LastRemoveResult = (true, item);
+        Log(Level.Verbose, $"AdvRemoveItemCoroutine: Removed {quantity} {item.ID} from slot {slot.SlotIndex}", Category.Storage);
+      }
+      else
+      {
+        Log(Level.Warning, $"AdvRemoveItemCoroutine: Failed to reserve slot {slot.SlotIndex} for remove", Category.Storage);
+      }
+    }
+
+    public static SlotData ToSlotData(this ItemSlot slot)
+    {
+      return new SlotData
+      {
+        Item = slot.ItemInstance != null ? new ItemData(slot.ItemInstance) : ItemData.Empty,
+        Quantity = slot.Quantity,
+        SlotIndex = slot.SlotIndex,
+        StackLimit = slot.ItemInstance?.StackLimit ?? -1,
+        IsLocked = slot.IsLocked
+      };
+    }
+
+    public static ItemData ToItemData(this ItemInstance item)
+    {
+      return new ItemData(item);
+    }
+  }
+
   /// <summary>
   /// Manages slot operations and reservations in a networked environment.
   /// </summary>
   internal class SlotService
   {
     private static SlotService _instance;
+    /// <summary>
+    /// Gets the singleton instance of the SlotService.
+    /// </summary>
     public static SlotService Instance => _instance ??= new SlotService();
 
     internal static readonly ObjectPool<List<SlotOperation>> _operationPool = new ObjectPool<List<SlotOperation>>(
@@ -122,6 +199,9 @@ namespace NoLazyWorkers.Storage
       }
     }
 
+    /// <summary>
+    /// Utility class for processing slot operations with Burst compilation.
+    /// </summary>
     internal static class SlotProcessingUtility
     {
       /// <summary>
@@ -133,8 +213,8 @@ namespace NoLazyWorkers.Storage
       [BurstCompile]
       public static int GetCapacityForItem(SlotData slot, ItemData item)
       {
-        if (!slot.IsValid || slot.IsLocked) return 0;
-        if (slot.Item.Id == "" || slot.Item.AdvCanStackWithBurst(item))
+        if (slot.IsLocked) return 0;
+        if (slot.Item.ID == "" || slot.Item.AdvCanStackWithBurst(item))
           return slot.StackLimit - slot.Quantity;
         return 0;
       }
@@ -149,8 +229,8 @@ namespace NoLazyWorkers.Storage
       [BurstCompile]
       public static bool CanInsert(SlotData slot, ItemData item, int quantity)
       {
-        if (!slot.IsValid || slot.IsLocked || quantity <= 0) return false;
-        if (slot.Item.Id == "" || slot.Item.AdvCanStackWithBurst(item))
+        if (slot.IsLocked || quantity <= 0) return false;
+        if (slot.Item.ID == "" || slot.Item.AdvCanStackWithBurst(item))
           return slot.StackLimit >= slot.Quantity + quantity;
         return false;
       }
@@ -165,8 +245,8 @@ namespace NoLazyWorkers.Storage
       [BurstCompile]
       public static bool CanRemove(SlotData slot, ItemData item, int quantity)
       {
-        if (!slot.IsValid || slot.IsLocked || quantity <= 0) return false;
-        return slot.Item.Id != "" && slot.Item.AdvCanStackWithBurst(item) && slot.Quantity >= quantity;
+        if (slot.IsLocked || quantity <= 0) return false;
+        return slot.Item.ID != "" && slot.Item.AdvCanStackWithBurst(item) && slot.Quantity >= quantity;
       }
     }
 
