@@ -276,8 +276,8 @@ namespace NoLazyWorkers_IL2CPP.Botanists
     }
 
     [HarmonyPostfix]
-    [HarmonyPatch("Destroy")]
-    static void DestroyPostfix(PotConfiguration __instance)
+    [HarmonyPatch("Reset")]
+    static void ResetPostfix(PotConfiguration __instance)
     {
       try
       {
@@ -359,7 +359,7 @@ namespace NoLazyWorkers_IL2CPP.Botanists
     }
   }
 
-  [HarmonyPatch(typeof(PotLoader), "Load")]
+  [HarmonyPatch(typeof(PotLoader))]
   public class PotLoaderPatch
   {
     private static void SupplySourceChanged(PotConfiguration config, Pot pot, BuildableItem item)
@@ -370,6 +370,8 @@ namespace NoLazyWorkers_IL2CPP.Botanists
         MelonLogger.Msg($"PotLoaderPatch: Supply changed for pot {pot.GUID}, newSupply={PotExtensions.Supply[pot.GUID].SelectedObject?.GUID.ToString() ?? "null"}");
     }
 
+    [HarmonyPostfix]
+    [HarmonyPatch("Load", new Type[] { typeof(string) })]
     static void Postfix(string mainPath)
     {
       try
