@@ -1,25 +1,43 @@
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using NoLazyWorkers.CacheManager;
-using NoLazyWorkers.Extensions;
-using NoLazyWorkers.SmartExecution;
-using NoLazyWorkers.TaskService.StationTasks;
+using FishNet;
+using HarmonyLib;
 using ScheduleOne.Employees;
-using ScheduleOne.ObjectScripts;
-using ScheduleOne.Property;
+using ScheduleOne.ItemFramework;
+using ScheduleOne.Management;
+using ScheduleOne.NPCs;
 using System.Collections;
-using System.Text;
-using Unity.Burst;
-using Unity.Collections;
 using UnityEngine;
+using static NoLazyWorkers.Stations.Extensions;
+using static NoLazyWorkers.CacheManager.ManagedDictionaries;
+using static NoLazyWorkers.Employees.Extensions;
+using static NoLazyWorkers.Employees.Utilities;
+using static NoLazyWorkers.Employees.Constants;
+using ScheduleOne.Property;
+using NoLazyWorkers.CacheManager;
+using FishNet.Object;
+using Random = UnityEngine.Random;
+using FishNet.Managing.Object;
+//using static NoLazyWorkers.Stations.PackagingStationExtensions;
+using NoLazyWorkers.TaskService;
+using static NoLazyWorkers.TaskService.Extensions;
+using static NoLazyWorkers.TaskService.TaskRegistry;
+using Funly.SkyStudio;
+using Unity.Collections;
+using static NoLazyWorkers.Movement.Utilities;
+using NoLazyWorkers.Movement;
+using static NoLazyWorkers.Movement.Extensions;
+using static NoLazyWorkers.Extensions.FishNetExtensions;
 using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Debug;
+using UnityEngine.InputSystem.EnhancedTouch;
+using System.Reflection.Metadata;
+using NoLazyWorkers.Extensions;
+using NoLazyWorkers.SmartExecution;
+using Unity.Burst;
 using static NoLazyWorkers.Debug.Deferred;
-using static NoLazyWorkers.Employees.Extensions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using static NoLazyWorkers.Extensions.PoolUtility;
-using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.TaskService.Extensions;
-using static NoLazyWorkers.TaskService.TaskService;
+using System.Text;
 
 namespace NoLazyWorkers.TaskService
 {
@@ -642,18 +660,26 @@ namespace NoLazyWorkers.TaskService
       scope.Dispose();
     }
 
-    public IEnumerator TryGetTask(Employee employee, Action<(bool success, TaskDescriptor task, BaseTask taskImpl)> callback)
+    public bool TryGetTask(Employee employee, out TaskDescriptor task, out BaseTask taskImpl)
     {
-      if (TaskQueue.SelectTask(Enum.Parse<TaskEmployeeType>(employee.EmployeeType.ToString()), employee.GUID, out var task))
+      TaskEmployeeType employeeType;
+      try
       {
-        var taskImpl = TaskRegistry.GetTask(task.Type);
-        callback((true, task, taskImpl));
+        employeeType = Enum.Parse<TaskEmployeeType>(employee.EmployeeType.ToString());
       }
-      else
+      catch
       {
-        callback((false, default, null));
+        task = default;
+        taskImpl = null;
+        return false;
       }
-      yield return null;
+      if (TaskQueue.SelectTask(employeeType, employee.GUID, out task))
+      {
+        taskImpl = TaskRegistry.GetTask(task.Type);
+        return taskImpl != null;
+      }
+      taskImpl = null;
+      return false;
     }
 
     public void CompleteTask(TaskDescriptor task)
@@ -698,6 +724,7 @@ namespace NoLazyWorkers.TaskService
       TaskQueue.Dispose();
       PoolUtility.DisposeNativeListPool(LogPool, "TaskService_LogPool");
       PoolUtility.DisposeNativeListPool(_taskResultPool, "TaskService_TaskResultPool");
+      if (_employeeSpecificTasks.IsCreated) _employeeSpecificTasks.Dispose();
     }
 
     internal void DeactivateProperty()
@@ -725,7 +752,7 @@ namespace NoLazyWorkers.TaskService
       if (!_services.TryGetValue(property, out var service))
       {
         StateServices[property] = new EntityStateService(property);
-        TaskRegistries[property] = new TaskRegistry();
+        TaskRegistries[property] = new TaskRegistry(property);
         TaskRegistries[property].Initialize();
         service = new TaskService(property);
         _services[property] = service;
@@ -757,8 +784,14 @@ namespace NoLazyWorkers.TaskService
   /// </summary>
   public partial class TaskRegistry
   {
+    private readonly Property _property;
     private readonly List<BaseTask> tasks = new();
     public IEnumerable<BaseTask> AllTasks => tasks;
+
+    public TaskRegistry(Property property)
+    {
+      _property = property;
+    }
 
     /// <summary>
     /// Initializes the task registry.
@@ -852,12 +885,12 @@ namespace NoLazyWorkers.TaskService
       taskRegistrations.AppendLine();
       taskRegistrations.AppendLine("namespace NoLazyWorkers.TaskService");
       taskRegistrations.AppendLine("{");
-      taskRegistrations.AppendLine("    public partial class TaskRegistry");
+      taskRegistrations.AppendLine("  public partial class TaskRegistry");
+      taskRegistrations.AppendLine("  {");
+      taskRegistrations.AppendLine("    public void Initialize()");
       taskRegistrations.AppendLine("    {");
-      taskRegistrations.AppendLine("        public void Initialize()");
-      taskRegistrations.AppendLine("        {");
-      taskRegistrations.AppendLine("            // Auto-generated task registrations");
-      taskRegistrations.AppendLine("            Log(Level.Info, \"Initializing TaskRegistry with auto-registered tasks\", Category.Tasks);");
+      taskRegistrations.AppendLine("      // Auto-generated task registrations");
+      taskRegistrations.AppendLine("      Log(Level.Info, \"Initializing TaskRegistry with auto-registered tasks\", Category.Tasks);");
       foreach (var classDeclaration in receiver.CandidateClasses)
       {
         var semanticModel = compilation.GetSemanticModel(classDeclaration.SyntaxTree);
@@ -889,12 +922,12 @@ namespace NoLazyWorkers.TaskService
               classDeclaration.GetLocation()));
           continue;
         }
-        taskRegistrations.AppendLine($"                // Register task {classSymbol.Name}");
-        taskRegistrations.AppendLine($"                Register(new {classSymbol.ToDisplayString()}());");
-        taskRegistrations.AppendLine($"                Log(Level.Info, $\"Registered task type {classSymbol.Name} ({classSymbol.ToDisplayString()})\", Category.Tasks);");
+        taskRegistrations.AppendLine($"      // Register task {classSymbol.Name}");
+        taskRegistrations.AppendLine($"      Register(new {classSymbol.ToDisplayString()}());");
+        taskRegistrations.AppendLine($"      Log(Level.Info, $\"Registered task type {classSymbol.Name} ({classSymbol.ToDisplayString()})\", Category.Tasks);");
       }
-      taskRegistrations.AppendLine("        }");
       taskRegistrations.AppendLine("    }");
+      taskRegistrations.AppendLine("  }");
       taskRegistrations.AppendLine("}");
       context.AddSource("TaskRegistry.g.cs", taskRegistrations.ToString());
     }

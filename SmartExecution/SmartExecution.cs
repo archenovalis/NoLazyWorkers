@@ -88,6 +88,20 @@ namespace NoLazyWorkers.SmartExecution
     private readonly int _count;
     private readonly int _batchSize;
 
+    /// <summary>
+    /// Initializes a new UnifiedJobWrapper with job execution parameters.
+    /// </summary>
+    /// <param name="actionIJob">Delegate for IJob execution.</param>
+    /// <param name="actionFor">Delegate for IJobFor execution.</param>
+    /// <param name="actionTransform">Delegate for transform job execution.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="logs">Log entries list.</param>
+    /// <param name="transforms">Transform array.</param>
+    /// <param name="startIndex">Starting index for processing.</param>
+    /// <param name="count">Number of items to process.</param>
+    /// <param name="batchSize">Batch size for parallel jobs.</param>
+    /// <param name="jobType">Type of job to execute.</param>
     public UnifiedJobWrapper(
         Action<int, int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> actionIJob,
         Action<int, NativeArray<TInput>, NativeList<TOutput>, NativeList<LogEntry>> actionFor,
@@ -113,17 +127,6 @@ namespace NoLazyWorkers.SmartExecution
       _count = count;
       _batchSize = batchSize;
       _logs.Add(new(Level.Info, $"Created UnifiedJobWrapper for jobType={jobType}, count={count}, batchSize={batchSize}", Category.Performance));
-    }
-
-    /// <summary>
-    /// Creates a base wrapper for job handle and disposal.
-    /// </summary>
-    /// <returns>A UnifiedJobWrapperBase instance.</returns>
-    [BurstCompile]
-    public UnifiedJobWrapperBase CreateBaseWrapper()
-    {
-      var disposeAction = BurstCompiler.CompileFunctionPointer<Action>(Dispose);
-      return new UnifiedJobWrapperBase(default, disposeAction);
     }
 
     /// <summary>
@@ -353,6 +356,9 @@ namespace NoLazyWorkers.SmartExecution
       CoroutineRunner.Instance.RunCoroutine(TrackGCAllocationsCoroutine());
     }
 
+    /// <summary>
+    /// Initializes the SmartExecution system.
+    /// </summary>
     public static void Initialize()
     {
       InitializeMetrics();
@@ -387,6 +393,10 @@ namespace NoLazyWorkers.SmartExecution
       Log(Level.Info, "SmartExecution cleaned up", Category.Performance);
     }
 
+    /// <summary>
+    /// Monitors thread usage to detect oversubscription.
+    /// </summary>
+    /// <returns>An enumerator for the coroutine.</returns>
     private static IEnumerator MonitorThreadUsage()
     {
       while (true)
@@ -401,6 +411,14 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Checks if an action is task-safe by testing Unity object access.
+    /// </summary>
+    /// <param name="key">The identifier for the action.</param>
+    /// <param name="action">The action to test.</param>
+    /// <param name="uniqueId">Unique identifier for logging.</param>
+    /// <param name="logs">List for logging errors.</param>
+    /// <returns>True if the action is task-safe, false otherwise.</returns>
     private static bool CheckTaskSafety(string key, Action action, string uniqueId, List<LogEntry> logs)
     {
       try
@@ -434,6 +452,18 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Processes results using coroutine or main thread based on metrics.
+    /// </summary>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="resultsAction">Delegate to process the results.</param>
+    /// <param name="managedOutputs">List of output items.</param>
+    /// <param name="options">Execution options.</param>
+    /// <param name="mainThreadCost">Main thread execution cost.</param>
+    /// <param name="coroutineCost">Coroutine execution cost.</param>
+    /// <param name="isHighFps">Whether the frame rate is high.</param>
+    /// <returns>An enumerator for the results processing coroutine.</returns>
     private static IEnumerator ProcessResults<TOutput>(
             string uniqueId,
             Action<List<TOutput>> resultsAction,
@@ -488,6 +518,19 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Executes a non-Burst job with dynamic batching and results processing.
+    /// </summary>
+    /// <typeparam name="TInput">Input data type.</typeparam>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="action">Delegate for processing a batch of items.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="resultsAction">Delegate for processing results.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
     public static IEnumerator Execute<TInput, TOutput>(
             string uniqueId,
             int itemCount,
@@ -522,23 +565,24 @@ namespace NoLazyWorkers.SmartExecution
           {
             float batchImpact = mainThreadCost * currentBatchSize;
             float taskOverhead = GetTaskOverhead(taskKey);
+            // Dynamic switch: Task if safe, low overhead, and threads free; main if low impact/high FPS; else coroutine with yielding.
             if (isTaskSafe && taskOverhead < batchImpact && _activeThreads < SystemInfo.processorCount)
             {
 #if DEBUG
               Log(Level.Verbose, $"Executing {uniqueId} batch {batchStart / currentBatchSize + 1} via Task (batchSize={currentBatchSize}, taskOverhead={taskOverhead:F3}ms, activeThreads={_activeThreads})", Category.Performance);
 #endif
               Interlocked.Increment(ref _activeThreads);
-              return TaskToCoroutine(SmartMetrics.TrackExecutionTaskAsync(taskKey, () =>
-                      {
-                        try
-                        {
-                          action(batchStart, currentBatchSize, inputs, tempOutputs);
-                        }
-                        finally
-                        {
-                          Interlocked.Decrement(ref _activeThreads);
-                        }
-                      }, currentBatchSize));
+              return TaskToCoroutine(TrackExecutionTaskAsync(taskKey, () => Task.Run(() =>
+                  {
+                    try
+                    {
+                      action(batchStart, currentBatchSize, inputs, tempOutputs);
+                    }
+                    finally
+                    {
+                      Interlocked.Decrement(ref _activeThreads);
+                    }
+                  }), currentBatchSize));
             }
             else if (batchImpact <= MAX_FRAME_TIME_MS && isHighFps)
             {
@@ -563,6 +607,11 @@ namespace NoLazyWorkers.SmartExecution
       Log(Level.Info, $"ExecuteNonNullable completed for {uniqueId}: items={itemCount}, batches={Mathf.CeilToInt((float)itemCount / batchSize)}", Category.Performance);
     }
 
+    /// <summary>
+    /// Converts a Task to a coroutine for Unity integration.
+    /// </summary>
+    /// <param name="task">The task to convert.</param>
+    /// <returns>An enumerator for the coroutine.</returns>
     private static IEnumerator TaskToCoroutine(Task task)
     {
       while (!task.IsCompleted)
@@ -593,8 +642,7 @@ namespace NoLazyWorkers.SmartExecution
     {
       var stopwatch = Stopwatch.StartNew();
       int endIndex = startIndex + count;
-      int subBatchSize = Math.Min(10, count);
-
+      int subBatchSize = Math.Min(10, count); // Dynamic sub-batching for yielding within coroutine.
       for (int i = startIndex; i < endIndex; i += subBatchSize)
       {
         int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
@@ -608,6 +656,12 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Tracks execution metrics for a non-Burst action.
+    /// </summary>
+    /// <param name="key">The identifier for the action.</param>
+    /// <param name="action">The action to measure.</param>
+    /// <param name="itemCount">Number of items processed.</param>
     private static void TrackExecutionMetrics(string key, Action action, int itemCount)
     {
       var stopwatch = Stopwatch.StartNew();
@@ -617,6 +671,13 @@ namespace NoLazyWorkers.SmartExecution
       AddImpactSample(key, itemCount > 0 ? impactTimeMs / itemCount : impactTimeMs);
     }
 
+    /// <summary>
+    /// Calculates the optimal batch size based on performance metrics.
+    /// </summary>
+    /// <param name="totalItems">Total number of items to process.</param>
+    /// <param name="defaultAvgProcessingTimeMs">Default average processing time in milliseconds.</param>
+    /// <param name="uniqueId">Unique identifier for the task.</param>
+    /// <returns>The calculated batch size.</returns>
     private static int CalculateBatchSize(int totalItems, float defaultAvgProcessingTimeMs, string uniqueId)
     {
       float avgProcessingTimeMs = GetDynamicAvgProcessingTimeMs(uniqueId, defaultAvgProcessingTimeMs);
@@ -630,6 +691,21 @@ namespace NoLazyWorkers.SmartExecution
       return Mathf.Min(totalItems, calculatedBatchSize);
     }
 
+    /// <summary>
+    /// Runs the execution loop with dynamic batching and execution path selection.
+    /// </summary>
+    /// <typeparam name="TInput">Input data type.</typeparam>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="action">Delegate for processing a batch of items.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="resultsAction">Delegate for processing results.</param>
+    /// <param name="options">Execution options.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="executeAction">Delegate to execute a batch.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
     private static IEnumerator RunExecutionLoop<TInput, TOutput>(
             string uniqueId,
             int itemCount,
@@ -696,6 +772,19 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Establishes baseline performance for non-Burst execution.
+    /// </summary>
+    /// <typeparam name="TInput">Input data type.</typeparam>
+    /// <typeparam name="TOutput">Output data type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for the execution.</param>
+    /// <param name="action">Delegate for processing a batch of items.</param>
+    /// <param name="resultsAction">Delegate for processing results.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the baseline coroutine.</returns>
     private static IEnumerator EstablishBaseline<TInput, TOutput>(
         string uniqueId,
         Action<int, int, TInput[], List<TOutput>> action,
@@ -705,6 +794,7 @@ namespace NoLazyWorkers.SmartExecution
         int batchSize,
         SmartOptions options)
     {
+      ValidateBaseline(uniqueId);
       string mainThreadKey = $"{uniqueId}_MainThread";
       string coroutineKey = $"{uniqueId}_NonBurstCoroutine";
       string resultsKey = $"{uniqueId}_Results";
@@ -775,7 +865,7 @@ namespace NoLazyWorkers.SmartExecution
     /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
     /// <param name="burstResultsAction">Burst-compatible delegate for results processing.</param>
     /// <param name="nonBurstResultsAction">Non-Burst delegate for results processing.</param>
-    /// <param name="outputs">Output data list.</param>
+    /// <param name="managedOutputs">Output data list.</param>
     /// <param name="options">Execution options.</param>
     /// <param name="mainThreadCost">Main thread execution cost.</param>
     /// <param name="coroutineCost">Coroutine execution cost.</param>
@@ -971,6 +1061,20 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
+    /// <summary>
+    /// Internal method for executing Burst-compiled jobs with dynamic execution path selection.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="burstAction">Delegate for Burst-compiled job execution.</param>
+    /// <param name="burstResultsAction">Delegate for Burst-compiled results processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="logs">Optional NativeList for logs.</param>
+    /// <param name="nonBurstResultsAction">Delegate for non-Burst results processing.</param>
+    /// <param name="options">Execution options.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
     [BurstCompile]
     private static IEnumerator ExecuteBurstInternal<TInput, TOutput>(
         string uniqueId,
@@ -1013,15 +1117,14 @@ namespace NoLazyWorkers.SmartExecution
             {
               float batchImpact = mainThreadCost * batchSize;
               float schedulingOverhead = GetSchedulingOverhead(jobKey);
+              // Dynamic switch for single-item: IJob if overhead < impact, main if low/high FPS, else coroutine.
               if (schedulingOverhead < batchImpact)
               {
 #if DEBUG
                 Log(Level.Verbose, $"Executing {uniqueId} via IJob (single item, schedulingOverhead={schedulingOverhead:F3}ms)", Category.Performance);
 #endif
                 var jobWrapper = new UnifiedJobWrapper<TInput, TOutput>(burstAction, null, null, inputs, nativeOutputs, logs, default, batchStart, batchSize, batchSize, JobType.IJob);
-                var handle = jobWrapper.Schedule();
-                _pendingJobs.Add(handle, jobWrapper.CreateBaseWrapper());
-                return TrackJobWithStopwatch(jobKey, () => handle, batchSize);
+                return TrackJobWithStopwatch(jobKey, () => jobWrapper.Schedule(), batchSize);
               }
               else if (batchImpact <= MAX_FRAME_TIME_MS && isHighFps)
               {
@@ -1133,10 +1236,12 @@ namespace NoLazyWorkers.SmartExecution
             {
               float batchImpact = mainThreadCost * batchSize;
               float schedulingOverhead = GetSchedulingOverhead(jobKey);
+              // Dynamic switch: IJobParallelFor if multi-core beneficial, IJobFor if sequential better, main if low, coroutine else.
               if (schedulingOverhead < batchImpact)
               {
-                JobType selectedJobType = jobType; // Determined by DetermineJobTypeExecutescope
-                if (ShouldUseParallel(uniqueId, batchSize) && selectedJobType == JobType.IJobParallelFor)
+                JobType selectedJobType = itemCount == 1 ? JobType.IJob
+                            : ShouldUseParallel(uniqueId, batchSize) ? JobType.IJobParallelFor : JobType.IJobFor;
+                if (selectedJobType == JobType.IJobParallelFor)
                 {
 #if DEBUG
                   Log(Level.Verbose, $"Executing {uniqueId} via IJobParallelFor (batchSize={batchSize}, schedulingOverhead={schedulingOverhead:F3}ms)", Category.Performance);
@@ -1270,6 +1375,25 @@ namespace NoLazyWorkers.SmartExecution
       if (transforms.isCreated) transforms.Dispose();
     }
 
+    /// <summary>
+    /// Runs a Burst-compiled execution loop with dynamic batching and execution path selection.
+    /// </summary>
+    /// <typeparam name="TInput">Unmanaged input type.</typeparam>
+    /// <typeparam name="TOutput">Unmanaged output type.</typeparam>
+    /// <param name="uniqueId">Unique identifier for tracking metrics.</param>
+    /// <param name="itemCount">Total number of items to process.</param>
+    /// <param name="batchSize">Size of each batch.</param>
+    /// <param name="burstActionIJob">Delegate for IJob execution.</param>
+    /// <param name="burstActionFor">Delegate for IJobFor execution.</param>
+    /// <param name="burstTransformAction">Delegate for transform job execution.</param>
+    /// <param name="burstMainThreadTransformAction">Delegate for main thread transform processing.</param>
+    /// <param name="inputs">Input data array.</param>
+    /// <param name="outputs">Output data list.</param>
+    /// <param name="logs">Optional NativeList for logs.</param>
+    /// <param name="transforms">Transform array.</param>
+    /// <param name="options">Execution options.</param>
+    /// <param name="executeAction">Delegate to execute a batch.</param>
+    /// <returns>An enumerator for the execution coroutine.</returns>
     [BurstCompile]
     private static IEnumerator RunBurstExecutionLoop<TInput, TOutput>(
             string uniqueId,
@@ -1411,7 +1535,7 @@ namespace NoLazyWorkers.SmartExecution
 
       var stopwatch = Stopwatch.StartNew();
       int endIndex = startIndex + count;
-      int subBatchSize = Math.Min(10, count);
+      int subBatchSize = Math.Min(10, count); // Dynamic sub-batching for yielding within coroutine.
       string key = $"{typeof(TInput).Name}_{typeof(TOutput).Name}_BurstCoroutine";
       AddBatchSize(key, subBatchSize);
 
@@ -1454,7 +1578,7 @@ namespace NoLazyWorkers.SmartExecution
     {
       var stopwatch = Stopwatch.StartNew();
       int endIndex = startIndex + count;
-      int subBatchSize = Math.Min(10, count);
+      int subBatchSize = Math.Min(10, count); // Dynamic sub-batching for yielding.
       for (int i = startIndex; i < endIndex; i += subBatchSize)
       {
         int currentSubBatchSize = Math.Min(subBatchSize, endIndex - i);
@@ -1922,6 +2046,9 @@ namespace NoLazyWorkers.SmartExecution
       return itemCount > PARALLEL_MIN_ITEMS && GetAvgItemTimeMs($"{uniqueId}_IJobParallelFor") > 0.05f;
     }
 
+    /// <summary>
+    /// Saves baseline performance data to a file.
+    /// </summary>
     internal static void SaveBaselineData()
     {
       if (LoadManager.Instance.ActiveSaveInfo == null) return;
@@ -1929,10 +2056,13 @@ namespace NoLazyWorkers.SmartExecution
       string filePath = Path.Combine(MelonEnvironment.UserDataDirectory, $"{fileName}_{saveId}.json");
       try
       {
-        var data = new OptimizationData
+        var data = new OptimizationData // Use qualified name
         {
-          Metrics = NonBurstMetrics.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-          BatchSizeHistory = BatchSizeHistory.ToDictionary(kvp => kvp.Key, kvp => kvp.Value)
+          Metrics = SmartMetrics.NonBurstMetrics.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+          BatchSizeHistory = SmartMetrics.BatchSizeHistory.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+          MetricsThresholds = SmartMetrics.MetricsThresholds.ToDictionary(kvp => kvp.Key, kvp => kvp.Value), // Added
+          RollingAveragesData = SmartMetrics.RollingAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }), // Added
+          ImpactAveragesData = SmartMetrics.ImpactAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }) // Added
         };
         string json = JsonUtility.ToJson(data);
         if (json == _lastSavedDataHash) return;
@@ -1946,19 +2076,9 @@ namespace NoLazyWorkers.SmartExecution
       }
     }
 
-    private static int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs, string uniqueId, bool isTransform = false)
-    {
-      float avgProcessingTimeMs = GetDynamicAvgProcessingTimeMs(uniqueId, defaultAvgProcessingTimeMs, isTransform);
-      int avgBatchSize = GetAverageBatchSize(uniqueId);
-      float targetFrameTimeMs = Mathf.Min(16.666f, Time.deltaTime * 1000f);
-      int calculatedBatchSize = Mathf.Max(1, Mathf.RoundToInt(targetFrameTimeMs / Math.Max(avgProcessingTimeMs, 0.001f)));
-      if (avgBatchSize > 0)
-      {
-        calculatedBatchSize = Mathf.RoundToInt((calculatedBatchSize + avgBatchSize) / 2f);
-      }
-      return Mathf.Min(totalItems, calculatedBatchSize);
-    }
-
+    /// <summary>
+    /// Loads baseline performance data from a file.
+    /// </summary>
     private static void LoadBaselineData()
     {
       if (LoadManager.Instance.ActiveSaveInfo == null) return;
@@ -1972,13 +2092,25 @@ namespace NoLazyWorkers.SmartExecution
         var data = JsonUtility.FromJson<OptimizationData>(json);
         foreach (var entry in data.Metrics)
         {
-          AddSample(entry.Key, entry.Value.AvgItemTimeMs, true);
-          AddImpactSample(entry.Key, entry.Value.AvgMainThreadImpactMs);
+          SmartMetrics.AddSample(entry.Key, entry.Value.AvgItemTimeMs, true);
+          SmartMetrics.AddImpactSample(entry.Key, entry.Value.AvgMainThreadImpactMs);
         }
         foreach (var entry in data.BatchSizeHistory)
         {
           foreach (var size in entry.Value)
-            AddBatchSize(entry.Key, size);
+            SmartMetrics.AddBatchSize(entry.Key, size);
+        }
+        foreach (var entry in data.MetricsThresholds) // Added load
+          SmartMetrics.MetricsThresholds[entry.Key] = entry.Value;
+        foreach (var entry in data.RollingAveragesData) // Added reconstruct
+        {
+          var avg = new RollingAverage(entry.Value.Samples.Length) { _samples = entry.Value.Samples, _count = entry.Value.Count, _sum = entry.Value.Sum };
+          SmartMetrics.RollingAverages[entry.Key] = avg;
+        }
+        foreach (var entry in data.ImpactAveragesData) // Added reconstruct
+        {
+          var avg = new RollingAverage(entry.Value.Samples.Length) { _samples = entry.Value.Samples, _count = entry.Value.Count, _sum = entry.Value.Sum };
+          SmartMetrics.ImpactAverages[entry.Key] = avg;
         }
         _lastSavedDataHash = json;
         Log(Level.Info, $"Loaded baseline data from {filePath}", Category.Performance);
@@ -1987,6 +2119,27 @@ namespace NoLazyWorkers.SmartExecution
       {
         Log(Level.Error, $"Failed to load baseline data: {ex.Message}", Category.Performance);
       }
+    }
+
+    /// <summary>
+    /// Calculates the optimal batch size for Burst operations.
+    /// </summary>
+    /// <param name="totalItems">Total number of items to process.</param>
+    /// <param name="defaultAvgProcessingTimeMs">Default average processing time in milliseconds.</param>
+    /// <param name="uniqueId">Unique identifier for the task.</param>
+    /// <param name="isTransform">Whether the operation involves transforms.</param>
+    /// <returns>The calculated batch size.</returns>
+    private static int GetDynamicBatchSize(int totalItems, float defaultAvgProcessingTimeMs, string uniqueId, bool isTransform = false)
+    {
+      float avgProcessingTimeMs = GetDynamicAvgProcessingTimeMs(uniqueId, defaultAvgProcessingTimeMs, isTransform);
+      int avgBatchSize = GetAverageBatchSize(uniqueId);
+      float targetFrameTimeMs = Mathf.Min(16.666f, Time.deltaTime * 1000f);
+      int calculatedBatchSize = Mathf.Max(1, Mathf.RoundToInt(targetFrameTimeMs / Math.Max(avgProcessingTimeMs, 0.001f)));
+      if (avgBatchSize > 0)
+      {
+        calculatedBatchSize = Mathf.RoundToInt((calculatedBatchSize + avgBatchSize) / 2f);
+      }
+      return Mathf.Min(totalItems, calculatedBatchSize);
     }
 
     /// <summary>
@@ -2026,54 +2179,17 @@ namespace NoLazyWorkers.SmartExecution
     {
       public Dictionary<string, MetricData> Metrics = new();
       public Dictionary<string, List<int>> BatchSizeHistory = new();
+      public Dictionary<string, int> MetricsThresholds = new(); // Added for full baseline resume
+      public Dictionary<string, RollingAverageData> RollingAveragesData = new(); // Added serializable for averages
+      public Dictionary<string, RollingAverageData> ImpactAveragesData = new(); // Added serializable for impacts
     }
 
-    /// <summary>
-    /// Serializes baseline data for storage.
-    /// </summary>
-    [Serializable]
-    private class BaselineData
-    {
-      public Dictionary<string, int> MetricsThresholds;
-      public Dictionary<string, RollingAverageData> RollingAverages;
-      public Dictionary<string, RollingAverageData> MainThreadImpactAverages;
-      public Dictionary<string, bool> BurstBaselineEstablished;
-      public Dictionary<string, int[]> BatchSizeHistory;
-      public Dictionary<string, CacheMetricData> PerformanceMetrics;
-      public Dictionary<string, int> BurstExecutionCount;
-      public List<string> BurstFirstRuns;
-      public Dictionary<string, bool> BaselineEstablished;
-      public Dictionary<string, int> ExecutionCount;
-      public List<string> FirstRuns;
-    }
-
-    /// <summary>
-    /// Serializes rolling average data for storage.
-    /// </summary>
     [Serializable]
     private class RollingAverageData
     {
       public double[] Samples;
       public int Count;
       public double Sum;
-    }
-
-    /// <summary>
-    /// Serializes cache metric data for storage.
-    /// </summary>
-    [Serializable]
-    private class CacheMetricData
-    {
-      public long CacheHits;
-      public long CacheMisses;
-      public long CallCount;
-      public double TotalTimeMs;
-      public double MaxTimeMs;
-      public double TotalMainThreadImpactMs;
-      public double MaxMainThreadImpactMs;
-      public long ItemCount;
-      public double AvgItemTimeMs;
-      public double AvgMainThreadImpactMs;
     }
   }
 

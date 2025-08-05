@@ -26,6 +26,7 @@ namespace NoLazyWorkers.SmartExecution
     {
       public FixedString64Bytes MethodName;
       public long StartTicks;
+      public int Id;
     }
 
     internal static readonly ConcurrentDictionary<string, MetricData> NonBurstMetrics = new();
@@ -86,6 +87,17 @@ namespace NoLazyWorkers.SmartExecution
       public double AvgMainThreadImpactMs;
     }
 
+    /// Stores performance metrics for a method.
+    /// </summary>
+    [BurstCompile]
+    public struct Metric
+    {
+      public FixedString64Bytes MethodName;
+      public float ExecutionTimeMs;
+      public float MainThreadImpactMs;
+      public int ItemCount;
+    }
+
     /// <summary>
     /// Initializes the performance metrics system, configuring thread pool settings.
     /// </summary>
@@ -106,23 +118,6 @@ namespace NoLazyWorkers.SmartExecution
     }
 
     /// <summary>
-    /// Tracks execution time of a Burst-compiled method and updates metrics.
-    /// </summary>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="executionTimeMs">Execution time in milliseconds.</param>
-    /// <param name="itemCount">Number of items processed.</param>
-    /// <param name="logs">Native list for logging performance data.</param>
-    [BurstCompile]
-    public static void TrackExecutionBurst(
-                FixedString64Bytes methodName,
-                float executionTimeMs,
-                int itemCount,
-                NativeList<LogEntry> logs)
-    {
-      UpdateMetric(methodName.ToString(), executionTimeMs, 0, itemCount, logs);
-    }
-
-    /// <summary>
     /// Tracks execution time of a non-Burst method and updates metrics.
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
@@ -138,6 +133,7 @@ namespace NoLazyWorkers.SmartExecution
       UpdateMetricNonBurst(methodName, _stopwatch.ElapsedTicks * 1000f / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
     }
 
+
     /// <summary>
     /// Begins a performance sample for a method.
     /// </summary>
@@ -148,20 +144,21 @@ namespace NoLazyWorkers.SmartExecution
       int id = Interlocked.Increment(ref _sampleId);
       if (BurstCompiler.IsEnabled)
       {
-        _burstSamples.Add(new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks });
+        _burstSamples.Add(new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks, Id = id });
         return id;
       }
       else
       {
-        _nonBurstSamples[id] = new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks };
+        _nonBurstSamples[id] = new ImpactSample { MethodName = methodName, StartTicks = _stopwatch.ElapsedTicks, Id = id };
         return id;
       }
     }
 
+
     /// <summary>
-    /// Ends a performance sample and calculates main thread impact.
+    /// Ends a performance sample and calculates impact time.
     /// </summary>
-    /// <param name="sampleId">The sample ID returned by BeginSample.</param>
+    /// <param name="sampleId">The sample ID.</param>
     /// <returns>The main thread impact time in milliseconds.</returns>
     public static float EndSample(int sampleId)
     {
@@ -169,7 +166,7 @@ namespace NoLazyWorkers.SmartExecution
       {
         for (int i = 0; i < _burstSamples.Length; i++)
         {
-          if (_burstSamples[i].StartTicks == sampleId)
+          if (_burstSamples[i].Id == sampleId)
           {
             float impactMs = (_stopwatch.ElapsedTicks - _burstSamples[i].StartTicks) * 1000f / Stopwatch.Frequency;
             var avg = _mainThreadImpacts.GetOrAdd(_burstSamples[i].MethodName.ToString(), _ => new RollingAverage(100));
@@ -276,7 +273,7 @@ namespace NoLazyWorkers.SmartExecution
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
     /// <param name="avgItemTimeMs">Average item processing time in milliseconds.</param>
-    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    /// <param name="isNonBurst">Indicates if the context is non-Burst. Default is false.</param>
     internal static void AddSample(string methodName, double avgItemTimeMs, bool isNonBurst = false)
     {
       if (avgItemTimeMs <= 0) return;
@@ -293,7 +290,7 @@ namespace NoLazyWorkers.SmartExecution
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
     /// <param name="defaultTimeMs">Default time if no data exists.</param>
-    /// <param name="isNonBurst">Burst flag. Default=false</param>
+    /// <param name="isNonBurst">Indicates if the context is non-Burst. Default is false.</param>
     /// <returns>The average processing time in milliseconds.</returns>
     internal static float GetDynamicAvgProcessingTimeMs(string methodName, float defaultTimeMs = 0.15f, bool isNonBurst = false)
     {
@@ -365,7 +362,6 @@ namespace NoLazyWorkers.SmartExecution
         Log(Level.Verbose, $"High variability for {methodName}: {impactTimeMs:F3}ms vs avg {avg.GetAverage():F3}ms", Category.Performance);
 #endif
       }
-      AddImpactSample(methodName, impactTimeMs);
       avg.AddSample(impactTimeMs);
     }
 
@@ -391,12 +387,22 @@ namespace NoLazyWorkers.SmartExecution
       return overhead == float.MaxValue ? 2f : overhead;
     }
 
+    /// <summary>
+    /// Adds a task overhead sample for a method.
+    /// </summary>
+    /// <param name="key">The method identifier.</param>
+    /// <param name="overheadMs">The task overhead in milliseconds.</param>
     public static void AddTaskOverheadSample(string key, double overheadMs)
     {
       var avg = _taskOverheadAverages.GetOrAdd(key, _ => new RollingAverage(WINDOW_SIZE));
       avg.AddSample(overheadMs);
     }
 
+    /// <summary>
+    /// Gets the average task overhead for a method.
+    /// </summary>
+    /// <param name="key">The method identifier.</param>
+    /// <returns>The average task overhead in milliseconds.</returns>
     public static float GetTaskOverhead(string key)
     {
       if (_taskOverheadAverages.TryGetValue(key, out var avg))
@@ -406,12 +412,23 @@ namespace NoLazyWorkers.SmartExecution
       return 0.1f; // Default overhead
     }
 
+
+    /// <summary>
+    /// Adds a scheduling impact sample for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="schedulingTimeMs">The scheduling time in milliseconds.</param>
     public static void AddSchedulingImpactSample(string methodName, double schedulingTimeMs)
     {
       var avg = _schedulingAverages.GetOrAdd(methodName, _ => new RollingAverage(10));
       avg.AddSample(schedulingTimeMs);
     }
 
+    /// <summary>
+    /// Gets the scheduling overhead for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <returns>The scheduling overhead in milliseconds.</returns>
     public static float GetSchedulingOverhead(string methodName)
     {
       if (_schedulingAverages.TryGetValue(methodName, out var avg))
@@ -419,54 +436,6 @@ namespace NoLazyWorkers.SmartExecution
         return (float)avg.GetAverage();
       }
       return 0.1f; // Default overhead
-    }
-
-    public static async Task TrackExecutionTaskAsync(string methodName, Action action, int itemCount = 1)
-    {
-      var creationStart = Stopwatch.GetTimestamp();
-      var task = Task.Run(action);
-      var creationEnd = Stopwatch.GetTimestamp();
-      double creationOverheadMs = (creationEnd - creationStart) * 1000.0 / Stopwatch.Frequency;
-
-      var syncStart = Stopwatch.GetTimestamp();
-      await task.ConfigureAwait(false);
-      var syncEnd = Stopwatch.GetTimestamp();
-      double syncOverheadMs = (syncEnd - syncStart) * 1000.0 / Stopwatch.Frequency;
-
-      double totalOverheadMs = creationOverheadMs + syncOverheadMs;
-      AddTaskOverheadSample(methodName, totalOverheadMs);
-
-#if DEBUG
-      Log(Level.Verbose, $"Task {methodName}: CreationOverhead={creationOverheadMs:F3}ms, SyncOverhead={syncOverheadMs:F3}ms, TotalOverhead={totalOverheadMs:F3}ms", Category.Performance);
-#endif
-
-      float estimatedTimeMs = GetDynamicAvgProcessingTimeMs(methodName) * itemCount;
-      UpdateMetricNonBurst(methodName, estimatedTimeMs, (float)totalOverheadMs, itemCount);
-    }
-
-    public static IEnumerator TrackJobWithStopwatch(string methodName, Func<JobHandle> scheduleJob, int itemCount = 1)
-    {
-      var schedulingStart = Stopwatch.GetTimestamp();
-      var handle = scheduleJob();
-      var schedulingEnd = Stopwatch.GetTimestamp();
-      double schedulingOverheadMs = (schedulingEnd - schedulingStart) * 1000.0 / Stopwatch.Frequency;
-
-      yield return new WaitUntil(() => handle.IsCompleted);
-
-      var completionStart = Stopwatch.GetTimestamp();
-      handle.Complete();
-      var completionEnd = Stopwatch.GetTimestamp();
-      double completionOverheadMs = (completionEnd - completionStart) * 1000.0 / Stopwatch.Frequency;
-
-      double totalOverheadMs = schedulingOverheadMs + completionOverheadMs;
-      AddSchedulingImpactSample(methodName, totalOverheadMs);
-
-#if DEBUG
-      Log(Level.Verbose, $"Job {methodName}: SchedulingOverhead={schedulingOverheadMs:F3}ms, CompletionOverhead={completionOverheadMs:F3}ms, TotalOverhead={totalOverheadMs:F3}ms", Category.Performance);
-#endif
-
-      float estimatedTimeMs = GetDynamicAvgProcessingTimeMs(methodName) * itemCount;
-      UpdateMetricNonBurst(methodName, estimatedTimeMs, (float)totalOverheadMs, itemCount);
     }
 
     /// <summary>
@@ -498,7 +467,7 @@ namespace NoLazyWorkers.SmartExecution
     /// Calculates variance for a given method's performance metrics.
     /// </summary>
     /// <param name="methodName">Name of the method.</param>
-    /// <returns>Variance of performance metrics, or double.MaxValue if insufficient data.</returns>
+    /// <returns>Variance of performance metrics, or float.MaxValue if insufficient data.</returns>
     internal static float CalculateMetricVariance(string methodName)
     {
       if (!BatchSizeHistory.TryGetValue(methodName, out var history))
@@ -574,17 +543,33 @@ namespace NoLazyWorkers.SmartExecution
     /// <returns>The average time per item in milliseconds.</returns>
     public static float GetAvgItemTimeMs(string methodName) => GetAverageItemImpact(methodName);
 
+    /// <summary>
+    /// Gets the task execution cost for a method.
+    /// </summary>
+    /// <param name="taskKey">The task identifier.</param>
+    /// <returns>The task cost in milliseconds.</returns>
     public static float GetTaskCost(string taskKey)
     {
       float cost = GetAverageItemImpact(taskKey);
       return cost == float.MaxValue ? 0.3f : cost; // Slightly higher default than coroutine
     }
 
+    /// <summary>
+    /// Adds a thread safety sample for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="isTaskSafe">Whether the method is task-safe.</param>
     public static void AddThreadSafetySample(string methodName, bool isTaskSafe)
     {
       _threadSafetyCache.AddOrUpdate(methodName, isTaskSafe, (_, _) => isTaskSafe);
     }
 
+    /// <summary>
+    /// Tries to get the thread safety status for a method.
+    /// </summary>
+    /// <param name="methodName">The name of the method.</param>
+    /// <param name="isTaskSafe">The thread safety status.</param>
+    /// <returns>True if the status was found, false otherwise.</returns>
     public static bool TryGetThreadSafety(string methodName, out bool isTaskSafe)
     {
       return _threadSafetyCache.TryGetValue(methodName, out isTaskSafe);
@@ -595,12 +580,16 @@ namespace NoLazyWorkers.SmartExecution
     /// </summary>
     internal class RollingAverage
     {
-      internal readonly double[] _samples;
-      private int _count;
+      internal double[] _samples;
+      internal int _count;
       internal double _sum;
-      private readonly int _maxCount;
+      internal int _maxCount;
       public int Count => _count;
 
+      /// <summary>
+      /// Initializes a new RollingAverage with a maximum sample count.
+      /// </summary>
+      /// <param name="maxCount">Maximum number of samples to store.</param>
       public RollingAverage(int maxCount)
       {
         _samples = new double[maxCount];
@@ -658,92 +647,12 @@ namespace NoLazyWorkers.SmartExecution
     }
 
     /// <summary>
-    /// Stores performance metrics for a method.
-    /// </summary>
-    [BurstCompile]
-    public struct Metric
-    {
-      public FixedString64Bytes MethodName;
-      public float ExecutionTimeMs;
-      public float MainThreadImpactMs;
-      public int ItemCount;
-    }
-
-    /// <summary>
-    /// Tracks execution time of a non-Burst iteration and updates metrics.
-    /// </summary>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="action">The action to execute and measure.</param>
-    /// <param name="itemCount">Number of items processed. Default is 1.</param>
-    internal static void TrackNonBurstIteration(string methodName, Action action, int itemCount = 1) //TODO: not implemented?
-    {
-      var impact = BeginSample(methodName);
-      _stopwatch.Restart();
-      action();
-      _stopwatch.Stop();
-      float mainThreadImpactMs = EndSample(impact);
-      double timeMs = _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency;
-      AddSample(methodName, timeMs / itemCount, isNonBurst: true);
-      UpdateMetric(methodName, timeMs, mainThreadImpactMs, itemCount);
-    }
-
-    /// <summary>
-    /// Tracks execution time of a function and updates metrics.
-    /// </summary>
-    /// <typeparam name="T">The return type of the function.</typeparam>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="action">The function to execute.</param>
-    /// <param name="itemCount">Number of items processed. Default is 1.</param>
-    /// <returns>The result of the function.</returns>
-    internal static T TrackExecution<T>(string methodName, Func<T> action, int itemCount = 1) //TODO: not implemented?
-    {
-      var impact = BeginSample(methodName);
-      _stopwatch.Restart();
-      T result = action();
-      _stopwatch.Stop();
-      float mainThreadImpactMs = EndSample(impact);
-      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-      return result;
-    }
-
-    /// <summary>
-    /// Tracks execution time of an async action and updates metrics.
-    /// </summary>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="action">The async action to execute.</param>
-    /// <param name="itemCount">Number of items processed. Default is 1.</param>
-    internal static async Task TrackExecutionAsync(string methodName, Func<Task> action, int itemCount = 1) //TODO: not implemented?
-    {
-      var impact = BeginSample(methodName);
-      _stopwatch.Restart();
-      await action();
-      _stopwatch.Stop();
-      float mainThreadImpactMs = EndSample(impact);
-      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-    }
-
-    /// <summary>
-    /// Tracks execution time of a task and updates metrics.
-    /// </summary>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="action">The action to execute in a task.</param>
-    /// <param name="itemCount">Number of items processed. Default is 1.</param>
-    internal static void TrackExecutionTask(string methodName, Action action, int itemCount = 1) //TODO: not implemented?
-    {
-      var impact = BeginSample(methodName);
-      _stopwatch.Restart();
-      action();
-      _stopwatch.Stop();
-      float mainThreadImpactMs = EndSample(impact);
-      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-    }
-
-    /// <summary>
     /// Tracks execution time of an async task and updates metrics.
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
     /// <param name="action">The async function to execute.</param>
     /// <param name="itemCount">Number of items processed. Default is 1.</param>
+    /// <returns>A task representing the async operation.</returns>
     public static async Task TrackExecutionTaskAsync(string methodName, Func<Task> action, int itemCount = 1)
     {
       var impact = BeginSample(methodName);
@@ -788,7 +697,7 @@ namespace NoLazyWorkers.SmartExecution
     /// <param name="action">The function to execute.</param>
     /// <param name="itemCount">Number of items processed. Default is 1.</param>
     /// <returns>The result of the function.</returns>
-    public static async Task<T> ExecuteWithUnitySyncContext<T>(string methodName, Func<T> action, int itemCount = 1)
+    public static async Task<T> ExecuteWithUnitySyncContext<T>(string methodName, Func<T> action, int itemCount = 1) //TODO: not implemented?
     {
       var impact = BeginSample(methodName);
       _stopwatch.Restart();
@@ -829,25 +738,6 @@ namespace NoLazyWorkers.SmartExecution
     }
 
     /// <summary>
-    /// Tracks execution time of an async function and updates metrics.
-    /// </summary>
-    /// <typeparam name="T">The return type of the function.</typeparam>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="action">The async function to execute.</param>
-    /// <param name="itemCount">Number of items processed. Default is 1.</param>
-    /// <returns>The result of the function.</returns>
-    internal static async Task<T> TrackExecutionAsync<T>(string methodName, Func<Task<T>> action, int itemCount = 1) //TODO: not implemented?
-    {
-      var impact = BeginSample(methodName);
-      _stopwatch.Restart();
-      T result = await action();
-      _stopwatch.Stop();
-      float mainThreadImpactMs = EndSample(impact);
-      UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-      return result;
-    }
-
-    /// <summary>
     /// Tracks execution time of a coroutine and updates metrics.
     /// </summary>
     /// <param name="methodName">The name of the method.</param>
@@ -863,41 +753,6 @@ namespace NoLazyWorkers.SmartExecution
       _stopwatch.Stop();
       float mainThreadImpactMs = EndSample(impact);
       UpdateMetric(methodName, _stopwatch.ElapsedTicks * 1000.0 / Stopwatch.Frequency, mainThreadImpactMs, itemCount);
-    }
-
-    /// <summary>
-    /// Tracks execution time of a Burst-compiled job and stores metrics.
-    /// </summary>
-    /// <param name="methodName">The name of the method.</param>
-    /// <param name="executionTimeMs">Execution time in milliseconds.</param>
-    /// <param name="itemCount">Number of items processed.</param>
-    /// <param name="metrics">Array to store metrics.</param>
-    /// <param name="logs">Native list for logging performance data.</param>
-    /// <param name="index">Index in the metrics array.</param>
-    [BurstCompile]
-    internal static void TrackExecutionBurst( //TODO: not implemented?
-        FixedString64Bytes methodName,
-        float executionTimeMs,
-        int itemCount,
-        NativeArray<Metric> metrics,
-        NativeList<LogEntry> logs,
-        int index)
-    {
-      metrics[index] = new Metric
-      {
-        MethodName = methodName,
-        ExecutionTimeMs = executionTimeMs,
-        MainThreadImpactMs = 0,
-        ItemCount = itemCount
-      };
-#if DEBUG
-      logs.Add(new LogEntry
-      {
-        Level = Level.Verbose,
-        Message = $"Burst job tracked for {methodName}: time={executionTimeMs:F3}ms, items={itemCount}",
-        Category = Category.Performance
-      });
-#endif
     }
 
     /// <summary>
@@ -954,6 +809,7 @@ namespace NoLazyWorkers.SmartExecution
     /// </summary>
     private static void UpdateMetrics()
     {
+      UpdateThresholds();
       foreach (var kvp in NonBurstMetrics)
       {
         var m = kvp.Value;
@@ -989,31 +845,6 @@ namespace NoLazyWorkers.SmartExecution
       ImpactAverages.Clear();
       _isInitialized = false;
       Log(Level.Info, "PerformanceMetrics cleaned up", Category.Performance);
-    }
-
-
-    /// <summary>
-    /// Tracks cache access for a Burst-compiled job and updates metrics.
-    /// </summary>
-    /// <param name="cacheName">The name of the cache.</param>
-    /// <param name="isHit">Whether the cache access was a hit.</param>
-    /// <param name="logs">Native list for logging performance data.</param>
-    [BurstCompile]
-    public static void TrackJobCacheAccess(FixedString64Bytes cacheName, bool isHit, NativeList<LogEntry> logs) //TODO: not implemented?
-    {
-      if (Metrics.TryGetValue(cacheName, out var metricData))
-      {
-        Metrics[cacheName] = UpdateCacheData(metricData, isHit);
-      }
-      else
-      {
-        Metrics.TryAdd(cacheName, CreateCacheData(isHit));
-      }
-
-#if DEBUG
-      // Defer logging to a Burst-compatible NativeList
-      logs.Add(new(Level.Verbose, $"Cache access tracked for {cacheName}: isHit={isHit}", Category.Performance));
-#endif
     }
 
     /// <summary>

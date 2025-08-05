@@ -34,105 +34,115 @@ namespace NoLazyWorkers.TaskService.StationTasks
     public override Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate =>
       (index, inputs, outputs, logs) =>
       {
-        var guid = inputs[index];
-        if (!_taskService.CacheService.StationDataCache.TryGetValue(guid, out var stationData))
+        // Copy caches for burst compatibility
+        var stationCache = _taskService.CacheService.StationDataCache.GetKeyValueArrays(Allocator.Temp);
+        var entityStates = _taskService.EntityStateService.EntityStates.GetKeyValueArrays(Allocator.Temp);
+        try
         {
-          logs.Add(new LogEntry { Message = $"Station {guid} not found", Level = Level.Warning, Category = Category.Tasks });
-          return;
-        }
-
-        if (!_taskService.EntityStateService.EntityStates.TryGetValue(guid, out int state))
-        {
-          logs.Add(new LogEntry { Message = $"No state for station {guid}", Level = Level.Warning, Category = Category.EntityState });
-          state = (int)EntityStates.MixingStation.Invalid;
-        }
-
-        ItemData item = default;
-        int quantity = 0;
-        Guid pickupGuid = default;
-        NativeArray<int> pickupSlotIndices = default;
-        Guid dropoffGuid = default;
-        NativeArray<int> dropoffSlotIndices = default;
-        bool isValid = false;
-
-        if (state == (int)EntityStates.MixingStation.NeedsRestock)
-        {
-          item = stationData.InsertSlots.Length > 0 ? stationData.InsertSlots[0].Item : default;
-          quantity = stationData.InsertSlots.Length > 0 ? stationData.StartThreshold - stationData.InsertSlots[0].Quantity : 0;
-          var shelf = FindShelfWithItem(item.ItemKey);
-          if (shelf.Guid != default)
+          var guid = inputs[index];
+          if (!stationCache.Keys.Contains(guid))
           {
-            pickupGuid = shelf.Guid;
-            pickupSlotIndices = new NativeArray<int>(
-                shelf.Slots
-                    .Select((slot, idx) => SlotProcessingUtility.CanRemove(slot, item, quantity) ? idx : -1)
-                    .Where(idx => idx >= 0)
-                    .ToArray(),
-                Allocator.TempJob
-            );
-            isValid = pickupSlotIndices.Length > 0;
+            logs.Add(new LogEntry { Message = $"Station {guid} not found", Level = Level.Warning, Category = Category.Tasks });
+            stationCache.Dispose();
+            entityStates.Dispose();
+            return;
           }
-        }
-        else if (state == (int)EntityStates.MixingStation.ReadyToOperate)
-        {
-          isValid = true;
-        }
-        else if (state == (int)EntityStates.MixingStation.HasOutput)
-        {
-          item = stationData.OutputSlot.Item;
-          quantity = stationData.OutputSlot.Quantity;
-          if (stationData.ProductSlots.Length > 0 &&
-              (stationData.ProductSlots[0].Item.ID == "" ||
-                stationData.ProductSlots[0].Item.AdvCanStackWithBurst(item)) &&
-              stationData.ProductSlots[0].Quantity < stationData.ProductSlots[0].StackLimit)
+
+          var stationData = stationCache.Values.First(s => stationCache.Keys.First(k => k == guid) == guid);
+          int state = entityStates.Values.FirstOrDefault(v => entityStates.Keys.First(k => k == guid) == guid);
+          if (state == 0) return; //TODO: how to do this if FirstOrDefault returns default?
+
+          ItemData item = default;
+          int quantity = 0;
+          Guid pickupGuid = default;
+          NativeArray<int> pickupSlotIndices = default;
+          Guid dropoffGuid = default;
+          NativeArray<int> dropoffSlotIndices = default;
+          bool isValid = false;
+
+          if (state == (int)EntityStates.MixingStation.NeedsRestock)
           {
-            state = 3; // Loop action
-            isValid = true;
-          }
-          else
-          {
-            state = 5; // Deliver action
-            var destination = FindDestination(item);
-            if (destination.Guid != default)
+            item = stationData.InsertSlots.Length > 0 ? stationData.InsertSlots[0].Item : default;
+            quantity = stationData.InsertSlots.Length > 0 ? stationData.StartThreshold - stationData.InsertSlots[0].Quantity : 0;
+            var shelf = FindShelfWithItem(item.ItemKey);
+            if (shelf.Guid != default)
             {
-              dropoffGuid = destination.Guid;
-              dropoffSlotIndices = new NativeArray<int>(
-                  destination.Slots
-                      .Select((slot, idx) => SlotProcessingUtility.CanInsert(slot, item, quantity) ? idx : -1)
+              pickupGuid = shelf.Guid;
+              pickupSlotIndices = new NativeArray<int>(
+                  shelf.Slots
+                      .Select((slot, idx) => SlotProcessingUtility.CanRemove(slot, item, quantity) ? idx : -1)
                       .Where(idx => idx >= 0)
                       .ToArray(),
                   Allocator.TempJob
               );
-              isValid = dropoffSlotIndices.Length > 0;
+              isValid = pickupSlotIndices.Length > 0;
             }
           }
-        }
+          else if (state == (int)EntityStates.MixingStation.ReadyToOperate)
+          {
+            isValid = true;
+          }
+          else if (state == (int)EntityStates.MixingStation.HasOutput)
+          {
+            item = stationData.OutputSlot.Item;
+            quantity = stationData.OutputSlot.Quantity;
+            if (stationData.ProductSlots.Length > 0 &&
+                (stationData.ProductSlots[0].Item.ID == "" ||
+                  stationData.ProductSlots[0].Item.AdvCanStackWithBurst(item)) &&
+                stationData.ProductSlots[0].Quantity < stationData.ProductSlots[0].StackLimit)
+            {
+              isValid = true;
+            }
+            else
+            {
+              state = 4; // Deliver action
+              var destination = FindDestination(item);
+              if (destination.Guid != default)
+              {
+                dropoffGuid = destination.Guid;
+                dropoffSlotIndices = new NativeArray<int>(
+                    destination.Slots
+                        .Select((slot, idx) => SlotProcessingUtility.CanInsert(slot, item, quantity) ? idx : -1)
+                        .Where(idx => idx >= 0)
+                        .ToArray(),
+                    Allocator.TempJob
+                );
+                isValid = dropoffSlotIndices.Length > 0;
+              }
+            }
+          }
 
-        if (isValid)
-        {
-          var task = TaskDescriptor.Create(
-              entityGuid: guid,
-              type: TaskName.MixingStation,
-              actionId: state,
-              employeeType: TaskEmployeeType.Chemist,
-              priority: 50,
-              propertyName: _property.name,
-              item: item,
-              quantity: quantity,
-              pickupGuid: pickupGuid,
-              pickupSlotIndices: pickupSlotIndices,
-              dropoffGuid: dropoffGuid,
-              dropoffSlotIndices: dropoffSlotIndices,
-              creationTime: Time.time,
-              logs: logs
-          );
-          outputs.Add(new TaskResult(task, true));
+          if (isValid)
+          {
+            var task = TaskDescriptor.Create(
+                entityGuid: guid,
+                type: TaskName.MixingStation,
+                actionId: state,
+                employeeType: TaskEmployeeType.Chemist,
+                priority: 50,
+                propertyName: _property.name,
+                item: item,
+                quantity: quantity,
+                pickupGuid: pickupGuid,
+                pickupSlotIndices: pickupSlotIndices,
+                dropoffGuid: dropoffGuid,
+                dropoffSlotIndices: dropoffSlotIndices,
+                creationTime: Time.time,
+                logs: logs
+            );
+            outputs.Add(new TaskResult(task, true));
+          }
+          else
+          {
+            if (pickupSlotIndices.IsCreated) pickupSlotIndices.Dispose();
+            if (dropoffSlotIndices.IsCreated) dropoffSlotIndices.Dispose();
+            outputs.Add(new TaskResult(default, false, "Invalid state or no valid slots"));
+          }
         }
-        else
+        finally
         {
-          if (pickupSlotIndices.IsCreated) pickupSlotIndices.Dispose();
-          if (dropoffSlotIndices.IsCreated) dropoffSlotIndices.Dispose();
-          outputs.Add(new TaskResult(default, false, "Invalid state or no valid slots"));
+          stationCache.Dispose();
+          entityStates.Dispose();
         }
       };
 
@@ -327,7 +337,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       var list = new NativeList<ItemKey>(Allocator.TempJob) { item };
       try
       {
-        returnData = FindShelfWithItem(item, desiredQuantity, allowTargetHigherQuality);
+        returnData = FindShelfWithItem(list, desiredQuantity, allowTargetHigherQuality);
       }
       finally
       {
@@ -340,12 +350,19 @@ namespace NoLazyWorkers.TaskService.StationTasks
     private StationData FindPackagingStation(ItemData item)
     {
       StationData returnData = default;
-      if (_taskService.CacheService.StorageDataCache.Count() > 0)
+      if (_taskService.CacheService.StationDataCache.Count() > 0)
       {
         var dataCache = _taskService.CacheService.StationDataCache.GetValueArray(Allocator.Temp);
-        foreach (var station in dataCache)
-          if (station.EntityType == EntityType.PackagingStation && station.ProductSlots[0].Item.ID.IsEmpty || (station.ProductSlots[0].Item.ItemKey.Equals(item.ItemKey) && station.ProductSlots[0].StackLimit >= station.ProductSlots[0].Quantity + item.Quantity))
-            returnData = station;
+        try
+        {
+          foreach (var station in dataCache)
+            if (station.EntityType == EntityType.PackagingStation && (station.ProductSlots[0].Item.ID.IsEmpty || (station.ProductSlots[0].Item.ItemKey.Equals(item.ItemKey) && station.ProductSlots[0].StackLimit >= station.ProductSlots[0].Quantity + item.Quantity)))
+              returnData = station;
+        }
+        finally
+        {
+          dataCache.Dispose();
+        }
       }
       return returnData;
     }

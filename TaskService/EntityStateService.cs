@@ -95,7 +95,7 @@ namespace NoLazyWorkers.TaskService
       internal static void ValidateMixingStationStateBurst(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, StationData station)
       {
         int state;
-        if (station.IsInUse)//TODO: add IsInUse listener?
+        if (station.IsInUse)//TODO: use harmony patch to listen for IsInUse?
         {
           state = (int)EntityStates.MixingStation.Invalid;
         }

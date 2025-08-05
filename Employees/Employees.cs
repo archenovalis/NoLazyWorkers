@@ -207,6 +207,11 @@ namespace NoLazyWorkers.Employees
       if (_behaviour.Info.IsAdvBehInitialized)
         _behaviour.Update();
     }
+
+    public new Coroutine StartCoroutine(IEnumerator routine)
+    {
+      return base.StartCoroutine(routine);
+    }
   }
 
   public class AdvEmployeeBehaviour
@@ -217,7 +222,7 @@ namespace NoLazyWorkers.Employees
     private readonly TaskService.TaskService _taskService;
     public EmployeeData BurstData;
     public EmployeeInfo Info;
-
+    private AdvEmployeeUpdater _updater;
     public AdvEmployeeBehaviour(Employee employee, IEmployeeAdapter adapter)
     {
       Log(Level.Verbose, $"AdvEmployeeBehaviour: Entered for employee={employee?.fullName}", Category.EmployeeCore);
@@ -244,6 +249,9 @@ namespace NoLazyWorkers.Employees
     public void InitializeEmployee()
     {
       Log(Level.Info, $"InitializeEmployee: Setting up for {Employee.fullName}", Category.EmployeeCore);
+      var updater = Employee.gameObject.AddComponent<AdvEmployeeUpdater>();
+      updater.Setup(this);
+      _updater = updater;
       Info.IsAdvBehInitialized = true;
       Employee.behaviour.enabled = true;
     }
@@ -287,25 +295,24 @@ namespace NoLazyWorkers.Employees
       if (CheckIdleConditions())
         return;
 
-      var task = _taskService.GetTaskForEmployee(Employee);
-      if (task == null)
+      if (_taskService.TryGetTask(Employee, out var task, out var taskImpl))
+      {
+        Employee.SetWaitOutside(false);
+        Info.CurrentTask = task;
+        Log(Level.Info, $"HandleIdle: Assigned task {task.TaskId} to {Employee.fullName}", Category.EmployeeCore);
+        StartMyCoroutine(ExecuteTaskCoroutine(taskImpl, task)); // Start async execution
+      }
+      else
       {
         Employee.SetWaitOutside(true);
         Info.CurrentAction = EmployeeAction.Idle;
         Log(Level.Verbose, $"HandleIdle: No task available for {Employee.fullName}", Category.EmployeeCore);
       }
-      else
-      {
-        Employee.SetWaitOutside(false);
-        Info.CurrentTask = task;
-        Info.CurrentAction = EmployeeAction.Working;
-        Log(Level.Info, $"HandleIdle: Assigned task {task.TaskId} to {Employee.fullName}", Category.EmployeeCore);
-        _taskService.ExecuteTask(Employee, task);
-      }
     }
 
     protected void HandleWorking()
     {
+      // Since execution is in coroutine, this can check for interruptions
       try
       {
         if (BurstData.CurrentAction != EmployeeAction.Working)
@@ -325,6 +332,7 @@ namespace NoLazyWorkers.Employees
     protected void HandleMoving()
     {
       var context = Info.TaskContext;
+      if (context == null) return;
       if (context.MoveDelay > 0)
       {
         context.MoveDelay -= Time.deltaTime;
@@ -350,7 +358,7 @@ namespace NoLazyWorkers.Employees
 
     internal IEnumerator StartMovement(TransferRequest request, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
     {
-      yield return StartMovement([request], onComplete);
+      yield return StartMovement(new List<TransferRequest> { request }, onComplete);
     }
 
     internal IEnumerator StartMovement(List<TransferRequest> requests, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
@@ -359,20 +367,13 @@ namespace NoLazyWorkers.Employees
       Info.TaskContext = new TaskContext
       {
         TransferRoutes = requests.Select(r => TransferRequest.Get(Employee, r.Item, r.Quantity, r.InventorySlot, r.PickUp, r.PickupSlots, r.DropOff, r.DropOffSlots)).ToList(),
-        MoveCallback = async (emp, s, status) =>
+        MoveCallback = (emp, s, status) =>
         {
           moveCompleted = true;
           Log(Level.Info, $"StartMovement: Callback with status={status}, for {emp.fullName}", Category.EmployeeCore);
           s.TaskContext.MovementStatus = status;
           s.CurrentAction = EmployeeAction.Working;
-          if (onComplete != null)
-          {
-            onComplete?.Invoke(emp, s, status);
-          }
-          else
-          {
-            s.AdvBehaviour.Disable();
-          }
+          onComplete?.Invoke(emp, s, status);
         },
         MoveDelay = 0.5f,
         MoveElapsed = 0f
@@ -389,7 +390,6 @@ namespace NoLazyWorkers.Employees
       if (!moveCompleted)
       {
         Log(Level.Error, $"StartMovement: Timeout after {timeoutSeconds}s for {Employee.fullName}", Category.EmployeeCore);
-        yield break;
       }
     }
 
@@ -400,11 +400,7 @@ namespace NoLazyWorkers.Employees
     public void HandleTaskResult(TaskResult result)
     {
       Log(Level.Verbose, $"HandleTaskResult: Task {result.Task.TaskId} for {Employee.fullName}, success: {result.Success}, reason: {result.FailureReason.ToString() ?? "N/A"}", Category.EmployeeCore);
-
-      // Transition to idle state
-      BurstData.CurrentAction = EmployeeAction.Idle;
-
-      // Log failure reason if applicable
+      BurstData.CurrentAction = EmployeeAction.Idle; // Ensure idle after result
       if (!result.Success)
       {
         Log(Level.Warning, $"Task {result.Task.TaskId} failed: {result.FailureReason}", Category.EmployeeCore);
@@ -435,6 +431,38 @@ namespace NoLazyWorkers.Employees
       Employee.SetWaitOutside(true);
       Log(Level.Info, $"Disable: Behaviour disabled for {Employee.fullName}", Category.EmployeeCore);
     }
+
+    public Coroutine StartMyCoroutine(IEnumerator routine)
+    {
+      return _updater.StartCoroutine(routine);
+    }
+
+    private IEnumerator ExecuteTaskCoroutine(BaseTask taskImpl, TaskDescriptor task)
+    {
+      Info.CurrentAction = EmployeeAction.Working;
+      var enumerator = taskImpl.Execute(Employee, task);
+      while (true)
+      {
+        object current;
+        bool moveNext;
+        try
+        {
+          moveNext = enumerator.MoveNext();
+          if (!moveNext) break;
+          current = enumerator.Current;
+        }
+        catch (Exception ex)
+        {
+          Log(Level.Error, $"Task {task.TaskId} execution error: {ex.Message}", Category.EmployeeCore);
+          _taskService.CompleteTask(task);
+          HandleTaskResult(new TaskResult(task, false, ex.Message));
+          yield break;
+        }
+        yield return current;
+      }
+      _taskService.CompleteTask(task);
+      HandleTaskResult(new TaskResult(task, true));
+    }
   }
 
   [HarmonyPatch(typeof(Employee))]
@@ -444,19 +472,32 @@ namespace NoLazyWorkers.Employees
     [HarmonyPatch("OnDestroy")]
     public static void OnDestroyPostfix(Employee __instance)
     {
-      CacheService.GetOrCreateService(__instance.AssignedProperty).IEmployees[__instance.GUID].AdvBehaviour.Disable();
+      try
+      {
+        CacheService.GetOrCreateService(__instance.AssignedProperty).IEmployees[__instance.GUID].AdvBehaviour.Disable();
+      }
+      catch (Exception ex)
+      {
+        Log(Level.Error, $"OnDestroyPostfix error: {ex}", Category.EmployeeCore);
+      }
     }
-
     [HarmonyPrefix]
     [HarmonyPatch("Fire")]
     public static void FirePrefix(Employee __instance)
     {
-      var taskService = TaskServiceManager.GetOrCreateService(__instance.AssignedProperty);
-      taskService.EntityStateService.EntityStates.Remove(__instance.GUID);
-      taskService.CacheService.IEmployees.Remove(__instance.GUID);
-      if (__instance.AssignedProperty.Employees.Count == 1)
-        taskService.DeactivateProperty();
-      Log(Level.Info, $"EmployeeBehaviour: Cleaned up for {__instance.fullName}", Category.EmployeeCore);
+      try
+      {
+        var taskService = TaskServiceManager.GetOrCreateService(__instance.AssignedProperty);
+        taskService.EntityStateService.EntityStates.Remove(__instance.GUID);
+        taskService.CacheService.IEmployees.Remove(__instance.GUID);
+        if (__instance.AssignedProperty.Employees.Count == 1)
+          taskService.DeactivateProperty();
+        Log(Level.Info, $"EmployeeBehaviour: Cleaned up for {__instance.fullName}", Category.EmployeeCore);
+      }
+      catch (Exception ex)
+      {
+        Log(Level.Error, $"FirePrefix error: {ex}", Category.EmployeeCore);
+      }
     }
   }
 }
