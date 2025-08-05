@@ -974,8 +974,8 @@ namespace NoLazyWorkers.Chemists
     }
 
     [HarmonyPostfix]
-    [HarmonyPatch("Destroy")]
-    static void DestroyPostfix(MixingStationConfiguration __instance)
+    [HarmonyPatch("Reset")]
+    static void ResetPostfix(MixingStationConfiguration __instance)
     {
       try
       {
@@ -1095,7 +1095,7 @@ namespace NoLazyWorkers.Chemists
     }
   }
 
-  [HarmonyPatch(typeof(MixingStationLoader), "Load")]
+  [HarmonyPatch(typeof(MixingStationLoader))]
   public class MixingStationLoaderPatch
   {
     private static void SupplySourceChanged(MixingStationConfiguration config, MixingStation station, BuildableItem item)
@@ -1107,6 +1107,7 @@ namespace NoLazyWorkers.Chemists
     }
 
     [HarmonyPostfix]
+    [HarmonyPatch("Load", new Type[] { typeof(string) })]
     static void Postfix(string mainPath)
     {
       try

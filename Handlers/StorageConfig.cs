@@ -411,9 +411,12 @@ namespace NoLazyWorkers.Handlers
     }
   }
 
-  [HarmonyPatch(typeof(StorageRackLoader), "Load")]
+  [HarmonyPatch(typeof(StorageRackLoader))]
   public class StorageRackLoaderLoadPatch
   {
+
+    [HarmonyPostfix]
+    [HarmonyPatch("Load", new Type[] { typeof(string) })]
     static void Postfix(StorageRackLoader __instance, string mainPath)
     {
       try
