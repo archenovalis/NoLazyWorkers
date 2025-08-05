@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFramework>net481</TargetFramework>
+		<TargetFramework>netstandard21</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>disable</Nullable>
 		<RootNamespace>NoLazyWorkers</RootNamespace>
@@ -13,6 +13,14 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<Analyzer Include="D:\projects\Schedule I\UnityTaskSafeAnalyzer\dist\UnityTaskSafeAnalyzer.dll">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </Analyzer>
+	</ItemGroup>
+	
+	<ItemGroup>
+		<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
 		<Reference Include="MelonLoader">
 			<HintPath>d:\Games\Schedule I\MelonLoader\net6\MelonLoader.dll</HintPath>
 		</Reference>
@@ -70,7 +78,7 @@
 		<Reference Include="FishNet.Demos">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\FishNet.Demos.dll</HintPath>
 		</Reference>
-		<Reference Include="FishNet.Runtime">
+		<Reference Include="FishNet.Runtime" Publicize="true">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\FishNet.Runtime.dll</HintPath>
 		</Reference>
 		<Reference Include="GameKit.Dependencies">
@@ -283,7 +291,7 @@
 		<Reference Include="UnityEngine.ContentLoadModule">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\UnityEngine.ContentLoadModule.dll</HintPath>
 		</Reference>
-		<Reference Include="UnityEngine.CoreModule">
+		<Reference Include="UnityEngine.CoreModule" Publicize="true">
 			<HintPath>d:\Games\Schedule I\Schedule I_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
 		</Reference>
 		<Reference Include="UnityEngine.CrashReportingModule">
