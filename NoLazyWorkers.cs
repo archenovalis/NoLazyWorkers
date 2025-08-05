@@ -768,11 +768,13 @@ namespace NoLazyWorkers_IL2CPP
     }
   }
 
-  [HarmonyPatch(typeof(GridItemLoader), "LoadAndCreate")]
+  [HarmonyPatch(typeof(GridItemLoader))]
   public class GridItemLoaderPatch
   {
     public static Dictionary<string, GridItem> LoadedGridItems = [];
 
+    [HarmonyPostfix]
+    [HarmonyPatch("LoadAndCreate")]
     static void Postfix(string mainPath, GridItem __result)
     {
       try
