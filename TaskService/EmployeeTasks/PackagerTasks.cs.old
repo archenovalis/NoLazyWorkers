@@ -15,7 +15,6 @@ using NoLazyWorkers.CacheManager;
 using ScheduleOne.ItemFramework;
 using FishNet;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.Movement.Utilities;
 using static NoLazyWorkers.TaskService.TaskRegistry;
 using System.Diagnostics;
 using static NoLazyWorkers.Debug;

@@ -22,7 +22,6 @@ using static NoLazyWorkers.TaskService.Extensions;
 using static NoLazyWorkers.TaskService.TaskRegistry;
 using Funly.SkyStudio;
 using Unity.Collections;
-using static NoLazyWorkers.Movement.Utilities;
 using NoLazyWorkers.Movement;
 using static NoLazyWorkers.Movement.Extensions;
 using static NoLazyWorkers.Extensions.FishNetExtensions;
@@ -370,15 +369,46 @@ namespace NoLazyWorkers.TaskService
   {
     TaskName Type { get; }
     EntityType[] SupportedEntityTypes { get; }
-    Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate { get; }
+    ITaskBurstFor CreateTaskStruct { get; }
     IEnumerator Execute(Employee employee, TaskDescriptor task);
+  }
+
+  // Interface for task-specific structs
+  public interface ITaskBurstFor
+  {
+    void ExecuteFor(int index, NativeArray<Guid> inputs, NativeList<TaskResult> outputs, NativeList<LogEntry> logs);
+  }
+
+  [BurstCompile]
+  public struct TaskBurstForExample : ITaskBurstFor
+  {
+    public NativeParallelHashMap<Guid, StationData> StationCacheMap;
+
+    public void ExecuteFor(int index, NativeArray<Guid> inputs, NativeList<TaskResult> outputs, NativeList<LogEntry> logs)
+    {
+    }
+  }
+
+  public interface ITaskBurst
+  {
+    void Execute(Guid input, NativeList<TaskResult> outputs, NativeList<LogEntry> logs);
+  }
+
+  [BurstCompile]
+  public struct TaskBurstExample : ITaskBurst
+  {
+    public FixedString32Bytes PropertyName;
+
+    public void Execute(Guid input, NativeList<TaskResult> outputs, NativeList<LogEntry> logs)
+    {
+    }
   }
 
   public abstract class BaseTask : ITask
   {
     public abstract TaskName Type { get; }
     public abstract EntityType[] SupportedEntityTypes { get; }
-    public abstract Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate { get; }
+    public abstract ITaskBurstFor CreateTaskStruct { get; }
     public abstract IEnumerator Execute(Employee employee, TaskDescriptor task);
   }
 
@@ -556,10 +586,10 @@ namespace NoLazyWorkers.TaskService
       );
 
       // Create tasks
-      yield return SmartExecution.Smart.ExecuteBurstFor<Guid, TaskResult, CreateTasksBurst>(
+      yield return SmartExecution.Smart.ExecuteBurstFor<Guid, TaskResult, TaskBurstForExample>(
           uniqueId: $"{_property.name}_{task.Type}_Create",
           itemCount: entities.Length,
-          burstForAction: new CreateTasksBurst { CreateTaskDelegate = task.CreateTaskDelegate }.ExecuteFor,
+          burstForAction: task.CreateTaskStruct.ExecuteFor,
           inputs: entities.AsArray(),
           outputs: taskResults,
           logs: logs,
@@ -618,16 +648,6 @@ namespace NoLazyWorkers.TaskService
       }
     }
 
-    [BurstCompile]
-    public struct CreateTasksBurst
-    {
-      public Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate;
-      public void ExecuteFor(int index, NativeArray<Guid> inputs, NativeList<TaskResult> outputs, NativeList<LogEntry> logs)
-      {
-        CreateTaskDelegate(index, inputs, outputs, logs);
-      }
-    }
-
     public IEnumerator CreateFollowUpTask(Guid employeeGuid, Guid entityGuid, TaskName taskType)
     {
       var task = TaskRegistry.GetTask(taskType);
@@ -639,10 +659,10 @@ namespace NoLazyWorkers.TaskService
       var entities = new NativeList<Guid>(1, Allocator.TempJob) { entityGuid };
       scope.Add(entities);
 
-      yield return SmartExecution.Smart.ExecuteBurstFor<Guid, TaskResult, CreateTasksBurst>(
+      yield return SmartExecution.Smart.ExecuteBurstFor<Guid, TaskResult, TaskBurstForExample>(
           uniqueId: $"{_property.name}_{task.Type}_Create_FollowUp",
           itemCount: 1,
-          burstForAction: new CreateTasksBurst { CreateTaskDelegate = task.CreateTaskDelegate }.ExecuteFor,
+          burstForAction: task.CreateTaskStruct.ExecuteFor,
           inputs: entities.AsArray(),
           outputs: taskResults,
           logs: logs,

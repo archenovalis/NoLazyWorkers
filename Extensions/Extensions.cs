@@ -390,69 +390,6 @@ namespace NoLazyWorkers.Extensions
     }
   }
 
-  public static class ItemSlotExtensions
-  {
-    public static SlotKey GetSlotKey(this ItemSlot itemSlot)
-    {
-      Guid guid;
-      switch (itemSlot.SlotOwner)
-      {
-        case PlaceableStorageEntity storage:
-          guid = storage.GUID;
-          break;
-        case BuildableItem station:
-          guid = station.GUID;
-          break;
-        case LoadingDock dock:
-          guid = dock.GUID;
-          break;
-        case Employee employee:
-          guid = employee.GUID;
-          break;
-        default:
-          return default;
-      }
-      return new SlotKey(guid, itemSlot.SlotIndex);
-    }
-
-    public static Property GetProperty(this ItemSlot itemSlot)
-    {
-      switch (itemSlot.SlotOwner)
-      {
-        case PlaceableStorageEntity storage:
-          return storage.ParentProperty;
-        case BuildableItem station:
-          return station.ParentProperty;
-        case LoadingDock dock:
-          return dock.ParentProperty;
-        case Employee employee:
-          return employee.AssignedProperty;
-        default:
-          return null;
-      }
-    }
-
-    public static StorageType OwnerType(this ItemSlot itemSlot)
-    {
-      switch (itemSlot.SlotOwner)
-      {
-        case PlaceableStorageEntity storage:
-          var property = storage.ParentProperty;
-          return CacheService.GetOrCreateService(property).StorageConfigs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
-                 ? StorageType.SpecificShelf
-                 : StorageType.AnyShelf;
-        case BuildableItem:
-          return StorageType.Station;
-        case LoadingDock:
-          return StorageType.LoadingDock;
-        case Employee:
-          return StorageType.Employee;
-        default:
-          return default;
-      }
-    }
-  }
-
   public static class DictionaryExtensions
   {
     /// <summary>
@@ -586,6 +523,24 @@ namespace NoLazyWorkers.Extensions
           yield break;
         }
         yield return current;
+      }
+    }
+
+    public static IEnumerator RunThrowingIterator(IEnumerator enumerator, Action<Exception> onError)
+    {
+      while (true)
+      {
+        try
+        {
+          if (!enumerator.MoveNext())
+            yield break;
+        }
+        catch (Exception ex)
+        {
+          onError(ex);
+          yield break;
+        }
+        yield return enumerator.Current;
       }
     }
   }

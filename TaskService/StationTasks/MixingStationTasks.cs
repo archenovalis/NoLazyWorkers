@@ -31,26 +31,72 @@ namespace NoLazyWorkers.TaskService.StationTasks
 
     public override TaskName Type => TaskName.MixingStation;
     public override EntityType[] SupportedEntityTypes => [EntityType.MixingStation];
-    public override Action<int, NativeArray<Guid>, NativeList<TaskResult>, NativeList<LogEntry>> CreateTaskDelegate =>
-      (index, inputs, outputs, logs) =>
+    public override ITaskBurstFor CreateTaskStruct => new MixingStationTaskStruct
+    {
+      StationCacheMap = _taskService.CacheService.StationDataCache,
+      EntityStatesMap = _taskService.EntityStateService.EntityStates,
+      DisabledEntitiesMap = _taskService.EntityStateService.DisabledEntities,
+      StorageDataCacheMap = _taskService.CacheService.StorageDataCache,
+      StationDataCacheMap = _taskService.CacheService.StationDataCache,
+      PropertyName = _property.name
+    };
+
+    [BurstCompile]
+    private struct MixingStationTaskStruct : ITaskBurstFor
+    {
+      public NativeParallelHashMap<Guid, StationData> StationCacheMap;
+      public NativeParallelHashMap<Guid, int> EntityStatesMap;
+      public NativeParallelHashMap<Guid, DisabledEntityData> DisabledEntitiesMap;
+      public NativeParallelHashMap<Guid, StorageData> StorageDataCacheMap;
+      public NativeParallelHashMap<Guid, StationData> StationDataCacheMap;
+      public FixedString32Bytes PropertyName;
+
+      public void ExecuteFor(int index, NativeArray<Guid> inputs, NativeList<TaskResult> outputs, NativeList<LogEntry> logs)
       {
-        // Copy caches for burst compatibility
-        var stationCache = _taskService.CacheService.StationDataCache.GetKeyValueArrays(Allocator.Temp);
-        var entityStates = _taskService.EntityStateService.EntityStates.GetKeyValueArrays(Allocator.Temp);
+        var guid = inputs[index];
+        var stationCacheKVP = StationCacheMap.GetKeyValueArrays(Allocator.Temp);
+        NativeList<ItemData> requiredItems = default;
         try
         {
-          var guid = inputs[index];
-          if (!stationCache.Keys.Contains(guid))
+          bool found = false;
+          for (int i = 0; i < stationCacheKVP.Keys.Length; i++)
+          {
+            if (stationCacheKVP.Keys[i] == guid)
+            {
+              found = true;
+              break;
+            }
+          }
+          if (!found)
           {
             logs.Add(new LogEntry { Message = $"Station {guid} not found", Level = Level.Warning, Category = Category.Tasks });
-            stationCache.Dispose();
-            entityStates.Dispose();
+            EntityStatesMap[guid] = 0;
+            DisabledEntitiesMap.Add(guid, new DisabledEntityData { ReasonType = DisabledEntityData.DisabledReasonType.NoDestination });
             return;
           }
 
-          var stationData = stationCache.Values.First(s => stationCache.Keys.First(k => k == guid) == guid);
-          int state = entityStates.Values.FirstOrDefault(v => entityStates.Keys.First(k => k == guid) == guid);
-          if (state == 0) return; //TODO: how to do this if FirstOrDefault returns default?
+          StationData stationData = default;
+          for (int i = 0; i < stationCacheKVP.Keys.Length; i++)
+          {
+            if (stationCacheKVP.Keys[i] == guid)
+            {
+              stationData = stationCacheKVP.Values[i];
+              break;
+            }
+          }
+
+          if (!EntityStatesMap.TryGetValue(guid, out int state))
+          {
+            logs.Add(new LogEntry { Message = $"No state for station {guid}", Level = Level.Warning, Category = Category.Tasks });
+            EntityStatesMap[guid] = 0;
+            DisabledEntitiesMap.Add(guid, new DisabledEntityData { ReasonType = DisabledEntityData.DisabledReasonType.NoDestination });
+            return;
+          }
+          if (state == 0)
+          {
+            logs.Add(new LogEntry { Message = $"Station {guid} is invalid", Level = Level.Verbose, Category = Category.Tasks });
+            return;
+          }
 
           ItemData item = default;
           int quantity = 0;
@@ -68,13 +114,16 @@ namespace NoLazyWorkers.TaskService.StationTasks
             if (shelf.Guid != default)
             {
               pickupGuid = shelf.Guid;
-              pickupSlotIndices = new NativeArray<int>(
-                  shelf.Slots
-                      .Select((slot, idx) => SlotProcessingUtility.CanRemove(slot, item, quantity) ? idx : -1)
-                      .Where(idx => idx >= 0)
-                      .ToArray(),
-                  Allocator.TempJob
-              );
+              var validIndices = new NativeList<int>(Allocator.Temp);
+              for (int j = 0; j < shelf.Slots.Length; j++)
+              {
+                if (SlotProcessingUtility.CanRemove(shelf.Slots[j], item, quantity))
+                {
+                  validIndices.Add(j);
+                }
+              }
+              pickupSlotIndices = validIndices.ToArray(Allocator.TempJob);
+              validIndices.Dispose();
               isValid = pickupSlotIndices.Length > 0;
             }
           }
@@ -88,7 +137,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
             quantity = stationData.OutputSlot.Quantity;
             if (stationData.ProductSlots.Length > 0 &&
                 (stationData.ProductSlots[0].Item.ID == "" ||
-                  stationData.ProductSlots[0].Item.AdvCanStackWithBurst(item)) &&
+                 stationData.ProductSlots[0].Item.AdvCanStackWithBurst(item)) &&
                 stationData.ProductSlots[0].Quantity < stationData.ProductSlots[0].StackLimit)
             {
               isValid = true;
@@ -96,22 +145,43 @@ namespace NoLazyWorkers.TaskService.StationTasks
             else
             {
               state = 4; // Deliver action
-              var destination = FindDestination(item);
-              if (destination.Guid != default)
+              var packagingStation = FindPackagingStation(item);
+              if (packagingStation.Guid != default)
               {
-                dropoffGuid = destination.Guid;
-                dropoffSlotIndices = new NativeArray<int>(
-                    destination.Slots
-                        .Select((slot, idx) => SlotProcessingUtility.CanInsert(slot, item, quantity) ? idx : -1)
-                        .Where(idx => idx >= 0)
-                        .ToArray(),
-                    Allocator.TempJob
-                );
+                dropoffGuid = packagingStation.Guid;
+                var validIndices = new NativeList<int>(Allocator.Temp);
+                for (int j = 0; j < packagingStation.InsertSlots.Length; j++)
+                {
+                  if (SlotProcessingUtility.CanInsert(packagingStation.InsertSlots[j], item, quantity))
+                  {
+                    validIndices.Add(j);
+                  }
+                }
+                dropoffSlotIndices = validIndices.ToArray(Allocator.TempJob);
+                validIndices.Dispose();
                 isValid = dropoffSlotIndices.Length > 0;
+              }
+              else
+              {
+                var storage = FindStorage(item);
+                if (storage.Guid != default)
+                {
+                  dropoffGuid = storage.Guid;
+                  var validIndices = new NativeList<int>(Allocator.Temp);
+                  for (int j = 0; j < storage.Slots.Length; j++)
+                  {
+                    if (SlotProcessingUtility.CanInsert(storage.Slots[j], item, quantity))
+                    {
+                      validIndices.Add(j);
+                    }
+                  }
+                  dropoffSlotIndices = validIndices.ToArray(Allocator.TempJob);
+                  validIndices.Dispose();
+                  isValid = dropoffSlotIndices.Length > 0;
+                }
               }
             }
           }
-
           if (isValid)
           {
             var task = TaskDescriptor.Create(
@@ -120,7 +190,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
                 actionId: state,
                 employeeType: TaskEmployeeType.Chemist,
                 priority: 50,
-                propertyName: _property.name,
+                propertyName: PropertyName,
                 item: item,
                 quantity: quantity,
                 pickupGuid: pickupGuid,
@@ -136,27 +206,110 @@ namespace NoLazyWorkers.TaskService.StationTasks
           {
             if (pickupSlotIndices.IsCreated) pickupSlotIndices.Dispose();
             if (dropoffSlotIndices.IsCreated) dropoffSlotIndices.Dispose();
-            outputs.Add(new TaskResult(default, false, "Invalid state or no valid slots"));
+            EntityStatesMap[guid] = (int)EntityStates.MixingStation.Invalid;
+            requiredItems = item.ID != default ? new NativeList<ItemData>(1, Allocator.TempJob) { item } : default;
+            DisabledEntitiesMap.Add(guid, new DisabledEntityData
+            {
+              ReasonType = state == (int)EntityStates.MixingStation.NeedsRestock ? DisabledEntityData.DisabledReasonType.MissingItem : DisabledEntityData.DisabledReasonType.NoDestination,
+              RequiredItems = requiredItems
+            });
+            outputs.Add(new TaskResult(default, false, $"Invalid state or no valid slots for {guid}"));
           }
         }
         finally
         {
-          stationCache.Dispose();
-          entityStates.Dispose();
+          if (requiredItems.IsCreated) requiredItems.Dispose();
+          stationCacheKVP.Dispose();
         }
-      };
+      }
+
+      [BurstCompile]
+      private StorageData FindShelfWithItem(NativeList<ItemKey> items, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
+      {
+        StorageData returnData = default;
+        if (StorageDataCacheMap.Count() > 0)
+        {
+          var dataCache = StorageDataCacheMap.GetValueArray(Allocator.Temp);
+          foreach (var storageData in dataCache)
+            if (storageData.Slots.Any(slot => slot.Item.ItemKey.AdvCanStackWithBurst(items, allowTargetHigherQuality) && slot.Quantity > desiredQuantity))
+            {
+              returnData = storageData;
+              break;
+            }
+          dataCache.Dispose();
+        }
+        return returnData;
+      }
+
+      [BurstCompile]
+      private StorageData FindShelfWithItem(ItemKey item, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
+      {
+        StorageData returnData = default;
+        var list = new NativeList<ItemKey>(Allocator.TempJob) { item };
+        try
+        {
+          returnData = FindShelfWithItem(list, desiredQuantity, allowTargetHigherQuality);
+        }
+        finally
+        {
+          list.Dispose();
+        }
+        return returnData;
+      }
+
+      [BurstCompile]
+      private StationData FindPackagingStation(ItemData item)
+      {
+        StationData returnData = default;
+        if (StationCacheMap.Count() > 0)
+        {
+          var dataCache = StationCacheMap.GetValueArray(Allocator.Temp);
+          try
+          {
+            foreach (var station in dataCache)
+              if (station.EntityType == EntityType.PackagingStation && (station.ProductSlots[0].Item.ID.IsEmpty || (station.ProductSlots[0].Item.ItemKey.Equals(item.ItemKey) && station.ProductSlots[0].StackLimit >= station.ProductSlots[0].Quantity + item.Quantity)))
+                returnData = station;
+          }
+          finally
+          {
+            dataCache.Dispose();
+          }
+        }
+        return returnData;
+      }
+
+      [BurstCompile]
+      private StorageData FindStorage(ItemData item)
+      {
+        StorageData returnData = default;
+        if (StorageDataCacheMap.Count() > 0)
+        {
+          var dataCache = StorageDataCacheMap.GetValueArray(Allocator.Temp);
+          foreach (var storageData in dataCache)
+            if (storageData.Slots.Any(slot => slot.Item.ID.IsEmpty || slot.Item.AdvCanStackWithBurst(item, checkQuantities: true)))
+            {
+              returnData = storageData;
+              break;
+            }
+          dataCache.Dispose();
+        }
+        return returnData;
+      }
+    }
 
     public override IEnumerator Execute(Employee employee, TaskDescriptor task)
     {
       if (!(employee is Chemist chemist))
       {
         Log(Level.Error, "MixingStationTask requires a Chemist", Category.Tasks);
+        _taskService.CompleteTask(task);
         yield break;
       }
 
       if (!_taskService.CacheService.IStations.TryGetValue(task.EntityGuid, out var station))
       {
         Log(Level.Error, $"Station {task.EntityGuid} not found", Category.Tasks);
+        _taskService.CompleteTask(task);
         yield break;
       }
 
@@ -176,6 +329,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
           break;
         default:
           Log(Level.Warning, $"Unknown action {task.ActionId}", Category.Tasks);
+          _taskService.CompleteTask(task);
           yield break;
       }
     }
@@ -186,6 +340,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
       if (slot == null || !_taskService.CacheService.IStations.TryGetValue(task.PickupGuid, out var pickupStation))
       {
         Log(Level.Warning, $"Restock failed: No slot or pickup station {task.PickupGuid}", Category.Tasks);
+        _taskService.EntityStateService.EntityStates[task.EntityGuid] = (int)EntityStates.MixingStation.Invalid;
+        _taskService.EntityStateService.OnConfigUpdate(task.EntityGuid);
+        _taskService.CompleteTask(task);
         yield break;
       }
 
@@ -194,23 +351,37 @@ namespace NoLazyWorkers.TaskService.StationTasks
           pickupStation.TransitEntity, new List<ItemSlot> { pickupStation.OutputSlot },
           station.TransitEntity, new List<ItemSlot> { station.InsertSlots[0] }
       );
+
       bool completed = false;
       yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
-        transferRequest,
-        (request, _, status) =>
+          transferRequest,
+          task,
+          (request, _, status) =>
           {
-            completed = status == MovementStatus.Success;
-            TransferRequest.Release(transferRequest);
+            try
+            {
+              completed = status == MovementStatus.Success;
+              TransferRequest.Release(transferRequest);
+            }
+            catch (Exception ex)
+            {
+              Log(Level.Error, $"Restock movement callback failed: {ex.Message}", Category.Tasks);
+              completed = false;
+            }
           }
       );
-
-      if (completed && _taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
+      if (!completed)
+      {
+        _taskService.EntityStateService.EntityStates[task.EntityGuid] = (int)EntityStates.MixingStation.Invalid;
+        _taskService.EntityStateService.OnConfigUpdate(task.EntityGuid);
+        _taskService.CompleteTask(task);
+      }
+      else if (_taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
           state == (int)EntityStates.MixingStation.ReadyToOperate)
       {
         yield return OperateStation(chemist, task, station);
       }
-
-      _taskService.CompleteTask(task);
+      else _taskService.CompleteTask(task);
     }
 
     private IEnumerator OperateStation(Chemist chemist, TaskDescriptor task, IStationAdapter station)
@@ -222,7 +393,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       }
       station.StartOperation(chemist);
       float elapsed = 0f;
-      const float TIMEOUT = 30f;
+      const float TIMEOUT = 10f;
       while (!station.IsInUse && elapsed < TIMEOUT)
       {
         yield return new WaitForSeconds(0.1f);
@@ -245,10 +416,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       if (station.IsInUse)
       {
         Log(Level.Error, $"Operation timed out for station {station.GUID}", Category.Tasks);
-        yield break;
       }
-
-      _taskService.EntityStateService.OnConfigUpdate(station.GUID);
       _taskService.CompleteTask(task);
     }
 
@@ -258,6 +426,7 @@ namespace NoLazyWorkers.TaskService.StationTasks
       if (slot == null)
       {
         Log(Level.Warning, $"No inventory slot for chemist {chemist.fullName}", Category.Tasks);
+        _taskService.CompleteTask(task);
         yield break;
       }
 
@@ -266,22 +435,36 @@ namespace NoLazyWorkers.TaskService.StationTasks
           station.TransitEntity, new List<ItemSlot> { station.OutputSlot },
           station.TransitEntity, new List<ItemSlot> { station.ProductSlots[0] }
       );
+
       bool completed = false;
       yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
-        transferRequest,
-        (_, _, status) =>
-        {
-          completed = status == MovementStatus.Success;
-          TransferRequest.Release(transferRequest);
-        }
+          transferRequest,
+          task,
+          (_, _, status) =>
+          {
+            try
+            {
+              completed = status == MovementStatus.Success;
+              TransferRequest.Release(transferRequest);
+            }
+            catch (Exception ex)
+            {
+              Log(Level.Error, $"LoopOutput movement callback failed: {ex.Message}", Category.Tasks);
+              completed = false;
+            }
+          }
       );
 
-      if (completed && _taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
+      if (!completed)
+      {
+        _taskService.EntityStateService.EntityStates[task.EntityGuid] = (int)EntityStates.MixingStation.Invalid;
+        _taskService.EntityStateService.OnConfigUpdate(task.EntityGuid);
+      }
+      else if (_taskService.EntityStateService.EntityStates.TryGetValue(task.EntityGuid, out var state) &&
           (state == (int)EntityStates.MixingStation.NeedsRestock || state == (int)EntityStates.MixingStation.ReadyToOperate))
       {
         yield return _taskService.CreateFollowUpTask(chemist.GUID, task.EntityGuid, task.Type);
       }
-
       _taskService.CompleteTask(task);
     }
 
@@ -291,6 +474,9 @@ namespace NoLazyWorkers.TaskService.StationTasks
       if (slot == null || !_taskService.CacheService.IStations.TryGetValue(task.DropoffGuid, out var dropoffStation))
       {
         Log(Level.Warning, $"Deliver failed: No slot or dropoff station {task.DropoffGuid}", Category.Tasks);
+        _taskService.EntityStateService.EntityStates[task.EntityGuid] = (int)EntityStates.MixingStation.Invalid;
+        _taskService.EntityStateService.OnConfigUpdate(task.EntityGuid);
+        _taskService.CompleteTask(task);
         yield break;
       }
 
@@ -299,103 +485,23 @@ namespace NoLazyWorkers.TaskService.StationTasks
           station.TransitEntity, new List<ItemSlot> { station.OutputSlot },
           dropoffStation.TransitEntity, new List<ItemSlot> { dropoffStation.ProductSlots[0] }
       );
-      bool completed = false;
+
       yield return _taskService.CacheService.IEmployees[chemist.GUID].AdvBehaviour.StartMovement(
-        transferRequest,
-        (_, _, status) =>
-        {
-          completed = status == MovementStatus.Success;
-          TransferRequest.Release(transferRequest);
-        }
+          transferRequest,
+          task,
+          (_, _, _) =>
+          {
+            try
+            {
+              TransferRequest.Release(transferRequest);
+            }
+            catch (Exception ex)
+            {
+              Log(Level.Error, $"DeliverOutput movement callback failed: {ex.Message}", Category.Tasks);
+            }
+          }
       );
-
       _taskService.CompleteTask(task);
-    }
-
-    [BurstCompile]
-    private StorageData FindShelfWithItem(NativeList<ItemKey> items, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
-    {
-      StorageData returnData = default;
-      if (_taskService.CacheService.StorageDataCache.Count() > 0)
-      {
-        var dataCache = _taskService.CacheService.StorageDataCache.GetValueArray(Allocator.Temp);
-        foreach (var storageData in dataCache)
-          if (storageData.Slots.Any(slot => slot.Item.ItemKey.AdvCanStackWithBurst(items, allowTargetHigherQuality) && slot.Quantity > desiredQuantity))
-          {
-            returnData = storageData;
-            break;
-          }
-        dataCache.Dispose();
-      }
-      return returnData;
-    }
-
-    [BurstCompile]
-    private StorageData FindShelfWithItem(ItemKey item, int desiredQuantity = 0, bool allowTargetHigherQuality = false)
-    {
-      StorageData returnData = default;
-      var list = new NativeList<ItemKey>(Allocator.TempJob) { item };
-      try
-      {
-        returnData = FindShelfWithItem(list, desiredQuantity, allowTargetHigherQuality);
-      }
-      finally
-      {
-        list.Dispose();
-      }
-      return returnData;
-    }
-
-    [BurstCompile]
-    private StationData FindPackagingStation(ItemData item)
-    {
-      StationData returnData = default;
-      if (_taskService.CacheService.StationDataCache.Count() > 0)
-      {
-        var dataCache = _taskService.CacheService.StationDataCache.GetValueArray(Allocator.Temp);
-        try
-        {
-          foreach (var station in dataCache)
-            if (station.EntityType == EntityType.PackagingStation && (station.ProductSlots[0].Item.ID.IsEmpty || (station.ProductSlots[0].Item.ItemKey.Equals(item.ItemKey) && station.ProductSlots[0].StackLimit >= station.ProductSlots[0].Quantity + item.Quantity)))
-              returnData = station;
-        }
-        finally
-        {
-          dataCache.Dispose();
-        }
-      }
-      return returnData;
-    }
-
-    [BurstCompile]
-    private StorageData FindDestination(ItemData item)
-    {
-      foreach (var storage in _taskService.CacheService.StorageDataCache)
-      {
-        if (storage.Value.Slots.Any(slot => slot.Item.ID == "" || (slot.Item.Equals(item) && slot.Quantity < slot.StackLimit)))
-        {
-          return storage.Value;
-        }
-      }
-      return default;
-    }
-
-    [BurstCompile]
-    private StorageData FindStorageForDelivery(ItemData item)
-    {
-      StorageData returnData = default;
-      if (_taskService.CacheService.StorageDataCache.Count() > 0)
-      {
-        var dataCache = _taskService.CacheService.StorageDataCache.GetValueArray(Allocator.Temp);
-        foreach (var storageData in dataCache)
-          if (storageData.Slots.Any(slot => slot.Item.ID.IsEmpty || slot.Item.AdvCanStackWithBurst(item, checkQuantities: true)))
-          {
-            returnData = storageData;
-            break;
-          }
-        dataCache.Dispose();
-      }
-      return returnData;
     }
   }
 }

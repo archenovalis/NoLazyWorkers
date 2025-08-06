@@ -6,7 +6,6 @@ using Unity.Burst;
 using static NoLazyWorkers.TaskService.Extensions;
 using Unity.Collections;
 using static NoLazyWorkers.CacheManager.Utilities;
-using static NoLazyWorkers.Movement.Utilities;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using FishNet;

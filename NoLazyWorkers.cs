@@ -44,7 +44,7 @@ using NoLazyWorkers.Extensions;
 using static NoLazyWorkers.Extensions.PoolUtility;
 using NoLazyWorkers.Storage;
 
-[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "1.1.9", "Archie")]
+[assembly: MelonInfo(typeof(NoLazyWorkers.NoLazyWorkersMod), "NoLazyWorkers", "2.0.0", "Archie")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: HarmonyDontPatchAll]
 namespace NoLazyWorkers
@@ -248,7 +248,7 @@ namespace NoLazyWorkers
     public const string Name = "NoLazyWorkers";
     public const string Description = "Botanist's supply is moved to each pot and a supply is added to mixing stations. Botanists and Chemists will get items from their station's supply. Mixing Stations can have multiple recipes that loop the output. Multiple employee-related configurable settings.";
     public const string Author = "Archie";
-    public const string Version = "1.1.9";
+    public const string Version = "2.0.0";
   }
 
   public class NoLazyWorkersMod : MelonMod

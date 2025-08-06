@@ -1,35 +1,22 @@
-using FishNet;
 using HarmonyLib;
 using ScheduleOne.Employees;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
-using ScheduleOne.NPCs;
 using System.Collections;
 using UnityEngine;
 using static NoLazyWorkers.Stations.Extensions;
-using static NoLazyWorkers.CacheManager.ManagedDictionaries;
 using static NoLazyWorkers.Employees.Extensions;
 using static NoLazyWorkers.Employees.Utilities;
-using static NoLazyWorkers.Employees.Constants;
 using ScheduleOne.Property;
 using NoLazyWorkers.CacheManager;
 using FishNet.Object;
-using Random = UnityEngine.Random;
 using FishNet.Managing.Object;
-//using static NoLazyWorkers.Stations.PackagingStationExtensions;
 using NoLazyWorkers.TaskService;
 using static NoLazyWorkers.TaskService.Extensions;
-using static NoLazyWorkers.TaskService.TaskRegistry;
-using Funly.SkyStudio;
-using Unity.Collections;
-using static NoLazyWorkers.Movement.Utilities;
 using NoLazyWorkers.Movement;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.Extensions.FishNetExtensions;
 using static NoLazyWorkers.CacheManager.Extensions;
 using static NoLazyWorkers.Debug;
-using UnityEngine.InputSystem.EnhancedTouch;
-using System.Reflection.Metadata;
 using NoLazyWorkers.Extensions;
 using NoLazyWorkers.SmartExecution;
 
@@ -186,7 +173,7 @@ namespace NoLazyWorkers.Employees
         Log(Level.Info, $"CreateAdvMoveItemBehaviour: Created and added behaviour for {employee.fullName}", Category.EmployeeCore);
         outList.Add(1);
       };
-      Smart.Execute("SetupAdvMoveBehaviour", 1, setupBehaviour, outputs: outputs, options: new SmartOptions { IsTaskSafe = true });
+      Smart.Execute("SetupAdvMoveBehaviour", 1, setupBehaviour, outputs: outputs);
 
       return employee.gameObject.GetComponent<AdvMoveItemBehaviour>();
     }
@@ -294,13 +281,12 @@ namespace NoLazyWorkers.Employees
     {
       if (CheckIdleConditions())
         return;
-
       if (_taskService.TryGetTask(Employee, out var task, out var taskImpl))
       {
         Employee.SetWaitOutside(false);
         Info.CurrentTask = task;
         Log(Level.Info, $"HandleIdle: Assigned task {task.TaskId} to {Employee.fullName}", Category.EmployeeCore);
-        StartMyCoroutine(ExecuteTaskCoroutine(taskImpl, task)); // Start async execution
+        StartMyCoroutine(ExecuteTaskCoroutine(taskImpl, task), task);
       }
       else
       {
@@ -312,7 +298,6 @@ namespace NoLazyWorkers.Employees
 
     protected void HandleWorking()
     {
-      // Since execution is in coroutine, this can check for interruptions
       try
       {
         if (BurstData.CurrentAction != EmployeeAction.Working)
@@ -356,12 +341,12 @@ namespace NoLazyWorkers.Employees
       BurstData.CurrentAction = EmployeeAction.Working;
     }
 
-    internal IEnumerator StartMovement(TransferRequest request, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
+    internal IEnumerator StartMovement(TransferRequest request, TaskDescriptor task, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
     {
-      yield return StartMovement(new List<TransferRequest> { request }, onComplete);
+      yield return StartMovement(new List<TransferRequest> { request }, task, onComplete);
     }
 
-    internal IEnumerator StartMovement(List<TransferRequest> requests, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
+    internal IEnumerator StartMovement(List<TransferRequest> requests, TaskDescriptor task, Action<Employee, EmployeeInfo, MovementStatus> onComplete = null)
     {
       var moveCompleted = false;
       Info.TaskContext = new TaskContext
@@ -389,7 +374,12 @@ namespace NoLazyWorkers.Employees
       }
       if (!moveCompleted)
       {
-        Log(Level.Error, $"StartMovement: Timeout after {timeoutSeconds}s for {Employee.fullName}", Category.EmployeeCore);
+        Log(Level.Warning, $"StartMovement: Timeout after {timeoutSeconds}s for {Employee.fullName}", Category.EmployeeCore);
+        Info.TaskContext.MovementStatus = MovementStatus.Failure;
+        Info.TaskContext.Cleanup(Employee);
+        _taskService.CompleteTask(task);
+        BurstData.CurrentAction = EmployeeAction.Idle;
+        onComplete?.Invoke(Employee, Info, MovementStatus.Failure);
       }
     }
 
@@ -432,9 +422,17 @@ namespace NoLazyWorkers.Employees
       Log(Level.Info, $"Disable: Behaviour disabled for {Employee.fullName}", Category.EmployeeCore);
     }
 
-    public Coroutine StartMyCoroutine(IEnumerator routine)
+    public Coroutine StartMyCoroutine(IEnumerator routine, TaskDescriptor task = default)
     {
-      return _updater.StartCoroutine(routine);
+      return _updater.StartCoroutine(CoroutineRunner.RunThrowingIterator(routine, ex =>
+      {
+        Log(Level.Error, $"Coroutine failed for {Employee.fullName}: {ex.Message}", Category.EmployeeCore);
+        if (task.TaskId != default)
+        {
+          _taskService.CompleteTask(task);
+          HandleTaskResult(new TaskResult(task, false, ex.Message));
+        }
+      }));
     }
 
     private IEnumerator ExecuteTaskCoroutine(BaseTask taskImpl, TaskDescriptor task)
@@ -488,8 +486,11 @@ namespace NoLazyWorkers.Employees
       try
       {
         var taskService = TaskServiceManager.GetOrCreateService(__instance.AssignedProperty);
-        taskService.EntityStateService.EntityStates.Remove(__instance.GUID);
-        taskService.CacheService.IEmployees.Remove(__instance.GUID);
+        var cacheService = taskService.CacheService;
+        if (taskService.EntityStateService.EntityStates.ContainsKey(__instance.GUID))
+          taskService.EntityStateService.EntityStates.Remove(__instance.GUID);
+        if (cacheService.IEmployees.ContainsKey(__instance.GUID))
+          cacheService.IEmployees.Remove(__instance.GUID);
         if (__instance.AssignedProperty.Employees.Count == 1)
           taskService.DeactivateProperty();
         Log(Level.Info, $"EmployeeBehaviour: Cleaned up for {__instance.fullName}", Category.EmployeeCore);

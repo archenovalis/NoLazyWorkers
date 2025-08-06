@@ -11,49 +11,43 @@ using NoLazyWorkers.Extensions;
 using UnityEngine.Pool;
 using NoLazyWorkers.Storage;
 using System.Collections;
+using UnityEngine;
 
 namespace NoLazyWorkers.Movement
 {
   public static class Utilities
   {
-    /// <summary>
-    /// Asynchronously executes a sequence of transfer requests for an employee, handling item movement.
-    /// </summary>
-    /// <returns>A tuple indicating success and an error message if applicable.</returns>
-    public static async Task<(bool success, string error)> TransitAsync(Employee employee, EmployeeInfo state, TaskDescriptor task, List<TransferRequest> requests)
+    internal static IEnumerator MoveToCoroutine(Employee employee, ITransitEntity transitEntity)
     {
-      if (!requests.Any())
+      if (employee == null || transitEntity == null)
       {
-        Log(Level.Warning,
-            $"Transit: No valid requests for {employee.fullName}",
-            Category.Movement);
-        return (false, "No valid requests");
+        Log(Level.Error, $"MoveToCoroutine: Invalid employee={employee?.fullName ?? "null"} or transitEntity={transitEntity?.GUID.ToString() ?? "null"}", Category.Movement);
+        yield break;
       }
-
-      try
+      var accessPoint = NavMeshUtility.GetAccessPoint(transitEntity, employee);
+      if (accessPoint == null)
       {
-        var tcs = new TaskCompletionSource<(bool success, string error)>();
-
-        state.AdvBehaviour.StartMovement(requests, (emp, s, status) =>
+        Log(Level.Warning, $"MoveToCoroutine: No access point for transitEntity={transitEntity.GUID} for {employee.fullName}", Category.Movement);
+        yield break;
+      }
+      employee.Movement.SetDestination(accessPoint.position);
+      double startTick = TimeManagerInstance.Tick;
+      double timeoutTick = startTick + TimeManagerInstance.TimeToTicks(30.0f);
+      while (TimeManagerInstance.Tick < timeoutTick)
+      {
+        if (!employee.Movement.IsMoving)
         {
-          var result = status == MovementStatus.Success
-              ? (true, "Success")
-              : (false, $"Movement failed: {status}");
-          Log(Level.Info,
-              $"Transit: Movement completed with status={status} for {emp.fullName}",
-              Category.Movement);
-          tcs.TrySetResult(result);
-        });
-
-        return await tcs.Task;
+          if (NavMeshUtility.IsAtTransitEntity(transitEntity, employee))
+          {
+            Log(Level.Info, $"MoveToCoroutine: {employee.fullName} reached {transitEntity.GUID}", Category.Movement);
+            yield break;
+          }
+          Log(Level.Warning, $"MoveToCoroutine: {employee.fullName} stopped moving but not at {transitEntity.GUID}", Category.Movement);
+          yield break;
+        }
+        yield return null;
       }
-      catch (Exception ex)
-      {
-        Log(Level.Error,
-            $"Transit: Failed for {employee.fullName} - {ex.Message}",
-            Category.Movement);
-        return (false, ex.Message);
-      }
+      Log(Level.Warning, $"MoveToCoroutine: Timeout for {employee.fullName} to reach {transitEntity.GUID}", Category.Movement);
     }
   }
 

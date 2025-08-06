@@ -4,22 +4,16 @@ using ScheduleOne.ItemFramework;
 using ScheduleOne.Management;
 using Behaviour = ScheduleOne.NPCs.Behaviour.Behaviour;
 using static NoLazyWorkers.Employees.Extensions;
-using static NoLazyWorkers.Movement.Utilities;
-using static NoLazyWorkers.CacheManager.CacheService;
 using System.Collections;
 using UnityEngine;
 using ScheduleOne.DevUtilities;
 using static NoLazyWorkers.Movement.Extensions;
-using static NoLazyWorkers.Extensions.FishNetExtensions;
-using System.Diagnostics;
+using static NoLazyWorkers.Movement.Utilities;
 using NoLazyWorkers.CacheManager;
 using NoLazyWorkers.SmartExecution;
 using static NoLazyWorkers.Debug;
 using NoLazyWorkers.Extensions;
-using static NoLazyWorkers.Extensions.TaskExtensions;
 using static NoLazyWorkers.Storage.SlotService;
-using static NoLazyWorkers.CacheManager.Extensions;
-using Unity.Burst;
 using NoLazyWorkers.Storage;
 using static NoLazyWorkers.Storage.SlotExtensions;
 
@@ -28,7 +22,7 @@ namespace NoLazyWorkers.Movement
   public class AdvMoveItemBehaviour : Behaviour
   {
     public Employee Employee { get; private set; }
-    public TransitRoute assignedRoute;
+    public TransitRoute activeRoute;
     public ItemInstance itemToRetrieveTemplate;
     public int grabbedAmount;
     public int maxMoveAmount = -1;
@@ -325,10 +319,7 @@ namespace NoLazyWorkers.Movement
       yield return Smart.Execute(
           uniqueId: "GrabItemGroup",
           itemCount: inputs.Length,
-          action: (start, count, inArray, outList) =>
-          {
-            CoroutineRunner.Instance.RunCoroutine(ProcessGrabBatchCoroutine(start, count, inArray, outList));
-          },
+          action: ProcessGrabBatch,
           inputs: inputs,
           outputs: outputs,
           resultsAction: (results) =>
@@ -351,18 +342,17 @@ namespace NoLazyWorkers.Movement
       );
     }
 
-    private IEnumerator ProcessGrabBatchCoroutine(int start, int count, GrabPlaceInput[] inputs, List<GrabPlaceOutput> outputs)
+    private void ProcessGrabBatch(int start, int count, GrabPlaceInput[] inputs, List<GrabPlaceOutput> outputs)
     {
       for (int i = start; i < start + count; i++)
       {
         var input = inputs[i];
         if (input.Quantity <= 0) continue;
-        yield return input.Route.InventorySlot.AdvInsertItemCoroutine(input.Slot.ItemInstance, input.Quantity, Employee.GUID, Employee);
-        if (input.Route.InventorySlot.Quantity >= input.Quantity)
+        int inserted = input.Route.InventorySlot.AdvInsertItem(input.Slot.ItemInstance, input.Quantity, Employee.GUID, Employee);
+        if (inserted == input.Quantity)
         {
-          yield return input.Slot.AdvRemoveItemCoroutine(input.Quantity, input.Route.PickUp.GUID, Employee);
-          var (success, takenItem) = input.Slot.LastRemoveResult;
-          if (success)
+          var (removed, takenItem) = input.Slot.AdvRemoveItem(input.Quantity, input.Route.PickUp.GUID, Employee);
+          if (removed == input.Quantity)
           {
             outputs.Add(new GrabPlaceOutput { Quantity = input.Quantity, ItemId = takenItem.ID });
             grabbedAmount += input.Quantity;
@@ -370,8 +360,8 @@ namespace NoLazyWorkers.Movement
           }
           else
           {
-            yield return input.Route.InventorySlot.AdvRemoveItemCoroutine(input.Quantity, Employee.GUID, Employee);
-            Log(Level.Warning, $"GrabItemGroupCoroutine: Failed to take {input.Quantity} from slot", Category.Movement);
+            input.Route.InventorySlot.AdvRemoveItem(removed, Employee.GUID, Employee);
+            Log(Level.Warning, $"GrabItemGroupCoroutine: Failed to take {input.Quantity} from slot, rolled back", Category.Movement);
           }
         }
         else
@@ -481,10 +471,7 @@ namespace NoLazyWorkers.Movement
         Quantity = Math.Min(route.InventorySlot.Quantity, s.GetCapacityForItem(itemToPlace))
       }).ToArray();
       var outputs = new List<GrabPlaceOutput>();
-      Action<int, int, GrabPlaceInput[], List<GrabPlaceOutput>> processBatch = (start, count, inArray, outList) =>
-      {
-        CoroutineRunner.Instance.RunCoroutine(ProcessPlaceBatchCoroutine(start, count, inArray, outList));
-      };
+      Action<int, int, GrabPlaceInput[], List<GrabPlaceOutput>> processBatch = ProcessPlaceBatch;
       Action<List<GrabPlaceOutput>> resultsAction = (results) =>
       {
         Log(Level.Info, $"PlaceItemToDropoffCoroutine: Placed {results.Sum(o => o.Quantity)}, anySuccess={_anySuccess}", Category.Movement);
@@ -502,18 +489,17 @@ namespace NoLazyWorkers.Movement
       yield return new WaitForSeconds(0.2f);
     }
 
-    private IEnumerator ProcessPlaceBatchCoroutine(int start, int count, GrabPlaceInput[] inputs, List<GrabPlaceOutput> outputs)
+    private void ProcessPlaceBatch(int start, int count, GrabPlaceInput[] inputs, List<GrabPlaceOutput> outputs)
     {
       for (int i = start; i < start + count; i++)
       {
         var input = inputs[i];
         if (input.Quantity <= 0) continue;
-        yield return input.Slot.AdvInsertItemCoroutine(input.Route.InventorySlot.ItemInstance, input.Quantity, input.Route.DropOff.GUID, Employee);
-        if (input.Slot.Quantity >= input.Quantity)
+        int inserted = input.Slot.AdvInsertItem(input.Route.InventorySlot.ItemInstance, input.Quantity, input.Route.DropOff.GUID, Employee);
+        if (inserted == input.Quantity)
         {
-          yield return input.Route.InventorySlot.AdvRemoveItemCoroutine(input.Quantity, Employee.GUID, Employee);
-          var (success, removedItem) = input.Route.InventorySlot.LastRemoveResult;
-          if (success)
+          var (removed, removedItem) = input.Route.InventorySlot.AdvRemoveItem(input.Quantity, Employee.GUID, Employee);
+          if (removed == input.Quantity)
           {
             outputs.Add(new GrabPlaceOutput { Quantity = input.Quantity, ItemId = removedItem.ID });
             grabbedAmount -= input.Quantity;
@@ -522,8 +508,8 @@ namespace NoLazyWorkers.Movement
           }
           else
           {
-            yield return input.Slot.AdvRemoveItemCoroutine(input.Quantity, input.Route.DropOff.GUID, Employee);
-            Log(Level.Warning, $"PlaceItemToDropoffCoroutine: Failed to remove {input.Quantity} from inventory", Category.Movement);
+            input.Slot.AdvRemoveItem(removed, input.Route.DropOff.GUID, Employee);
+            Log(Level.Warning, $"PlaceItemToDropoffCoroutine: Failed to remove {input.Quantity} from inventory, rolled back", Category.Movement);
           }
         }
         else
@@ -531,44 +517,6 @@ namespace NoLazyWorkers.Movement
           Log(Level.Warning, $"PlaceItemToDropoffCoroutine: Failed to insert {input.Quantity} into dropoff slot", Category.Movement);
         }
       }
-    }
-
-    internal IEnumerator MoveToCoroutine(Employee employee, ITransitEntity transitEntity)
-    {
-      if (employee == null || transitEntity == null)
-      {
-        Log(Level.Error, $"MoveToCoroutine: Invalid employee={employee?.fullName ?? "null"} or transitEntity={transitEntity?.GUID.ToString() ?? "null"}", Category.Movement);
-        _currentCoroutine = null;
-        yield break;
-      }
-      var accessPoint = NavMeshUtility.GetAccessPoint(transitEntity, employee);
-      if (accessPoint == null)
-      {
-        Log(Level.Warning, $"MoveToCoroutine: No access point for transitEntity={transitEntity.GUID} for {employee.fullName}", Category.Movement);
-        _currentCoroutine = null;
-        yield break;
-      }
-      employee.Movement.SetDestination(accessPoint.position);
-      double startTick = TimeManagerInstance.Tick;
-      double timeoutTick = startTick + TimeManagerInstance.TimeToTicks(30.0f);
-      while (TimeManagerInstance.Tick < timeoutTick)
-      {
-        if (!employee.Movement.IsMoving)
-        {
-          if (NavMeshUtility.IsAtTransitEntity(transitEntity, employee))
-          {
-            Log(Level.Info, $"MoveToCoroutine: {employee.fullName} reached {transitEntity.GUID}", Category.Movement);
-            _currentCoroutine = null;
-            yield break;
-          }
-          Log(Level.Warning, $"MoveToCoroutine: {employee.fullName} stopped moving but not at {transitEntity.GUID}", Category.Movement);
-          _currentCoroutine = null;
-          yield break;
-        }
-        yield return null;
-      }
-      Log(Level.Warning, $"MoveToCoroutine: Timeout for {employee.fullName} to reach {transitEntity.GUID}", Category.Movement);
-      _currentCoroutine = null;
     }
 
     private void ProcessNextRoute()
@@ -597,15 +545,15 @@ namespace NoLazyWorkers.Movement
         itemToRetrieveTemplate = firstRoute.Item;
         maxMoveAmount = _sameSourceRoutes.Sum(r => r.Quantity);
         skipPickup = firstRoute.PickUp == null;
-        assignedRoute = firstRoute.TransitRoute;
+        activeRoute = firstRoute.TransitRoute;
         Log(Level.Info, $"ProcessNextRoute: Processing {_sameSourceRoutes.Count} routes from source={currentSource}, total qty={maxMoveAmount}", Category.Movement);
         if (skipPickup)
         {
           if (!InventoryRoutes.ContainsKey(Employee.GUID))
             InventoryRoutes[Employee.GUID] = new();
-          InventoryRoutes[Employee.GUID].Add(assignedRoute);
+          InventoryRoutes[Employee.GUID].Add(activeRoute);
         }
-        if (!IsTransitRouteValid(assignedRoute, itemToRetrieveTemplate, firstRoute.Quantity, out var invalidReason))
+        if (!IsTransitRouteValid(activeRoute, itemToRetrieveTemplate, firstRoute.Quantity, out var invalidReason))
         {
           Log(Level.Warning, $"ProcessNextRoute: Skipping invalid transit route: {invalidReason}", Category.Movement);
           ProcessNextRoute();
@@ -627,7 +575,6 @@ namespace NoLazyWorkers.Movement
     private void SavePauseState()
     {
       _pauseState.CurrentState = currentState;
-      _pauseState.CurrentRouteIndex = _pauseState.CurrentRouteIndex;
       _pauseState.CurrentRouteGroup = _sameSourceRoutes.ToList();
       Log(Level.Verbose, $"SavePauseState: Saved state, state={currentState}", Category.Movement);
     }

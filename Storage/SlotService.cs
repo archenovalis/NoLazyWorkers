@@ -9,11 +9,78 @@ using FishNet.Object;
 using ScheduleOne.UI;
 using System.Collections;
 using ScheduleOne.Employees;
+using ScheduleOne.ObjectScripts;
+using ScheduleOne.EntityFramework;
+using NoLazyWorkers.CacheManager;
+using ScheduleOne.Delivery;
+using ScheduleOne.Property;
+using static NoLazyWorkers.Storage.ShelfExtensions;
+using static NoLazyWorkers.Storage.SlotService;
 
 namespace NoLazyWorkers.Storage
 {
   public static class SlotExtensions
   {
+    public static SlotKey GetSlotKey(this ItemSlot itemSlot)
+    {
+      Guid guid;
+      switch (itemSlot.SlotOwner)
+      {
+        case PlaceableStorageEntity storage:
+          guid = storage.GUID;
+          break;
+        case BuildableItem station:
+          guid = station.GUID;
+          break;
+        case LoadingDock dock:
+          guid = dock.GUID;
+          break;
+        case Employee employee:
+          guid = employee.GUID;
+          break;
+        default:
+          return default;
+      }
+      return new SlotKey(guid, itemSlot.SlotIndex);
+    }
+
+    public static Property GetProperty(this ItemSlot itemSlot)
+    {
+      switch (itemSlot.SlotOwner)
+      {
+        case PlaceableStorageEntity storage:
+          return storage.ParentProperty;
+        case BuildableItem station:
+          return station.ParentProperty;
+        case LoadingDock dock:
+          return dock.ParentProperty;
+        case Employee employee:
+          return employee.AssignedProperty;
+        default:
+          return null;
+      }
+    }
+
+    public static StorageType OwnerType(this ItemSlot itemSlot)
+    {
+      switch (itemSlot.SlotOwner)
+      {
+        case PlaceableStorageEntity storage:
+          var property = storage.ParentProperty;
+          return CacheService.GetOrCreateService(property).StorageConfigs.TryGetValue(storage.GUID, out var config) && config.Mode == StorageMode.Specific
+                 ? StorageType.SpecificShelf
+                 : StorageType.AnyShelf;
+        case BuildableItem:
+          return StorageType.Station;
+        case LoadingDock:
+          return StorageType.LoadingDock;
+        case Employee:
+          return StorageType.Employee;
+        default:
+          return default;
+      }
+    }
+
     [BurstCompile]
     public struct SlotCheckInput
     {
@@ -22,47 +89,63 @@ namespace NoLazyWorkers.Storage
       public int Quantity;
     }
 
-    public static (bool Success, ItemInstance Item) LastRemoveResult { get; set; }
-    public static IEnumerator AdvInsertItemCoroutine(this ItemSlot slot, ItemInstance item, int quantity, Guid entityGuid, Employee employee)
+    public static int AdvInsertItem(this ItemSlot slot, ItemInstance item, int quantity, Guid entityGuid, Employee employee)
     {
       if (slot == null || item == null || quantity <= 0)
       {
-        Log(Level.Warning, $"AdvInsertItemCoroutine: Invalid slot, item, or quantity for entity {entityGuid}", Category.Storage);
-        yield break;
+        Log(Level.Warning, $"AdvInsertItem: Invalid slot, item, or quantity for entity {entityGuid}", Category.Storage);
+        return 0;
+      }
+      var slotData = slot.ToSlotData();
+      var itemData = item.ToItemData();
+      if (!SlotProcessingUtility.CanInsert(slotData, itemData, quantity))
+      {
+        Log(Level.Warning, $"AdvInsertItem: Cannot insert {quantity} {item.ID} into slot {slot.SlotIndex} (capacity issue)", Category.Storage);
+        return 0;
       }
       if (SlotService.ReserveSlot(entityGuid, slot, employee.NetworkObject, "insert", item, quantity))
       {
-        slot.Quantity += quantity;
-        slot.ItemInstance = item.GetCopy();
-        Log(Level.Verbose, $"AdvInsertItemCoroutine: Inserted {quantity} {item.ID} into slot {slot.SlotIndex}", Category.Storage);
+        if (slot.ItemInstance == null)
+          slot.ItemInstance = item.GetCopy();
+        slot.ChangeQuantity(quantity);
+        Log(Level.Verbose, $"AdvInsertItem: Inserted {quantity} {item.ID} into slot {slot.SlotIndex}", Category.Storage);
+        return quantity;
       }
       else
       {
-        Log(Level.Warning, $"AdvInsertItemCoroutine: Failed to reserve slot {slot.SlotIndex} for insert", Category.Storage);
+        Log(Level.Warning, $"AdvInsertItem: Failed to reserve slot {slot.SlotIndex} for insert", Category.Storage);
+        return 0;
       }
     }
 
-    public static IEnumerator AdvRemoveItemCoroutine(this ItemSlot slot, int quantity, Guid entityGuid, Employee employee)
+    public static (int Removed, ItemInstance Item) AdvRemoveItem(this ItemSlot slot, int quantity, Guid entityGuid, Employee employee)
     {
-      slot.LastRemoveResult = (false, null);
       if (slot == null || quantity <= 0 || slot.Quantity < quantity)
       {
-        Log(Level.Warning, $"AdvRemoveItemCoroutine: Invalid slot or quantity for entity {entityGuid}", Category.Storage);
-        yield break;
+        Log(Level.Warning, $"AdvRemoveItem: Invalid slot or quantity for entity {entityGuid}", Category.Storage);
+        return (0, null);
+      }
+      var slotData = slot.ToSlotData();
+      var itemData = slot.ItemInstance.ToItemData();
+      if (!SlotProcessingUtility.CanRemove(slotData, itemData, quantity))
+      {
+        Log(Level.Warning, $"AdvRemoveItem: Cannot remove {quantity} from slot {slot.SlotIndex}", Category.Storage);
+        return (0, null);
       }
       if (SlotService.ReserveSlot(entityGuid, slot, employee.NetworkObject, "remove", slot.ItemInstance, quantity))
       {
         var item = slot.ItemInstance.GetCopy();
-        slot.Quantity -= quantity;
+        slot.ChangeQuantity(-quantity);
         if (slot.Quantity == 0)
           slot.ItemInstance = null;
         SlotService.ReleaseSlot(slot);
-        slot.LastRemoveResult = (true, item);
-        Log(Level.Verbose, $"AdvRemoveItemCoroutine: Removed {quantity} {item.ID} from slot {slot.SlotIndex}", Category.Storage);
+        Log(Level.Verbose, $"AdvRemoveItem: Removed {quantity} {item.ID} from slot {slot.SlotIndex}", Category.Storage);
+        return (quantity, item);
       }
       else
       {
-        Log(Level.Warning, $"AdvRemoveItemCoroutine: Failed to reserve slot {slot.SlotIndex} for remove", Category.Storage);
+        Log(Level.Warning, $"AdvRemoveItem: Failed to reserve slot {slot.SlotIndex} for remove", Category.Storage);
+        return (0, null);
       }
     }
 

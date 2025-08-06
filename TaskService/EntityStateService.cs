@@ -12,11 +12,17 @@ using NoLazyWorkers.Extensions;
 using NoLazyWorkers.CacheManager;
 using static NoLazyWorkers.TaskService.EntityStateService;
 using static NoLazyWorkers.TaskService.TaskService;
+using static NoLazyWorkers.TaskService.Delegates;
 
 namespace NoLazyWorkers.TaskService
 {
   public class EntityStates
   {
+    public enum Chemist
+    {
+      Invalid = 0,
+    }
+
     public enum MixingStation
     {
       Invalid = 0,
@@ -30,19 +36,23 @@ namespace NoLazyWorkers.TaskService
   {
     internal static class Employee
     {
-      internal static Dictionary<EntityType, ValidateEmployeeBurst> ValidateEmployeeDelegates = new()
-      {
-          { EntityType.Chemist, new ValidateEmployeeBurst(ValidateChemistStateBurst, ValidateChemistStateResults) }
-      };
+      internal static Dictionary<EntityType, IValidateEntity> ValidateEmployeeStructs = new()
+        {
+            { EntityType.Chemist, new ValidateChemistStruct() }
+        };
+    }
+    internal static class Stations
+    {
+      internal static Dictionary<EntityType, IValidateEntity> ValidateStationStructs = new()
+        {
+            { EntityType.MixingStation, new ValidateMixingStationStruct() }
+        };
+    }
 
-      /// <summary>
-      /// Validates the state of a chemist entity in a burst-compiled context.
-      /// </summary>
-      /// <param name="input">The unique identifier of the chemist entity.</param>
-      /// <param name="outputs">List to store state results.</param>
-      /// <param name="logs">List to store log entries.</param>
-      [BurstCompile]
-      internal static void ValidateChemistStateBurst(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs)
+    [BurstCompile]
+    internal struct ValidateChemistStruct : IValidateEntity
+    {
+      public void Validate(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, object data = null)
       {
         int state = 0; // Placeholder
         outputs.Add(state);
@@ -54,14 +64,7 @@ namespace NoLazyWorkers.TaskService
         });
       }
 
-      /// <summary>
-      /// Processes validation results for a chemist entity.
-      /// </summary>
-      /// <param name="results">List of validation results.</param>
-      /// <param name="logs">List to store log entries.</param>
-      /// <param name="entityStates">Hash map to store entity states.</param>
-      /// <param name="guid">The unique identifier of the entity.</param>
-      internal static void ValidateChemistStateResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid)
+      public void ProcessResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid)
       {
         if (results.Length > 0)
         {
@@ -76,26 +79,14 @@ namespace NoLazyWorkers.TaskService
       }
     }
 
-    internal static class Stations
+    [BurstCompile]
+    internal struct ValidateMixingStationStruct : IValidateEntity
     {
-      internal static Dictionary<EntityType, ValidateStationBurst> ValidateStationDelegates = new()
+      public void Validate(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, object data = null)
       {
-          { EntityType.MixingStation, new ValidateStationBurst(ValidateMixingStationStateBurst, ValidateMixingStationStateResults) }
-      };
-
-
-      /// <summary>
-      /// Validates the state of a mixing station in a burst-compiled context.
-      /// </summary>
-      /// <param name="input">The unique identifier of the station.</param>
-      /// <param name="outputs">List to store state results.</param>
-      /// <param name="logs">List to store log entries.</param>
-      /// <param name="station">The station data for validation.</param>
-      [BurstCompile]
-      internal static void ValidateMixingStationStateBurst(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, StationData station)
-      {
+        StationData station = (StationData)data; // Cast passed stationData
         int state;
-        if (station.IsInUse)//TODO: use harmony patch to listen for IsInUse?
+        if (station.IsInUse)
         {
           state = (int)EntityStates.MixingStation.Invalid;
         }
@@ -115,38 +106,65 @@ namespace NoLazyWorkers.TaskService
         {
           state = (int)EntityStates.MixingStation.Invalid;
         }
-
         outputs.Add(state);
         logs.Add(new LogEntry
         {
-          Message = $"Validated MixingStation {input} state: {Enum.GetName(typeof(EntityStates.MixingStation), state)}",
+          Message = $"Validated MixingStation {input} state: {state}",
           Level = Level.Info,
           Category = Category.EntityState
         });
       }
 
-      /// <summary>
-      /// Processes validation results for a mixing station.
-      /// </summary>
-      /// <param name="results">List of validation results.</param>
-      /// <param name="logs">List to store log entries.</param>
-      /// <param name="entityStates">Hash map to store entity states.</param>
-      /// <param name="guid">The unique identifier of the station.</param>
-      [BurstCompile]
-      internal static void ValidateMixingStationStateResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid)
+      public void ProcessResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid)
       {
         if (results.Length > 0)
         {
           entityStates[guid] = results[0];
           logs.Add(new LogEntry
           {
-            Message = $"Updated MixingStation {guid} state to {Enum.GetName(typeof(EntityStates.MixingStation), results[0])}",
+            Message = $"Updated MixingStation {guid} state to {results[0]}",
             Level = Level.Info,
             Category = Category.EntityState
           });
         }
       }
     }
+
+    [BurstCompile]
+    internal struct ValidateEntityExampleStruct : IValidateEntity
+    {
+      public void Validate(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, object data = null)
+      {
+        int state = 0; // Placeholder
+        outputs.Add(state);
+        logs.Add(new LogEntry
+        {
+          Message = $"Validated Chemist {input} state: {state}",
+          Level = Level.Info,
+          Category = Category.EntityState
+        });
+      }
+
+      public void ProcessResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid)
+      {
+        if (results.Length > 0)
+        {
+          entityStates[guid] = results[0];
+          logs.Add(new LogEntry
+          {
+            Message = $"Updated Chemist {guid} state to {results[0]}",
+            Level = Level.Info,
+            Category = Category.EntityState
+          });
+        }
+      }
+    }
+  }
+
+  public interface IValidateEntity
+  {
+    void Validate(Guid input, NativeList<int> outputs, NativeList<LogEntry> logs, object data = null);
+    void ProcessResults(NativeList<int> results, NativeList<LogEntry> logs, NativeParallelHashMap<Guid, int> entityStates, Guid guid);
   }
 
   /// <summary>
@@ -157,9 +175,11 @@ namespace NoLazyWorkers.TaskService
     private readonly Property _property;
     private readonly TaskService _taskService;
     private readonly CacheService _cacheService;
-    private readonly Dictionary<EntityType, ValidateEmployeeBurst> _validateEmployeeDelegates;
-    private readonly Dictionary<EntityType, ValidateStationBurst> _validateStationDelegates;
+    private readonly Dictionary<EntityType, IValidateEntity> _validateEmployeeStructs;
+    private readonly Dictionary<EntityType, IValidateEntity> _validateStationStructs;
     internal NativeParallelHashMap<Guid, int> EntityStates = new(20, Allocator.Persistent);
+    internal NativeParallelHashMap<Guid, DisabledEntityData> DisabledEntities = new(20, Allocator.Persistent);
+
     private bool _isInitialized;
 
     /// <summary>
@@ -171,8 +191,8 @@ namespace NoLazyWorkers.TaskService
       _property = property ?? throw new ArgumentNullException(nameof(property));
       _taskService = TaskServiceManager.GetOrCreateService(property);
       _cacheService = CacheService.GetOrCreateService(property);
-      _validateEmployeeDelegates = Delegates.Employee.ValidateEmployeeDelegates;
-      _validateStationDelegates = Delegates.Stations.ValidateStationDelegates;
+      _validateEmployeeStructs = Delegates.Employee.ValidateEmployeeStructs;
+      _validateStationStructs = Delegates.Stations.ValidateStationStructs;
       _isInitialized = true;
       Log(Level.Info, $"EntityStateService initialized for property {_property.name}", Category.EntityState);
     }
@@ -183,8 +203,14 @@ namespace NoLazyWorkers.TaskService
     public void Dispose()
     {
       if (EntityStates.IsCreated) EntityStates.Dispose();
-      _validateEmployeeDelegates.Clear();
-      _validateStationDelegates.Clear();
+      if (DisabledEntities.IsCreated)
+      {
+        foreach (var kvp in DisabledEntities)
+          kvp.Value.RequiredItems.Dispose();
+        DisabledEntities.Dispose();
+      }
+      _validateEmployeeStructs.Clear();
+      _validateStationStructs.Clear();
       _isInitialized = false;
       Log(Level.Info, $"EntityStateService disposed for property {_property.name}", Category.EntityState);
     }
@@ -236,27 +262,27 @@ namespace NoLazyWorkers.TaskService
           yield break;
         }
         var entityType = typeInfo.EntityType;
-        if (_validateEmployeeDelegates.TryGetValue(entityType, out var employeeDelegate))
+        if (_validateEmployeeStructs.TryGetValue(entityType, out var employeeStruct))
         {
-          yield return SmartExecution.Smart.ExecuteBurst<Guid, int, ValidateEmployeeBurst>(
+          yield return SmartExecution.Smart.ExecuteBurst<Guid, int, ValidateEntityExampleStruct>(
               uniqueId: $"ValidateState_{entityType}_{guid}",
-              burstAction: employeeDelegate.ValidateEmployeeDelegate,
+              burstAction: (input, outList, logList) => employeeStruct.Validate(input, outList, logList),
               input: guid,
               outputs: outputs,
               logs: logs,
-              burstResultsAction: (results, logs) => employeeDelegate.ResultsDelegate(results, logs, EntityStates, guid)
+              burstResultsAction: (results, logList) => employeeStruct.ProcessResults(results, logList, EntityStates, guid)
           );
         }
-        else if (_validateStationDelegates.TryGetValue(entityType, out var stationDelegate))
+        else if (_validateStationStructs.TryGetValue(entityType, out var stationStruct))
         {
           StationData stationData = _cacheService.StationDataCache.ContainsKey(guid) ? _cacheService.StationDataCache[guid] : default;
-          yield return SmartExecution.Smart.ExecuteBurst<Guid, int, ValidateStationBurst>(
+          yield return SmartExecution.Smart.ExecuteBurst<Guid, int, ValidateEntityExampleStruct>(
               uniqueId: $"ValidateState_{entityType}_{guid}",
-              burstAction: (input, outputs, logs) => stationDelegate.ValidateStationDelegate(input, outputs, logs, stationData),
+              burstAction: (input, outList, logList) => stationStruct.Validate(input, outList, logList, stationData),
               input: guid,
               outputs: outputs,
               logs: logs,
-              burstResultsAction: (results, logs) => stationDelegate.ResultsDelegate(results, logs, EntityStates, guid)
+              burstResultsAction: (results, logList) => stationStruct.ProcessResults(results, logList, EntityStates, guid)
           );
         }
         else
@@ -269,50 +295,6 @@ namespace NoLazyWorkers.TaskService
       finally
       {
         scope.Dispose();
-      }
-    }
-
-    /// <summary>
-    /// Defines delegates for employee state validation in a burst-compiled context.
-    /// </summary>
-    [BurstCompile]
-    internal struct ValidateEmployeeBurst
-    {
-      public readonly Action<Guid, NativeList<int>, NativeList<LogEntry>> ValidateEmployeeDelegate;
-      public readonly Action<NativeList<int>, NativeList<LogEntry>, NativeParallelHashMap<Guid, int>, Guid> ResultsDelegate;
-      /// <summary>
-      /// Initializes a new instance of the ValidateEmployeeBurst struct.
-      /// </summary>
-      /// <param name="validateBurst">Delegate for validating employee state.</param>
-      /// <param name="resultsDelegate">Delegate for processing validation results.</param>
-      public ValidateEmployeeBurst(
-          Action<Guid, NativeList<int>, NativeList<LogEntry>> validateBurst,
-          Action<NativeList<int>, NativeList<LogEntry>, NativeParallelHashMap<Guid, int>, Guid> resultsDelegate)
-      {
-        ValidateEmployeeDelegate = validateBurst;
-        ResultsDelegate = resultsDelegate;
-      }
-    }
-
-    /// <summary>
-    /// Defines delegates for station state validation in a burst-compiled context.
-    /// </summary>
-    [BurstCompile]
-    internal struct ValidateStationBurst
-    {
-      public readonly Action<Guid, NativeList<int>, NativeList<LogEntry>, StationData> ValidateStationDelegate;
-      public readonly Action<NativeList<int>, NativeList<LogEntry>, NativeParallelHashMap<Guid, int>, Guid> ResultsDelegate;
-      /// <summary>
-      /// Initializes a new instance of the ValidateStationBurst struct.
-      /// </summary>
-      /// <param name="validateBurst">Delegate for validating station state.</param>
-      /// <param name="resultsDelegate">Delegate for processing validation results.</param>
-      public ValidateStationBurst(
-          Action<Guid, NativeList<int>, NativeList<LogEntry>, StationData> validateBurst,
-          Action<NativeList<int>, NativeList<LogEntry>, NativeParallelHashMap<Guid, int>, Guid> resultsDelegate)
-      {
-        ValidateStationDelegate = validateBurst;
-        ResultsDelegate = resultsDelegate;
       }
     }
   }
