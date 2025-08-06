@@ -317,6 +317,8 @@ namespace NoLazyWorkers.TaskService
     /// </summary>
     [BurstCompile]
     public struct TaskResult
+
+
     {
       public TaskDescriptor Task;
       public bool Success;
@@ -515,7 +517,6 @@ namespace NoLazyWorkers.TaskService
     private readonly NativeListPool<TaskResult> _taskResultPool;
     private readonly NativeListPool<ValidationResultData> _validationResultPool;
     private readonly NativeParallelHashMap<Guid, NativeList<TaskDescriptor>> _employeeSpecificTasks;
-    private bool _isProcessing;
     private Coroutine _processTasksCoroutine;
     internal readonly NativeListPool<LogEntry> LogPool;
     internal readonly CacheService CacheService;
@@ -561,6 +562,11 @@ namespace NoLazyWorkers.TaskService
 
     private IEnumerator CreateTasks(BaseTask task, NativeList<TaskResult> taskResults, DisposableScope scope)
     {
+      if (task == null || task.SupportedEntityTypes == null || task.SupportedEntityTypes.Length == 0)
+      {
+        Log(Level.Warning, $"Invalid task or supported entity types for {task?.Type}", Category.Tasks);
+        yield break;
+      }
       var logs = LogPool.Get();
       scope.Add(logs);
       var entityTypes = new NativeArray<EntityType>(task.SupportedEntityTypes, Allocator.TempJob);
@@ -744,6 +750,8 @@ namespace NoLazyWorkers.TaskService
       TaskQueue.Dispose();
       PoolUtility.DisposeNativeListPool(LogPool, "TaskService_LogPool");
       PoolUtility.DisposeNativeListPool(_taskResultPool, "TaskService_TaskResultPool");
+      PoolUtility.DisposeNativeListPool(_validationResultPool, "TaskService_ValidationResultPool");
+      if (_entityGuids.IsCreated) _entityGuids.Dispose();
       if (_employeeSpecificTasks.IsCreated) _employeeSpecificTasks.Dispose();
     }
 
@@ -861,111 +869,5 @@ namespace NoLazyWorkers.TaskService
   [AttributeUsage(AttributeTargets.Class)]
   public class EntityTaskAttribute : Attribute
   {
-  }
-
-  /// <summary>
-  /// Generates source code for task registration.
-  /// </summary>
-  [Generator]
-  public class TaskTypeSourceGenerator : ISourceGenerator
-  {
-    /// <summary>
-    /// Initializes the source generator.
-    /// </summary>
-    /// <param name="context">The generator initialization context.</param>
-    public void Initialize(GeneratorInitializationContext context)
-    {
-      context.RegisterForSyntaxNotifications(() => new TaskTypeSyntaxReceiver());
-    }
-
-    /// <summary>
-    /// Generates source code for task registration based on syntax analysis.
-    /// </summary>
-    /// <param name="context">The generator execution context.</param>
-    public void Execute(GeneratorExecutionContext context)
-    {
-      if (!(context.SyntaxReceiver is TaskTypeSyntaxReceiver receiver))
-        return;
-      var compilation = context.Compilation;
-      var taskTypeAttributeSymbol = compilation.GetTypeByMetadataName("NoLazyWorkers.TaskService.EntityTaskAttribute");
-      if (taskTypeAttributeSymbol == null)
-      {
-        context.ReportDiagnostic(Diagnostic.Create(
-            new DiagnosticDescriptor(
-                "NLW001", "Missing EntityTaskAttribute",
-                "Could not find EntityTaskAttribute in compilation", "TaskRegistration", DiagnosticSeverity.Error, true),
-            null));
-        return;
-      }
-      var taskRegistrations = new StringBuilder();
-      taskRegistrations.AppendLine("using System;");
-      taskRegistrations.AppendLine("using UnityEngine;");
-      taskRegistrations.AppendLine("using NoLazyWorkers.TaskService;");
-      taskRegistrations.AppendLine("using NoLazyWorkers.TaskService.Extensions;");
-      taskRegistrations.AppendLine();
-      taskRegistrations.AppendLine("namespace NoLazyWorkers.TaskService");
-      taskRegistrations.AppendLine("{");
-      taskRegistrations.AppendLine("  public partial class TaskRegistry");
-      taskRegistrations.AppendLine("  {");
-      taskRegistrations.AppendLine("    public void Initialize()");
-      taskRegistrations.AppendLine("    {");
-      taskRegistrations.AppendLine("      // Auto-generated task registrations");
-      taskRegistrations.AppendLine("      Log(Level.Info, \"Initializing TaskRegistry with auto-registered tasks\", Category.Tasks);");
-      foreach (var classDeclaration in receiver.CandidateClasses)
-      {
-        var semanticModel = compilation.GetSemanticModel(classDeclaration.SyntaxTree);
-        var classSymbol = semanticModel.GetDeclaredSymbol(classDeclaration) as INamedTypeSymbol;
-        if (classSymbol == null)
-          continue;
-        var entityTaskAttribute = classSymbol.GetAttributes()
-            .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, taskTypeAttributeSymbol));
-        if (entityTaskAttribute == null)
-          continue;
-        if (!classSymbol.AllInterfaces.Any(i => i.ToString().StartsWith("NoLazyWorkers.TaskService.ITask")))
-        {
-          context.ReportDiagnostic(Diagnostic.Create(
-              new DiagnosticDescriptor(
-                  "NLW002", "Invalid Task Implementation",
-                  $"Class {classSymbol.Name} marked with EntityTaskAttribute must implement ITask or ITask<TSetupOutput, TValidationSetupOutput>", "TaskRegistration", DiagnosticSeverity.Error, true),
-              classDeclaration.GetLocation()));
-          continue;
-        }
-        var taskTypeProperty = classSymbol.GetMembers("Type")
-            .OfType<IPropertySymbol>()
-            .FirstOrDefault(p => p.Type.ToString() == "NoLazyWorkers.TaskService.Extensions.TaskName");
-        if (taskTypeProperty == null)
-        {
-          context.ReportDiagnostic(Diagnostic.Create(
-              new DiagnosticDescriptor(
-                  "NLW003", "Missing ITask.Type Property",
-                  $"Class {classSymbol.Name} marked with EntityTaskAttribute must implement ITask.Type property", "TaskRegistration", DiagnosticSeverity.Error, true),
-              classDeclaration.GetLocation()));
-          continue;
-        }
-        taskRegistrations.AppendLine($"      // Register task {classSymbol.Name}");
-        taskRegistrations.AppendLine($"      Register(new {classSymbol.ToDisplayString()}());");
-        taskRegistrations.AppendLine($"      Log(Level.Info, $\"Registered task type {classSymbol.Name} ({classSymbol.ToDisplayString()})\", Category.Tasks);");
-      }
-      taskRegistrations.AppendLine("    }");
-      taskRegistrations.AppendLine("  }");
-      taskRegistrations.AppendLine("}");
-      context.AddSource("TaskRegistry.g.cs", taskRegistrations.ToString());
-    }
-
-    private class TaskTypeSyntaxReceiver : ISyntaxReceiver
-    {
-      public List<ClassDeclarationSyntax> CandidateClasses { get; } = new();
-
-      public void OnVisitSyntaxNode(SyntaxNode syntaxNode)
-      {
-        if (syntaxNode is ClassDeclarationSyntax classDeclaration)
-        {
-          if (classDeclaration.AttributeLists.Any(al => al.Attributes.Any(a => a.Name.ToString().Contains("EntityTask"))))
-          {
-            CandidateClasses.Add(classDeclaration);
-          }
-        }
-      }
-    }
   }
 }

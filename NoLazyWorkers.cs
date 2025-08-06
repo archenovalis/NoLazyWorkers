@@ -8,32 +8,19 @@ using ScheduleOne.Management;
 using ScheduleOne.ObjectScripts;
 using ScheduleOne.Persistence;
 using ScheduleOne.Persistence.Loaders;
-using ScheduleOne.Product;
 using ScheduleOne.UI.Management;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections;
 using System.Reflection;
-
-//using NoLazyWorkers.Packagers;
 using NoLazyWorkers.Stations;
 using NoLazyWorkers.Botanists;
-using NoLazyWorkers.Employees;
-using FluffyUnderware.DevTools.Extensions;
 using NoLazyWorkers.CacheManager;
-using FishNet.Object;
-using ScheduleOne.DevUtilities;
 using FishNet;
-using FishNet.Connection;
 using ScheduleOne.Management.SetterScreens;
 using ScheduleOne.Management.UI;
 using UnityEngine.Events;
-using System.Collections.Concurrent;
-using UnityEngine.AI;
-using ScheduleOne.NPCs;
 using NoLazyWorkers.TaskService;
-using FishNet.Managing.Timing;
-using UnityEngine.InputSystem.EnhancedTouch;
 using NoLazyWorkers.SmartExecution;
 using static NoLazyWorkers.NoLazyUtilities;
 using Unity.Collections;
@@ -306,14 +293,17 @@ namespace NoLazyWorkers
 
     public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
     {
-      Smart.SaveBaselineData();
-      ClearPrefabs();
-      Smart.Cleanup();
-      ManagedDictionaries.Cleanup();
-      Settings.SettingsExtensions.Configured.Clear();
-      CacheManager.CacheManager.Cleanup();
-      TaskServiceManager.Cleanup();
-      Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
+      if (sceneName == "Main")
+      {
+        Smart.SaveBaselineData();
+        ClearPrefabs();
+        Smart.Cleanup();
+        ManagedDictionaries.Cleanup();
+        Settings.SettingsExtensions.Configured.Clear();
+        CacheManager.CacheManager.Cleanup();
+        TaskServiceManager.Cleanup();
+        Log(Level.Info, "Cleared ConfigurationExtensions and SettingsExtensions on scene unload.", Category.Core);
+      }
     }
   }
 

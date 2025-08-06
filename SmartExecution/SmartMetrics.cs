@@ -87,17 +87,6 @@ namespace NoLazyWorkers.SmartExecution
       public double AvgMainThreadImpactMs;
     }
 
-    /// Stores performance metrics for a method.
-    /// </summary>
-    [BurstCompile]
-    public struct Metric
-    {
-      public FixedString64Bytes MethodName;
-      public float ExecutionTimeMs;
-      public float MainThreadImpactMs;
-      public int ItemCount;
-    }
-
     /// <summary>
     /// Initializes the performance metrics system, configuring thread pool settings.
     /// </summary>
@@ -105,6 +94,11 @@ namespace NoLazyWorkers.SmartExecution
     {
       if (_isInitialized || !IsServer) return;
       _isInitialized = true;
+      // Calibrate stopwatch overhead
+      var sw = Stopwatch.StartNew();
+      for (int i = 0; i < 1000; i++) { }
+      sw.Stop();
+      _stopwatchOverheadMs = sw.ElapsedTicks * 1000.0 / Stopwatch.Frequency / 1000.0;
 
       // Configure .NET thread pool to use all available cores
       int workerThreads = SystemInfo.processorCount * 2; // Allow up to 2x cores for flexibility
@@ -206,7 +200,11 @@ namespace NoLazyWorkers.SmartExecution
         else
           Metrics.TryAdd(methodName, CreateMetricData(timeMs, mainThreadImpactMs, itemCount));
 #if DEBUG
-        logs.Add(new(Level.Verbose, $"Updated metric for {methodName}: time={timeMs:F3}ms, mainThreadImpact={mainThreadImpactMs:F3}ms, items={itemCount}", Category.Performance));
+        logs.Add(new(
+          Level.Verbose,
+          $"Updated metric for {methodName}: time={timeMs:F3}ms, mainThreadImpact={mainThreadImpactMs:F3}ms, items={itemCount}",
+          Category.Performance
+        ));
 #endif
       }
       else

@@ -13,7 +13,13 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<Analyzer Include="D:\projects\Schedule I\UnityTaskSafeAnalyzer\dist\UnityTaskSafeAnalyzer.dll">
+    <Analyzer Include="..\SourceGenerators\bin\Debug\net48\SourceGenerators.dll" >
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </Analyzer>
+  </ItemGroup>
+	<ItemGroup>
+		<Analyzer Include="..\UnityTaskSafeAnalyzer\dist\UnityTaskSafeAnalyzer.dll">
       <PrivateAssets>all</PrivateAssets>
       <ExcludeAssets>runtime</ExcludeAssets>
     </Analyzer>

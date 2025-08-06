@@ -197,12 +197,24 @@ namespace NoLazyWorkers.SmartExecution
     [BurstCompile]
     public void Dispose()
     {
-      if (_inputs.IsCreated) _inputs.Dispose();
-      if (_outputs.IsCreated) _outputs.Dispose();
-      if (_transforms.isCreated) _transforms.Dispose();
-      _logs.Add(new(Level.Info, $"Disposed UnifiedJobWrapper resources for jobType={_jobType}", Category.Performance));
-      ProcessLogs(_logs);
-      if (_logs.IsCreated) _logs.Dispose();
+      if (_inputs.IsCreated)
+      {
+        _inputs.Dispose();
+      }
+      if (_outputs.IsCreated)
+      {
+        _outputs.Dispose();
+      }
+      if (_transforms.isCreated)
+      {
+        _transforms.Dispose();
+      }
+      if (_logs.IsCreated)
+      {
+        _logs.Add(new(Level.Info, $"Disposed UnifiedJobWrapper resources for jobType={_jobType}", Category.Performance));
+        ProcessLogs(_logs);
+        _logs.Dispose();
+      }
     }
   }
 
@@ -2058,11 +2070,11 @@ namespace NoLazyWorkers.SmartExecution
       {
         var data = new OptimizationData // Use qualified name
         {
-          Metrics = SmartMetrics.NonBurstMetrics.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-          BatchSizeHistory = SmartMetrics.BatchSizeHistory.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-          MetricsThresholds = SmartMetrics.MetricsThresholds.ToDictionary(kvp => kvp.Key, kvp => kvp.Value), // Added
-          RollingAveragesData = SmartMetrics.RollingAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }), // Added
-          ImpactAveragesData = SmartMetrics.ImpactAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }) // Added
+          Metrics = NonBurstMetrics.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+          BatchSizeHistory = BatchSizeHistory.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+          MetricsThresholds = MetricsThresholds.ToDictionary(kvp => kvp.Key, kvp => kvp.Value), // Added
+          RollingAveragesData = RollingAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }), // Added
+          ImpactAveragesData = ImpactAverages.ToDictionary(kvp => kvp.Key, kvp => new RollingAverageData { Samples = kvp.Value._samples, Count = kvp.Value.Count, Sum = kvp.Value._sum }) // Added
         };
         string json = JsonUtility.ToJson(data);
         if (json == _lastSavedDataHash) return;

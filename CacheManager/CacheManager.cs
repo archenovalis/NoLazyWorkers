@@ -767,11 +767,6 @@ namespace NoLazyWorkers.CacheManager
         Log(Level.Warning, "StorageManager already initialized", Category.Storage);
         return;
       }
-      if (!FishNetExtensions.IsServer)
-      {
-        Log(Level.Warning, "StorageManager initialization skipped: not server", Category.Storage);
-        return;
-      }
       SlotService.Initialize();
       IsInitialized = true;
       Log(Level.Info, "StorageManager initialized", Category.Storage);

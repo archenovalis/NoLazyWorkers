@@ -42,8 +42,6 @@ namespace NoLazyWorkers.Movement
     private bool _resumed;
     private bool _anySuccess = false;
     private List<TransferRequest> _sameSourceRoutes = new();
-    private int _processedCount;
-
 
     public void Initialize(List<TransferRequest> routes, EmployeeInfo stateData = null, Action<Employee, EmployeeInfo, MovementStatus> callback = null)
     {
